@@ -487,26 +487,35 @@ fn write_fetch_message(
     conn.write_raw(b")\r\n")
 }
 
+fn serve_one_folder(
+    conn: &mut MockConn,
+    uidvalidity: u32,
+    uidnext: u32,
+    uids: &[u32],
+) -> std::io::Result<()> {
+    let (tag, cmd) = conn.read_command()?;
+    assert_eq!(cmd, "LIST \"\" \"*\"");
+    conn.write_line("* LIST () \"/\" \"INBOX\"")?;
+    conn.write_line(&format!("{tag} OK LIST done"))?;
+    let (tag, cmd) = conn.read_command()?;
+    assert_eq!(cmd, "LSUB \"\" \"*\"");
+    conn.write_line(&format!("{tag} OK LSUB done"))?;
+    let (tag, cmd) = conn.read_command()?;
+    assert_eq!(cmd, "SELECT \"INBOX\"");
+    write_select(conn, &tag, uidvalidity, uidnext, uids.len() as u32)?;
+    let (tag, cmd) = conn.read_command()?;
+    assert_eq!(cmd, "UID SEARCH ALL");
+    let uid_strs: Vec<String> = uids.iter().map(|u| u.to_string()).collect();
+    conn.write_line(&format!("* SEARCH {}", uid_strs.join(" ")))?;
+    conn.write_line(&format!("{tag} OK SEARCH done"))?;
+    drain_until_close(conn);
+    Ok(())
+}
+
 fn control_script_one_folder(uidvalidity: u32, uidnext: u32, uids: &'static [u32]) -> Script {
     Box::new(move |conn: &mut MockConn| -> std::io::Result<()> {
         auth_preamble(conn, "IMAP4rev2 LITERAL+ AUTH=PLAIN")?;
-        let (tag, cmd) = conn.read_command()?;
-        assert_eq!(cmd, "LIST \"\" \"*\"");
-        conn.write_line("* LIST () \"/\" \"INBOX\"")?;
-        conn.write_line(&format!("{tag} OK LIST done"))?;
-        let (tag, cmd) = conn.read_command()?;
-        assert_eq!(cmd, "LSUB \"\" \"*\"");
-        conn.write_line(&format!("{tag} OK LSUB done"))?;
-        let (tag, cmd) = conn.read_command()?;
-        assert_eq!(cmd, "SELECT \"INBOX\"");
-        write_select(conn, &tag, uidvalidity, uidnext, uids.len() as u32)?;
-        let (tag, cmd) = conn.read_command()?;
-        assert_eq!(cmd, "UID SEARCH ALL");
-        let uid_strs: Vec<String> = uids.iter().map(|u| u.to_string()).collect();
-        conn.write_line(&format!("* SEARCH {}", uid_strs.join(" ")))?;
-        conn.write_line(&format!("{tag} OK SEARCH done"))?;
-        drain_until_close(conn);
-        Ok(())
+        serve_one_folder(conn, uidvalidity, uidnext, uids)
     })
 }
 
@@ -581,6 +590,63 @@ fn coordinator_imports_one_folder_one_message() {
     assert_eq!(count(&conn, "emails"), 1);
     assert_eq!(count(&conn, "blobs"), 1);
     assert_eq!(folder_role(&conn, "INBOX"), Some("inbox".to_owned()));
+}
+
+const DOVECOT_PRE_LOGIN_CAPS: &str =
+    "IMAP4rev1 SASL-IR LOGIN-REFERRALS ID ENABLE IDLE LITERAL+ AUTH=PLAIN AUTH=LOGIN";
+const DOVECOT_POST_LOGIN_CAPS: &str = "IMAP4rev1 SASL-IR LOGIN-REFERRALS ID ENABLE IDLE SORT \
+    UIDPLUS LITERAL+ NOTIFY IMAPSIEVE=sieve://127.0.0.1:4190 \
+    QUOTA ACL RIGHTS=texk";
+
+#[test]
+fn coordinator_accepts_dovecot_post_login_capability_with_imapsieve_url() {
+    let control: Script = Box::new(|conn: &mut MockConn| -> std::io::Result<()> {
+        conn.write_line(&format!(
+            "* OK [CAPABILITY {DOVECOT_PRE_LOGIN_CAPS}] Dovecot (Debian) ready."
+        ))?;
+        let (tag, cmd) = conn.read_command()?;
+        assert_eq!(cmd, "CAPABILITY");
+        write_capability(conn, DOVECOT_PRE_LOGIN_CAPS)?;
+        conn.write_line(&format!(
+            "{tag} OK Pre-login capabilities listed, post-login capabilities have more."
+        ))?;
+        let (tag, cmd) = conn.read_command()?;
+        assert!(
+            cmd.starts_with("AUTHENTICATE PLAIN "),
+            "expected SASL-IR form, got {cmd}"
+        );
+        write_capability(conn, DOVECOT_POST_LOGIN_CAPS)?;
+        conn.write_line(&format!(
+            "{tag} OK [CAPABILITY {DOVECOT_POST_LOGIN_CAPS}] Logged in"
+        ))?;
+        let (tag, cmd) = conn.read_command()?;
+        assert_eq!(cmd, "CAPABILITY");
+        write_capability(conn, DOVECOT_POST_LOGIN_CAPS)?;
+        conn.write_line(&format!("{tag} OK Capability completed."))?;
+        serve_one_folder(conn, 12345, 2, &[1])
+    });
+    let server = MockImap::start_scripts(vec![
+        control,
+        worker_fetch_script(
+            "IMAP4rev1 SASL-IR LITERAL+ AUTH=PLAIN IMAPSIEVE=sieve://127.0.0.1:4190",
+            "INBOX",
+            12345,
+            2,
+            1,
+            vec![(1, 1, MSG_BODY)],
+        ),
+    ]);
+    let archive = tempfile("dovecot-imapsieve");
+    let summary = run_import(&server, "alice", archive.clone(), |_| {}).expect("import");
+    let email = summary
+        .per_type
+        .iter()
+        .find(|(k, _)| *k == "email")
+        .unwrap();
+    assert_eq!(email.1.created, 1, "summary={summary:?}");
+    let conn = Connection::open(&archive).unwrap();
+    db::init::apply_schema(&conn).unwrap();
+    assert_eq!(count(&conn, "emails"), 1);
 }
 
 #[test]

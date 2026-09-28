@@ -656,6 +656,16 @@ mod tests {
     }
 
     #[test]
+    fn authenticate_plain_accepts_dovecot_post_login_untagged_capability() {
+        let server = b"* CAPABILITY IMAP4rev1 SASL-IR MOVE IMAPSIEVE=sieve://127.0.0.1:4190 QUOTA\r\nA0001 OK [CAPABILITY IMAP4rev1 SASL-IR MOVE IMAPSIEVE=sieve://127.0.0.1:4190 QUOTA] Logged in\r\n";
+        let mut c = client_with(server);
+        c.capabilities.insert("SASL-IR".to_owned());
+        c.authenticate_plain("alice", "p@ss").unwrap();
+        assert!(c.has_capability("MOVE"));
+        assert!(c.has_capability("IMAPSIEVE=sieve://127.0.0.1:4190"));
+    }
+
+    #[test]
     fn authenticate_plain_continuation_path() {
         let server = b"+ \r\nA0001 OK auth done\r\n";
         let mut c = client_with(server);

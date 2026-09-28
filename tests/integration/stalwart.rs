@@ -74,7 +74,7 @@ impl Stalwart {
             .with_mapped_port(sieve_port, SIEVE_PORT.tcp())
             .with_startup_timeout(Duration::from_secs(180));
 
-        let container = request.start()?;
+        let container = request.pull_image()?.start()?;
 
         let me = Self {
             _container: container,

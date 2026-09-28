@@ -197,7 +197,7 @@ impl Admin {
                 "encryptionAtRest": { "@type": "Disabled" },
                 "permissions": { "@type": "Inherit" },
                 "roles": { "@type": role },
-                "locale": "en_US"
+                "locale": "en-US"
             }
         });
         let response =

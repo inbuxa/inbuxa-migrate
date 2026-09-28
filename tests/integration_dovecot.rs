@@ -18,6 +18,9 @@ use integration::validate::{
 
 use rusqlite::Connection;
 use vandelay::error::Error;
+use vandelay::imap::client::{ConnectMode, ImapClient};
+use vandelay::imap::transport::Connector;
+use vandelay::logging::Logger;
 use vandelay::sync::import_imap::{ImapAuth, ImapImportConfig};
 use vandelay::sync::import_managesieve::{ManageSieveAuth, ManageSieveImportConfig};
 use vandelay::sync::{import_imap, import_managesieve};
@@ -560,4 +563,29 @@ fn dovecot_non_ascii_mailbox_names_round_trip() {
         "the message inside the accented folder must be imported"
     );
     cleanup(&archive);
+}
+
+#[test]
+#[ignore = "requires Docker"]
+fn dovecot_post_login_capability_with_imapsieve_url_is_parsed() {
+    let d = Dovecot::start().expect("dovecot start");
+    let account = d.accounts.first().expect("account");
+    let connector = Connector::new(true).expect("connector");
+    let mut client = ImapClient::connect(
+        &connector,
+        &d.imap.host,
+        d.imap.port,
+        ConnectMode::StartTls,
+        Logger::from_flags(false, 0),
+    )
+    .expect("connect");
+    assert!(client.has_capability("SASL-IR"));
+    client
+        .authenticate_plain(&account.username, &account.password)
+        .expect("AUTHENTICATE PLAIN must survive the untagged post-login CAPABILITY");
+    assert!(
+        client.has_capability("IMAPSIEVE=sieve://127.0.0.1:4190"),
+        "post-login capabilities must carry the IMAPSIEVE URL: {:?}",
+        client.capabilities
+    );
 }
