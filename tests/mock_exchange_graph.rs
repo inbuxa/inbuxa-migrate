@@ -6,7 +6,7 @@
 
 use std::sync::Once;
 
-use base64::Engine;
+use encodify::base64::URL_SAFE_NO_PAD;
 use mockito::{Matcher, Server};
 use serde_json::json;
 use vandelay::exchange_graph::api::{Endpoints, collect_all_ids, paged_collect};
@@ -36,7 +36,6 @@ fn url_message_collection(server_url: &str, folder: &str, top: usize) -> String 
 }
 
 fn make_jwt(exp: u64, upn: &str) -> String {
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     let header = URL_SAFE_NO_PAD.encode(b"{\"alg\":\"none\"}");
     let claims = format!(r#"{{"tid":"tenant-1","upn":"{upn}","exp":{exp}}}"#);
     let payload = URL_SAFE_NO_PAD.encode(claims.as_bytes());

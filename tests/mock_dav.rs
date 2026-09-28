@@ -1448,8 +1448,7 @@ fn dry_run_writes_nothing_but_emits_per_collection_counts() {
 
 #[test]
 fn dav_source_change_protection_fires_across_users_on_same_root() {
-    use base64::Engine;
-    use base64::engine::general_purpose::STANDARD;
+    use encodify::base64::STANDARD;
     use std::path::PathBuf;
     use vandelay::logging::Logger;
     use vandelay::sync::CommonConfig;

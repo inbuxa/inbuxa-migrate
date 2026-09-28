@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
 
+use encodify::base64::{LENIENT, STANDARD};
 use mockito::Matcher;
 use vandelay::exchange_ews::EwsClient;
 use vandelay::exchange_ews::autodiscover::{DiscoverySource, discover};
@@ -300,8 +301,7 @@ fn http_401_surfaces_as_auth_error() {
 #[test]
 fn mime_content_round_trips_through_base64_decode() {
     let original = b"From: alice@x\r\nSubject: hi\r\n\r\nbody";
-    use base64::Engine;
-    let encoded = base64::engine::general_purpose::STANDARD.encode(original);
+    let encoded = STANDARD.encode(original);
     let body = envelope(&format!(
         "<m:GetItemResponse{NS}><m:ResponseMessages>\
          <m:GetItemResponseMessage ResponseClass=\"Success\">\
@@ -315,10 +315,7 @@ fn mime_content_round_trips_through_base64_decode() {
     let r = parse_response_messages(body.as_bytes(), b"GetItemResponseMessage").unwrap();
     let item = vandelay::exchange_ews::parse::parse_message_item(&r[0].inner_xml).unwrap();
     let s = item.mime_content.unwrap();
-    let cleaned: String = s.chars().filter(|c| !c.is_whitespace()).collect();
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(cleaned.as_bytes())
-        .unwrap();
+    let bytes = LENIENT.decode(&s).unwrap();
     assert_eq!(bytes, original);
 }
 

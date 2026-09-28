@@ -897,6 +897,7 @@ fn opt_format_utc(value: &Option<time::OffsetDateTime>) -> Result<Option<String>
 mod tests {
     use super::*;
     use crate::db::init;
+    use encodify::base64::STANDARD;
     use std::collections::HashMap;
 
     struct MapResolver {
@@ -929,15 +930,12 @@ mod tests {
     }
 
     fn decode_data_uri(value: &Value, media_type: &str) -> Vec<u8> {
-        use base64::Engine;
         let uri = value.as_str().unwrap_or_else(|| panic!("{value} is a URI"));
         let prefix = format!("data:{media_type};base64,");
         let payload = uri
             .strip_prefix(&prefix)
             .unwrap_or_else(|| panic!("{uri} does not start with {prefix}"));
-        base64::engine::general_purpose::STANDARD
-            .decode(payload)
-            .expect("base64 payload")
+        STANDARD.decode(payload).expect("base64 payload")
     }
 
     fn assert_no_blob_id(value: &Value) {

@@ -22,6 +22,7 @@ pub struct FolderStatus {
 #[derive(Debug, Clone)]
 pub struct DiscoveredFolder {
     pub name: String,
+    pub wire_name: String,
     pub delimiter: Option<char>,
     pub attributes: Vec<String>,
     pub subscribed: bool,
@@ -32,6 +33,7 @@ pub struct DiscoveredFolder {
 #[derive(Debug, Clone)]
 pub struct ResolvedFolder {
     pub name: String,
+    pub wire_name: String,
     pub leaf: String,
     pub parent_path: Option<String>,
     pub delimiter: Option<char>,
@@ -85,6 +87,7 @@ pub fn collect_from_list(
                     canonical.clone(),
                     DiscoveredFolder {
                         name: canonical,
+                        wire_name: name.clone(),
                         delimiter: *delimiter,
                         attributes: attributes.clone(),
                         subscribed: false,
@@ -156,6 +159,7 @@ pub fn apply_filters(
         let (leaf, parent_path) = split_parent(&f.name, delim);
         resolved.push(ResolvedFolder {
             name: f.name,
+            wire_name: f.wire_name,
             leaf,
             parent_path,
             delimiter: delim,
@@ -437,6 +441,7 @@ mod tests {
         let mut r = vec![
             ResolvedFolder {
                 name: "Projects/Alpha".into(),
+                wire_name: "Projects/Alpha".into(),
                 leaf: "Alpha".into(),
                 parent_path: Some("Projects".into()),
                 delimiter: Some('/'),
@@ -446,6 +451,7 @@ mod tests {
             },
             ResolvedFolder {
                 name: "INBOX".into(),
+                wire_name: "INBOX".into(),
                 leaf: "INBOX".into(),
                 parent_path: None,
                 delimiter: Some('/'),
@@ -455,6 +461,7 @@ mod tests {
             },
             ResolvedFolder {
                 name: "Projects".into(),
+                wire_name: "Projects".into(),
                 leaf: "Projects".into(),
                 parent_path: None,
                 delimiter: Some('/'),

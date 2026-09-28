@@ -9,6 +9,7 @@ mod seeder;
 
 use std::path::{Path, PathBuf};
 
+use encodify::base64::STANDARD;
 use integration::stalwart::shared as shared_stalwart;
 use rusqlite::Connection;
 use serde_json::{Map, Value, json};
@@ -693,7 +694,6 @@ const ISSUE30_CARD_UID: &str = "vandelay-issue30-card";
 const ISSUE30_EVENT_UID: &str = "vandelay-issue30-event";
 
 fn data_uri_bytes(resource: &Value, uri_key: &str, expect_media_type: &str) -> Vec<u8> {
-    use base64::Engine;
     let uri = resource
         .get(uri_key)
         .and_then(Value::as_str)
@@ -706,9 +706,7 @@ fn data_uri_bytes(resource: &Value, uri_key: &str, expect_media_type: &str) -> V
     let payload = uri
         .strip_prefix(&prefix)
         .unwrap_or_else(|| panic!("{uri_key} is not a {prefix}... data URI: {resource}"));
-    base64::engine::general_purpose::STANDARD
-        .decode(payload)
-        .expect("base64 payload")
+    STANDARD.decode(payload).expect("base64 payload")
 }
 
 #[test]

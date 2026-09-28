@@ -36,7 +36,7 @@ ureq = { version = "3.3.0", default-features = false, features = ["json", "gzip"
 clap = { version = "4.6.1", features = ["derive"] }
 crossbeam-channel = "0.5.15"
 num_cpus = "1.17.0"
-base64 = "0.23"
+encodify = "1.0"
 mail-parser = "0.11.3"
 calcard = "0.3"
 rustls = { version = "0.23.40", default-features = false, features = ["aws-lc-rs", "std", "tls12", "logging"] }
@@ -56,3 +56,6 @@ testcontainers = { version = "0.28", features = ["blocking"] }
 [profile.dist]
 inherits = "release"
 lto = "thin"
+
+[patch.crates-io]
+encodify = { path = "../encodify" }
