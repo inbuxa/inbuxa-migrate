@@ -3,7 +3,9 @@
 All notable changes to this project are recorded here. Versions are dates:
 release `v2026.9.30` is version `2026.9.30`.
 
-## [Unreleased] -- 2026.9.30
+## [2026.9.30] -- 2026-09-30
+
+The first release of inbuxa-migrate.
 
 ### Changed
 - Renamed to inbuxa-migrate: the binary, the crate, and the credential
@@ -17,6 +19,34 @@ release `v2026.9.30` is version `2026.9.30`.
 - Released as Linux archives for amd64 and arm64 on the Gitea release page,
   with `SHA256SUMS`. The npm, Homebrew, shell and PowerShell installers and
   the MSI are gone.
+- A second export brings matched items up to date instead of skipping them:
+  flags and folders on mail, changed contacts and events, and edited Sieve
+  scripts.
+- A message filed in several folders is written once, in every one of them,
+  and a resumed export adds any folder it was still missing.
+- Sieve scripts from a Stalwart server keep working on inbuxa: their
+  `vnd.stalwart.*` extension names are renamed to inbuxa's, each rename is
+  logged, and a script that can't be activated fails the export instead of
+  leaving filtering quietly off.
+- `--allow-invalid-certs` covers only the server named with `--url`. Microsoft
+  and Google sign-in are always verified.
+- Export imports mail in batches, uploads in parallel within the target's
+  limits, and prints progress: count, rate and time left.
+- `export --dry-run` predicts what would fail -- messages over the target's
+  upload limit, objects over its request limit, Sieve scripts it would reject
+  -- lists what would be created, updated and skipped, and exits as the real
+  run would.
+
+### Fixed
+- Every connection times out instead of waiting forever on a dropped link,
+  and a timeout is retried like any other transient error.
+- An interrupted IMAP or Maildir import keeps what it wrote, and a message
+  that can't be read is recorded and skipped rather than ending the folder.
+- IMAP and EWS imports hold a bounded amount in memory, in batches capped by
+  size as well as count.
+- The archive is created readable by its owner only, and an existing archive
+  others can read is reported.
+- A dry run no longer writes to the target's address books.
 
 ---
 

@@ -158,20 +158,30 @@ jobs:
       - run: |
           (cd dist && sha256sum ./*.tar.gz | sed 's| \./| |' > SHA256SUMS)
           cat dist/SHA256SUMS
+      # The release notes are this version's section of CHANGELOG.md, so the
+      # release, and the announcement made from it, say what changed.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: CHANGELOG.md
+          sparse-checkout-cone-mode: false
       - env:
           GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
         run: |
           set -euo pipefail
           API="$GITEA_URL/api/v1/repos/$GITHUB_REPOSITORY"
           auth=(-H "Authorization: token $GITEA_TOKEN")
+          files="Binaries for linux/amd64 and linux/arm64. Verify with SHA256SUMS."
+          notes="$(awk -v v="${TAG#v}" 'index($0, "## [" v "]") == 1 {f = 1; next}
+                                         f && (/^## / || /^---$/) {exit}
+                                         f' CHANGELOG.md | sed -e '/./,$!d')"
+          if [ -n "$notes" ]; then notes="$notes"$'\n\n'"$files"; else notes="$files"; fi
           # Reuse the Release if the tag already has one (a re-run), else make a
           # draft of our own.
           created=0
           id="$(curl -fsS "${auth[@]}" "$API/releases/tags/$TAG" 2>/dev/null | jq -r '.id // empty' || true)"
           if [ -z "$id" ]; then
             id="$(curl -fsS "${auth[@]}" -H 'Content-Type: application/json' \
-                  -d "$(jq -n --arg t "$TAG" '{tag_name:$t, name:$t, draft:true,
-                        body:"Binaries for linux/amd64 and linux/arm64. Verify with SHA256SUMS."}')" \
+                  -d "$(jq -n --arg t "$TAG" --arg b "$notes" '{tag_name:$t, name:$t, draft:true, body:$b}')" \
                   "$API/releases" | jq -r '.id // empty')"
             [ -n "$id" ] || { echo "::error::could not create the release"; exit 1; }
             created=1
