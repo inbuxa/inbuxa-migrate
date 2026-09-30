@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -17,9 +18,28 @@ use crate::logging::Logger;
 
 pub const URN_CORE: &str = "urn:ietf:params:jmap:core";
 
-pub fn using_urn(method: &str) -> &'static str {
+/// The capability inbuxa advertises for its registry types (`x:Account`,
+/// `x:Domain` and the rest of the `x:` objects).
+pub const URN_INBUXA_REGISTRY: &str = "urn:inbuxa:jmap:registry";
+
+/// The same registry as Stalwart advertises it, so a Stalwart server can be
+/// migrated from.
+pub const URN_STALWART_REGISTRY: &str = "urn:stalwart:jmap";
+
+/// The capability a method needs. Registry (`x:`) methods have no fixed
+/// capability: the connected server names it, and `registry` carries that
+/// name (see `Session::registry_urn`). Without one they cannot be sent.
+pub fn using_urn(method: &str, registry: Option<&'static str>) -> Result<&'static str, JmapError> {
     let prefix = method.split('/').next().unwrap_or(method);
-    match prefix {
+    if prefix.starts_with("x:") {
+        return registry.ok_or_else(|| {
+            JmapError::MissingCapability(format!(
+                "{method} needs the server's registry capability, but it advertises neither \
+                 {URN_INBUXA_REGISTRY} nor {URN_STALWART_REGISTRY}"
+            ))
+        });
+    }
+    Ok(match prefix {
         "Mailbox" | "Email" => "urn:ietf:params:jmap:mail",
         "Identity" => "urn:ietf:params:jmap:submission",
         "SieveScript" => "urn:ietf:params:jmap:sieve",
@@ -27,9 +47,8 @@ pub fn using_urn(method: &str) -> &'static str {
         "Calendar" | "CalendarEvent" | "ParticipantIdentity" => "urn:ietf:params:jmap:calendars",
         "FileNode" => "urn:ietf:params:jmap:filenode",
         "Principal" => "urn:ietf:params:jmap:principals",
-        "x:Account" | "x:Domain" => "urn:stalwart:jmap",
         _ => URN_CORE,
-    }
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -42,11 +61,19 @@ pub struct MethodCall {
 #[derive(Debug, Clone, Default)]
 pub struct Request {
     calls: Vec<MethodCall>,
+    registry: Option<&'static str>,
 }
 
 impl Request {
     pub fn new() -> Request {
-        Request { calls: Vec::new() }
+        Request::default()
+    }
+
+    /// The registry capability to use for any `x:` call in this request,
+    /// normally `session.registry_urn()`.
+    pub fn registry(&mut self, urn: Option<&'static str>) -> &mut Request {
+        self.registry = urn;
+        self
     }
 
     pub fn call(
@@ -71,29 +98,29 @@ impl Request {
         self.calls.is_empty()
     }
 
-    pub fn using(&self) -> Vec<String> {
+    pub fn using(&self) -> Result<Vec<String>, JmapError> {
         let mut set: IndexSet<String> = IndexSet::new();
         set.insert(URN_CORE.to_owned());
         for c in &self.calls {
-            set.insert(using_urn(&c.name).to_owned());
+            set.insert(using_urn(&c.name, self.registry)?.to_owned());
         }
-        set.into_iter().collect()
+        Ok(set.into_iter().collect())
     }
 
-    fn envelope(&self) -> Value {
+    fn envelope(&self) -> Result<Value, JmapError> {
         let method_calls: Vec<Value> = self
             .calls
             .iter()
             .map(|c| json!([c.name, c.args, c.call_id]))
             .collect();
-        json!({ "using": self.using(), "methodCalls": method_calls })
+        Ok(json!({ "using": self.using()?, "methodCalls": method_calls }))
     }
 
     pub fn fits(&self, limits: &Limits) -> Result<(), JmapError> {
         if self.calls.len() as u64 > limits.max_calls_in_request {
             return Err(JmapError::RequestTooLarge);
         }
-        let size = serde_json::to_vec(&self.envelope())?.len() as u64;
+        let size = serde_json::to_vec(&self.envelope()?)?.len() as u64;
         if size > limits.max_size_request {
             return Err(JmapError::RequestTooLarge);
         }
@@ -101,7 +128,7 @@ impl Request {
     }
 
     pub fn send(&self, client: &HttpClient, api_url: &str) -> Result<Response, JmapError> {
-        let value = client.post_json(api_url, &self.envelope())?;
+        let value = client.post_json(api_url, &self.envelope()?)?;
         Response::parse(value)
     }
 }
@@ -855,24 +882,65 @@ mod tests {
         let mut r = Request::new();
         r.call("Mailbox/get", json!({}), "a");
         r.call("Email/query", json!({}), "b");
-        let u = r.using();
+        let u = r.using().unwrap();
         assert!(u.contains(&URN_CORE.to_owned()));
         assert!(u.contains(&"urn:ietf:params:jmap:mail".to_owned()));
         assert_eq!(u.iter().filter(|x| x.as_str() == URN_CORE).count(), 1);
     }
 
     #[test]
-    fn using_maps_principal_and_stalwart() {
+    fn using_maps_standard_types() {
         assert_eq!(
-            using_urn("Principal/query"),
+            using_urn("Principal/query", None).unwrap(),
             "urn:ietf:params:jmap:principals"
         );
-        assert_eq!(using_urn("x:Account/set"), "urn:stalwart:jmap");
         assert_eq!(
-            using_urn("CalendarEvent/set"),
+            using_urn("CalendarEvent/set", None).unwrap(),
             "urn:ietf:params:jmap:calendars"
         );
-        assert_eq!(using_urn("Identity/get"), "urn:ietf:params:jmap:submission");
+        assert_eq!(
+            using_urn("Identity/get", None).unwrap(),
+            "urn:ietf:params:jmap:submission"
+        );
+    }
+
+    #[test]
+    fn registry_calls_use_the_inbuxa_capability() {
+        let mut r = Request::new();
+        r.registry(Some(URN_INBUXA_REGISTRY));
+        r.call("x:Account/set", json!({}), "a");
+        r.call("x:Domain/get", json!({}), "b");
+        assert_eq!(r.using().unwrap(), vec![URN_CORE, URN_INBUXA_REGISTRY]);
+    }
+
+    #[test]
+    fn registry_calls_use_the_stalwart_capability_from_a_stalwart_source() {
+        let mut r = Request::new();
+        r.registry(Some(URN_STALWART_REGISTRY));
+        r.call("x:Account/get", json!({}), "a");
+        assert_eq!(r.using().unwrap(), vec![URN_CORE, URN_STALWART_REGISTRY]);
+    }
+
+    #[test]
+    fn registry_calls_without_a_registry_capability_fail_clearly() {
+        let mut r = Request::new();
+        r.call("Mailbox/get", json!({}), "a");
+        r.call("x:Domain/set", json!({}), "b");
+        let err = r.using().unwrap_err();
+        let msg = err.to_string();
+        assert!(matches!(err, JmapError::MissingCapability(_)));
+        assert!(msg.contains("x:Domain/set"), "{msg}");
+        assert!(
+            msg.contains(URN_INBUXA_REGISTRY) && msg.contains(URN_STALWART_REGISTRY),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn requests_without_registry_calls_need_no_registry() {
+        let mut r = Request::new();
+        r.call("Email/get", json!({}), "a");
+        assert!(r.using().is_ok());
     }
 
     #[test]

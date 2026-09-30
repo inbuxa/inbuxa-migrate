@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -50,6 +51,9 @@ pub enum JmapError {
     #[error("malformed jmap response: {0}")]
     Malformed(String),
 
+    #[error("server lacks a required capability: {0}")]
+    MissingCapability(String),
+
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
 
@@ -69,7 +73,9 @@ impl JmapError {
 impl From<JmapError> for Error {
     fn from(value: JmapError) -> Self {
         match value {
-            JmapError::Connect(m) | JmapError::Transport(m) => Error::Connection(m),
+            JmapError::Connect(m) | JmapError::Transport(m) | JmapError::MissingCapability(m) => {
+                Error::Connection(m)
+            }
             JmapError::Auth(m) => Error::Connection(format!("authentication rejected: {m}")),
             JmapError::Sqlite(e) => Error::Db(OpenError::Sqlite(e)),
             reached @ (JmapError::HttpStatus { .. } | JmapError::RetriesExhausted(_)) => {
