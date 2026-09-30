@@ -41,8 +41,8 @@ advertises the types being written. The full command reference is in
   export, or in any directory tree laid out that way.
 - **Exchange Server** -- an on-premises mailbox, through EWS.
 - **Exchange Online** -- through Microsoft Graph. EWS is being retired in
-  Exchange Online: blocked from 1 October 2026 unless an administrator allows
-  the client, and switched off on 1 April 2027. Public folders are only
+  Exchange Online: blocked from October 1, 2026 unless an administrator allows
+  the client, and switched off on April 1, 2027. Public folders are only
   reachable through EWS.
 
 ## Credentials
