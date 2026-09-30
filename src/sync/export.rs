@@ -5,7 +5,7 @@
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{IsTerminal, Write};
 
 use rusqlite::Connection;
@@ -48,6 +48,14 @@ struct Maps {
 impl Maps {
     fn insert(&mut self, ty: ObjectType, local: i64, target: JmapId) {
         self.m.entry(ty).or_default().insert(local, target);
+    }
+
+    /// Every target id this run mapped for `ty`: the objects it migrated.
+    fn targets_of(&self, ty: ObjectType) -> HashSet<String> {
+        self.m
+            .get(&ty)
+            .map(|m| m.values().map(|id| id.0.clone()).collect())
+            .unwrap_or_default()
     }
 }
 
@@ -531,6 +539,56 @@ mod common {
             },
             &net.limits,
         )
+    }
+
+    /// Sends `updates` (target id, patch) as batched `/set` calls and counts
+    /// the result into `counts`. A dry run counts them as updated and sends
+    /// nothing.
+    pub fn update_batch(
+        net: &Net,
+        ty: ObjectType,
+        updates: Vec<(String, Value)>,
+        counts: &mut TypeCounts,
+        logger: &Logger,
+    ) {
+        if updates.is_empty() {
+            return;
+        }
+        if net.dry_run {
+            counts.updated += updates.len() as u64;
+            return;
+        }
+        let total = updates.len() as u64;
+        let mut map = Map::new();
+        for (id, patch) in updates {
+            map.insert(id, patch);
+        }
+        match set_call(
+            &net.client,
+            &net.api,
+            &net.account,
+            ty.jmap_name(),
+            SetRequest {
+                update: Some(Value::Object(map)),
+                ..Default::default()
+            },
+            &net.limits,
+        ) {
+            Ok(outcome) => {
+                counts.updated += outcome.updated.len() as u64;
+                for (id, err) in &outcome.not_updated {
+                    logger.warn(&format!("{}/set {id} not updated: {err}", ty.jmap_name()));
+                    counts.failed += 1;
+                }
+            }
+            Err(e) => {
+                logger.warn(&format!(
+                    "{}/set: updating {total} object(s) failed: {e}",
+                    ty.jmap_name()
+                ));
+                counts.failed += total;
+            }
+        }
     }
 
     fn blob_not_found(outcome: &crate::jmap::request::SetOutcome, cid: &str) -> bool {

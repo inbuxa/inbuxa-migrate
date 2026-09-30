@@ -2575,7 +2575,7 @@ fn export_archive_read_failure_while_inlining_exits_seven() {
 }
 
 #[test]
-fn export_sieve_script_matches_by_name_not_content() {
+fn export_sieve_script_matched_by_name_is_updated_when_its_content_differs() {
     let mut server = mockito::Server::new();
     let base = server.url();
     let api = "/jmap/api";
@@ -2615,9 +2615,125 @@ fn export_sieve_script_matches_by_name_not_content() {
         )
         .expect(1)
         .create();
-    let no_download = server
+    let download = server
         .mock("GET", Matcher::Regex("/jmap/dl/w/BSRV/.*".into()))
-        .with_body(b"unused".as_slice())
+        .with_body(b"keep;\n".as_slice())
+        .expect(1)
+        .create();
+    let upload = server
+        .mock("POST", Matcher::Regex("/jmap/upload/".into()))
+        .with_body(json!({"blobId":"UPN"}).to_string())
+        .expect(2)
+        .create();
+    let update = server
+        .mock("POST", api)
+        .match_body(Matcher::AllOf(vec![
+            Matcher::Regex("SieveScript/set".into()),
+            Matcher::Regex("\"update\":\\{\"S1\":\\{\"blobId\":\"UPN\"".into()),
+        ]))
+        .with_body(
+            json!({"methodResponses":[["SieveScript/set",{"accountId":"w",
+                "updated":{"S1":null}},"s"]]})
+            .to_string(),
+        )
+        .expect(1)
+        .create();
+    let create = server
+        .mock("POST", api)
+        .match_body(Matcher::AllOf(vec![
+            Matcher::Regex("SieveScript/set".into()),
+            Matcher::Regex("reject".into()),
+        ]))
+        .with_body(
+            json!({"methodResponses":[["SieveScript/set",{"accountId":"w",
+                "created":{"c2":{"id":"S2"}}},"s"]]})
+            .to_string(),
+        )
+        .expect(1)
+        .create();
+    let _activate = server
+        .mock("POST", api)
+        .match_body(Matcher::Regex("onSuccessActivateScript".into()))
+        .with_body(
+            json!({"methodResponses":[["SieveScript/set",{"accountId":"w"},"a"]]}).to_string(),
+        )
+        .expect(1)
+        .create();
+
+    let summary = sync::export::run(
+        common(&archive),
+        export_cfg_objects(&base, vec![ObjectType::SieveScript]),
+    )
+    .expect("export");
+    upload.assert();
+    create.assert();
+    download.assert();
+    update.assert();
+    let counts = summary
+        .per_type
+        .iter()
+        .find(|(t, _)| *t == "SieveScript")
+        .map(|(_, c)| c.clone())
+        .expect("sieve counts");
+    assert_eq!(
+        counts.updated, 1,
+        "the name-matched script gets the archive's content"
+    );
+    assert_eq!(counts.skipped, 0);
+    assert_eq!(counts.created, 1, "the unmatched name is created");
+    assert_eq!(counts.failed, 0);
+    let _ = std::fs::remove_file(&archive);
+}
+
+#[test]
+fn export_sieve_script_matched_by_name_with_the_same_content_is_left_alone() {
+    let mut server = mockito::Server::new();
+    let base = server.url();
+    let api = "/jmap/api";
+    let archive = tmp();
+    let keepall_local = b"require [\"fileinto\"];\nkeep;\n";
+    let reject_local = b"require [\"reject\"];\nreject \"go away\";\n";
+    {
+        let conn = db::init::open(&archive).unwrap();
+        let blob1 = db::blobs::intern_blob(&conn, keepall_local).unwrap();
+        let blob2 = db::blobs::intern_blob(&conn, reject_local).unwrap();
+        conn.execute(
+            "INSERT INTO sieve_scripts (id,name,is_active,blob_id) VALUES (1,'keepall',1,?1)",
+            rusqlite::params![blob1],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sieve_scripts (id,name,is_active,blob_id) VALUES (2,'reject',0,?1)",
+            rusqlite::params![blob2],
+        )
+        .unwrap();
+    }
+
+    let _root = server.mock("GET", "/").with_status(404).create();
+    let _wk = server
+        .mock("GET", "/.well-known/jmap")
+        .with_body(session_body_full(&base))
+        .expect_at_least(1)
+        .create();
+    let _g = server
+        .mock("POST", api)
+        .match_body(Matcher::Regex("SieveScript/get".into()))
+        .with_body(
+            json!({"methodResponses":[["SieveScript/get",{"accountId":"w","list":[
+                {"id":"S1","name":"keepall","isActive":false,"blobId":"BSRV"}
+            ],"notFound":[]},"g"]]})
+            .to_string(),
+        )
+        .expect(1)
+        .create();
+    let download = server
+        .mock("GET", Matcher::Regex("/jmap/dl/w/BSRV/.*".into()))
+        .with_body(keepall_local.as_slice())
+        .expect(1)
+        .create();
+    let no_update = server
+        .mock("POST", api)
+        .match_body(Matcher::Regex("\"update\"".into()))
         .expect(0)
         .create();
     let upload = server
@@ -2654,7 +2770,8 @@ fn export_sieve_script_matches_by_name_not_content() {
     .expect("export");
     upload.assert();
     create.assert();
-    no_download.assert();
+    download.assert();
+    no_update.assert();
     let counts = summary
         .per_type
         .iter()
@@ -2663,8 +2780,9 @@ fn export_sieve_script_matches_by_name_not_content() {
         .expect("sieve counts");
     assert_eq!(
         counts.skipped, 1,
-        "name-matched script is skipped even though its content differs from the target"
+        "same name and same content: nothing to do"
     );
+    assert_eq!(counts.updated, 0);
     assert_eq!(counts.created, 1, "the unmatched name is created");
     assert_eq!(counts.failed, 0);
     let _ = std::fs::remove_file(&archive);
@@ -4899,4 +5017,286 @@ fn export_different_messages_sharing_a_message_id_are_not_merged() {
     import.assert();
     no_set.assert();
     let _ = std::fs::remove_file(&archive);
+}
+
+#[test]
+fn export_rerun_carries_a_read_flag_set_at_the_source() {
+    let mut server = mockito::Server::new();
+    let base = server.url();
+    let api = "/jmap/api";
+    let archive = tmp();
+    let _setup = two_folder_archive_and_target(&mut server, &archive);
+    insert_email_copy(&archive, ONE_MESSAGE, 1);
+    {
+        let conn = db::init::open(&archive).unwrap();
+        conn.execute("UPDATE emails SET keywords='[\"$seen\"]'", [])
+            .unwrap();
+    }
+
+    let _eq = server
+        .mock("POST", api)
+        .match_body(Matcher::Regex("Email/query".into()))
+        .with_body(
+            json!({"methodResponses":[["Email/query",{"accountId":"w","ids":["X1"]},"q"]]})
+                .to_string(),
+        )
+        .expect(1)
+        .create();
+    let _eg = server
+        .mock("POST", api)
+        .match_body(Matcher::Regex("Email/get".into()))
+        .with_body(
+            json!({"methodResponses":[["Email/get",{"accountId":"w","list":[
+                {"id":"X1","messageId":["both@h"],"size":ONE_MESSAGE.len(),
+                 "mailboxIds":{"T1":true},"keywords":{"$flagged":true}}
+            ],"notFound":[]},"g"]]})
+            .to_string(),
+        )
+        .expect(1)
+        .create();
+    let set = server
+        .mock("POST", api)
+        .match_body(Matcher::AllOf(vec![
+            Matcher::Regex("Email/set".into()),
+            Matcher::Regex("\"keywords/\\$seen\":true".into()),
+            Matcher::Regex("\"keywords/\\$flagged\":null".into()),
+        ]))
+        .with_body(
+            json!({"methodResponses":[["Email/set",{"accountId":"w","updated":{"X1":null}},"s"]]})
+                .to_string(),
+        )
+        .expect(1)
+        .create();
+
+    let summary = sync::export::run(
+        common(&archive),
+        export_cfg_objects(&base, vec![ObjectType::Mailbox, ObjectType::Email]),
+    )
+    .expect("export");
+    let email = email_counts(&summary);
+    assert_eq!(email.updated, 1);
+    assert_eq!(email.created, 0);
+    assert_eq!(email.failed, 0);
+    set.assert();
+    let _ = std::fs::remove_file(&archive);
+}
+
+fn contact_rerun(local_updated: &str, updates_sent: usize) -> inbuxa_migrate::sync::TypeCounts {
+    let mut server = mockito::Server::new();
+    let base = server.url();
+    let api = "/jmap/api";
+    let archive = tmp();
+    {
+        let conn = db::init::open(&archive).unwrap();
+        conn.execute(
+            "INSERT INTO address_books (id,name,description,is_default) VALUES (1,'Personal',NULL,1)",
+            [],
+        )
+        .unwrap();
+        let card = json!({"@type":"Card","version":"1.0","uid":"u1",
+                          "name":{"full":"Ann Brown"},"updated":local_updated});
+        conn.execute(
+            "INSERT INTO contact_cards (id,uid,address_book_ids,data) VALUES (1,'u1','[1]',?1)",
+            rusqlite::params![card.to_string()],
+        )
+        .unwrap();
+    }
+    let _root = server.mock("GET", "/").with_status(404).create();
+    let _wk = server
+        .mock("GET", "/.well-known/jmap")
+        .with_body(session_body_full(&base))
+        .expect_at_least(1)
+        .create();
+    let _abg = server
+        .mock("POST", api)
+        .match_body(Matcher::Regex("AddressBook/get".into()))
+        .with_body(
+            json!({"methodResponses":[["AddressBook/get",{"accountId":"w","list":[
+                {"id":"P","name":"Personal","isDefault":true,"myRights":{"mayDelete":false}}
+            ],"notFound":[]},"g"]]})
+            .to_string(),
+        )
+        .expect_at_least(1)
+        .create();
+    let _term = anchor_terminator(&mut server, api, "ContactCard");
+    let _cq = server
+        .mock("POST", api)
+        .match_body(Matcher::Regex("ContactCard/query".into()))
+        .with_body(
+            json!({"methodResponses":[["ContactCard/query",{"accountId":"w","ids":["C1"]},"q"]]})
+                .to_string(),
+        )
+        .expect(1)
+        .create();
+    let _cg = server
+        .mock("POST", api)
+        .match_body(Matcher::Regex("ContactCard/get".into()))
+        .with_body(
+            json!({"methodResponses":[["ContactCard/get",{"accountId":"w","list":[
+                {"id":"C1","@type":"Card","version":"1.0","uid":"u1",
+                 "name":{"full":"Ann"},"addressBookIds":{"P":true},
+                 "updated":"2026-02-01T00:00:00Z"}
+            ],"notFound":[]},"g"]]})
+            .to_string(),
+        )
+        .expect(1)
+        .create();
+    let update = server
+        .mock("POST", api)
+        .match_body(Matcher::AllOf(vec![
+            Matcher::Regex("ContactCard/set".into()),
+            Matcher::Regex("\"update\"".into()),
+            Matcher::Regex("Ann Brown".into()),
+        ]))
+        .with_body(
+            json!({"methodResponses":[["ContactCard/set",{"accountId":"w","updated":{"C1":null}},"s"]]})
+                .to_string(),
+        )
+        .expect(updates_sent)
+        .create();
+
+    let summary = sync::export::run(
+        common(&archive),
+        export_cfg_objects(
+            &base,
+            vec![ObjectType::AddressBook, ObjectType::ContactCard],
+        ),
+    )
+    .expect("export");
+    let counts = summary
+        .per_type
+        .iter()
+        .find(|(t, _)| *t == "ContactCard")
+        .map(|(_, c)| c.clone())
+        .expect("contact counts");
+    update.assert();
+    let _ = std::fs::remove_file(&archive);
+    counts
+}
+
+#[test]
+fn export_rerun_updates_a_contact_edited_at_the_source() {
+    let counts = contact_rerun("2026-03-01T00:00:00Z", 1);
+    assert_eq!(counts.updated, 1, "the newer archive copy is written");
+    assert_eq!(counts.failed, 0);
+}
+
+#[test]
+fn export_rerun_leaves_a_contact_alone_when_the_target_is_newer() {
+    let counts = contact_rerun("2026-01-01T00:00:00Z", 0);
+    assert_eq!(
+        counts.updated, 0,
+        "the target's copy is newer, so nothing is sent"
+    );
+    assert_eq!(counts.skipped, 1);
+}
+
+fn event_rerun(local_updated: &str, updates_sent: usize) -> inbuxa_migrate::sync::TypeCounts {
+    let mut server = mockito::Server::new();
+    let base = server.url();
+    let api = "/jmap/api";
+    let archive = tmp();
+    {
+        let conn = db::init::open(&archive).unwrap();
+        conn.execute(
+            "INSERT INTO calendars (id,name,is_default) VALUES (1,'Work',1)",
+            [],
+        )
+        .unwrap();
+        let event = json!({"@type":"Event","uid":"ev1","title":"Planning, moved",
+                           "start":"2026-03-02T10:00:00","duration":"PT1H",
+                           "updated":local_updated});
+        conn.execute(
+            "INSERT INTO calendar_events (id,calendar_ids,is_draft,use_default_alerts,data)
+             VALUES (1,'[1]',0,0,?1)",
+            rusqlite::params![event.to_string()],
+        )
+        .unwrap();
+    }
+    let _root = server.mock("GET", "/").with_status(404).create();
+    let _wk = server
+        .mock("GET", "/.well-known/jmap")
+        .with_body(session_body_full(&base))
+        .expect_at_least(1)
+        .create();
+    let _calg = server
+        .mock("POST", api)
+        .match_body(Matcher::Regex("Calendar/get".into()))
+        .with_body(
+            json!({"methodResponses":[["Calendar/get",{"accountId":"w","list":[
+                {"id":"K","name":"Work","isDefault":true,"myRights":{"mayDelete":false}}
+            ],"notFound":[]},"g"]]})
+            .to_string(),
+        )
+        .expect_at_least(1)
+        .create();
+    let _term = anchor_terminator(&mut server, api, "CalendarEvent");
+    let _eq = server
+        .mock("POST", api)
+        .match_body(Matcher::Regex("CalendarEvent/query".into()))
+        .with_body(
+            json!({"methodResponses":[["CalendarEvent/query",{"accountId":"w","ids":["E1"]},"q"]]})
+                .to_string(),
+        )
+        .expect(1)
+        .create();
+    let _eg = server
+        .mock("POST", api)
+        .match_body(Matcher::Regex("CalendarEvent/get".into()))
+        .with_body(
+            json!({"methodResponses":[["CalendarEvent/get",{"accountId":"w","list":[
+                {"id":"E1","@type":"Event","uid":"ev1","title":"Planning",
+                 "start":"2026-03-01T10:00:00","duration":"PT1H",
+                 "calendarIds":{"K":true},"isDraft":false,"useDefaultAlerts":false,
+                 "updated":"2026-02-01T00:00:00Z"}
+            ],"notFound":[]},"g"]]})
+            .to_string(),
+        )
+        .expect(1)
+        .create();
+    let update = server
+        .mock("POST", api)
+        .match_body(Matcher::AllOf(vec![
+            Matcher::Regex("CalendarEvent/set".into()),
+            Matcher::Regex("\"update\"".into()),
+            Matcher::Regex("Planning, moved".into()),
+        ]))
+        .with_body(
+            json!({"methodResponses":[["CalendarEvent/set",{"accountId":"w","updated":{"E1":null}},"s"]]})
+                .to_string(),
+        )
+        .expect(updates_sent)
+        .create();
+
+    let summary = sync::export::run(
+        common(&archive),
+        export_cfg_objects(&base, vec![ObjectType::Calendar, ObjectType::CalendarEvent]),
+    )
+    .expect("export");
+    let counts = summary
+        .per_type
+        .iter()
+        .find(|(t, _)| *t == "CalendarEvent")
+        .map(|(_, c)| c.clone())
+        .expect("event counts");
+    update.assert();
+    let _ = std::fs::remove_file(&archive);
+    counts
+}
+
+#[test]
+fn export_rerun_updates_an_event_moved_at_the_source() {
+    let counts = event_rerun("2026-03-01T00:00:00Z", 1);
+    assert_eq!(counts.updated, 1, "the newer archive copy is written");
+    assert_eq!(counts.failed, 0);
+}
+
+#[test]
+fn export_rerun_leaves_an_event_alone_when_nothing_is_newer() {
+    let counts = event_rerun("2026-02-01T01:00:00+01:00", 0);
+    assert_eq!(
+        counts.updated, 0,
+        "same instant as the target's, written another way"
+    );
+    assert_eq!(counts.skipped, 1);
 }

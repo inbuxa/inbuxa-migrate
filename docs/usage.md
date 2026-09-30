@@ -211,16 +211,23 @@ inbuxa-migrate export \
 
 Writes `ARCHIVE` into an account on a JMAP server, usually inbuxa. It keeps no
 state of its own: every run matches the archive against the target afresh.
-By default it only adds: what the archive holds and the target lacks is
-created, and anything already on the target is left as it is -- an item that
-matches is not updated yet, so a change made at the source after the first
-export does not reach the target on a second one.
+By default it only adds and updates: what the target lacks is created, what
+it has is brought up to date, and anything on the target that the archive
+does not cover is left alone. So a second run after a later import carries
+what changed at the source in between.
 
-Email is matched by Message-ID, or without one by sender, subject, date and
-recipients; where several messages share one, size decides. A message the
-source kept in several folders -- IMAP and Maildir copies, Gmail labels -- is
-written once, in all of them, and a later run adds any folder it is still
-missing on the target.
+- **Email** is matched by Message-ID, or without one by sender, subject, date
+  and recipients; where several messages share one, size decides. A message
+  the source kept in several folders -- IMAP and Maildir copies, Gmail labels
+  -- is written once, in all of them. On a match, its keywords (read,
+  flagged and the rest) are set to the archive's, and so are its memberships
+  of folders this run migrated. Folders that exist only on the target are
+  left alone, and a message is never left in no folder.
+- **Contacts and events** are matched by UID. When both copies carry an
+  `updated` time, the archive's is written only if it is newer; otherwise
+  the properties that differ are written.
+- **Sieve scripts** are matched by name, and the target's is replaced when
+  its content differs from the archive's.
 
 `--prune` also deletes what is on the target and not in the archive. It asks
 first; `--yes` answers for it, for scripts. Export speaks JMAP only.

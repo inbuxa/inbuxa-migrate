@@ -9,12 +9,12 @@ use std::collections::{HashMap, HashSet};
 
 use serde_json::{Map, Value, json};
 
-use super::common::{jid, target_query_get};
+use super::common::{jid, target_query_get, update_batch};
 use super::{Maps, Net, Plan, Uploader};
 use crate::error::Error;
 use crate::jmap::error::JmapError;
 use crate::jmap::request::{
-    MethodCall, Request, SetRequest, check_method_error, get_objects, retry_method_call, set_call,
+    MethodCall, Request, check_method_error, get_objects, retry_method_call,
 };
 use crate::jmap::retry::MethodCallKind;
 use crate::jmap::wire::JmapId;
@@ -62,8 +62,12 @@ pub fn reconcile(
 ) -> Result<Plan, Error> {
     let ty = ObjectType::Email;
 
-    let target_min = target_query_get(net, ty, Some(&["messageId", "size", "mailboxIds"]))
-        .map_err(Error::from)?;
+    let target_min = target_query_get(
+        net,
+        ty,
+        Some(&["messageId", "size", "mailboxIds", "keywords"]),
+    )
+    .map_err(Error::from)?;
     let mut indices: Vec<EmailIndex> = target_min.iter().map(server_index).collect();
 
     let fallback_ids: Vec<JmapId> = target_min
@@ -128,11 +132,12 @@ pub fn reconcile(
         .collect();
     let pairs = pair_with_targets(&local_keys, &sizes, &target_keys, &targets);
 
-    let mut membership_updates: Vec<(String, Value)> = Vec::new();
+    let migrated = maps.targets_of(ObjectType::Mailbox);
+    let mut updates: Vec<(String, Value)> = Vec::new();
     for (i, unit) in units.iter().enumerate() {
         match pairs[i] {
-            Some(t) => match missing_memberships(&unit.row, &targets[t], maps) {
-                Some(patch) => membership_updates.push((targets[t].id.clone(), patch)),
+            Some(t) => match email_patch(&unit.row, &targets[t], maps, &migrated) {
+                Some(patch) => updates.push((targets[t].id.clone(), patch)),
                 None => counts.skipped += 1,
             },
             None => export_one(
@@ -146,7 +151,7 @@ pub fn reconcile(
             ),
         }
     }
-    send_membership_updates(net, membership_updates, counts, logger);
+    update_batch(net, ty, updates, counts, logger);
 
     Ok(Plan::default())
 }
@@ -197,6 +202,7 @@ struct TargetEmail {
     id: String,
     size: Option<u64>,
     mailboxes: Option<HashSet<String>>,
+    keywords: Option<HashSet<String>>,
 }
 
 impl TargetEmail {
@@ -208,6 +214,10 @@ impl TargetEmail {
                 .get("mailboxIds")
                 .and_then(Value::as_object)
                 .map(|m| m.keys().cloned().collect()),
+            keywords: v
+                .get("keywords")
+                .and_then(Value::as_object)
+                .map(|m| m.keys().map(|k| k.to_lowercase()).collect()),
         }
     }
 }
@@ -254,65 +264,58 @@ fn pair_with_targets(
     out
 }
 
-/// The `Email/set` patch adding the folders a matched email is missing on the
-/// target, or `None` when it is already in all of them. Folders that exist
-/// only on the target are left alone.
-fn missing_memberships(row: &EmailRow, target: &TargetEmail, maps: &Maps) -> Option<Value> {
-    let have = target.mailboxes.as_ref()?;
+/// The `Email/set` patch that brings a matched email on the target in line
+/// with the archive, or `None` when it already is. The source is taken as
+/// the truth for what it covers: keywords are added and removed to match, and
+/// so are memberships of folders this run migrated. Folders that exist only
+/// on the target are left alone, an email is never left in no folder, and
+/// whatever the server did not report is not touched.
+fn email_patch(
+    row: &EmailRow,
+    target: &TargetEmail,
+    maps: &Maps,
+    migrated: &HashSet<String>,
+) -> Option<Value> {
     let mut patch = Map::new();
-    for ml in &row.mailbox_locals {
-        if let Some(t) = maps.target(ObjectType::Mailbox, *ml)
-            && !have.contains(&t.0)
-        {
-            patch.insert(format!("mailboxIds/{}", t.0), Value::Bool(true));
+    if let Some(have) = &target.mailboxes {
+        let want: HashSet<String> = row
+            .mailbox_locals
+            .iter()
+            .filter_map(|ml| maps.target(ObjectType::Mailbox, *ml).map(|t| t.0))
+            .collect();
+        let add: Vec<&String> = want.iter().filter(|t| !have.contains(*t)).collect();
+        let remove: Vec<&String> = have
+            .iter()
+            .filter(|t| migrated.contains(*t) && !want.contains(*t))
+            .collect();
+        let left = have.len() - remove.len() + add.len();
+        for t in add {
+            patch.insert(
+                format!("mailboxIds/{}", pointer_escape(t)),
+                Value::Bool(true),
+            );
+        }
+        if left > 0 {
+            for t in remove {
+                patch.insert(format!("mailboxIds/{}", pointer_escape(t)), Value::Null);
+            }
+        }
+    }
+    if let Some(have) = &target.keywords {
+        let want: HashSet<String> = row.keywords.iter().map(|k| k.to_lowercase()).collect();
+        for k in want.difference(have) {
+            patch.insert(format!("keywords/{}", pointer_escape(k)), Value::Bool(true));
+        }
+        for k in have.difference(&want) {
+            patch.insert(format!("keywords/{}", pointer_escape(k)), Value::Null);
         }
     }
     (!patch.is_empty()).then_some(Value::Object(patch))
 }
 
-fn send_membership_updates(
-    net: &Net,
-    updates: Vec<(String, Value)>,
-    counts: &mut TypeCounts,
-    logger: &Logger,
-) {
-    if updates.is_empty() {
-        return;
-    }
-    if net.dry_run {
-        counts.updated += updates.len() as u64;
-        return;
-    }
-    let total = updates.len() as u64;
-    let mut map = Map::new();
-    for (id, patch) in updates {
-        map.insert(id, patch);
-    }
-    match set_call(
-        &net.client,
-        &net.api,
-        &net.account,
-        ObjectType::Email.jmap_name(),
-        SetRequest {
-            update: Some(Value::Object(map)),
-            ..Default::default()
-        },
-        &net.limits,
-    ) {
-        Ok(outcome) => {
-            counts.updated += outcome.updated.len() as u64;
-            for (id, err) in &outcome.not_updated {
-                logger.warn(&format!("Email/set {id}: folders not added: {err}"));
-                counts.failed += 1;
-            }
-        }
-        Err(e) => {
-            logger.warn(&format!(
-                "Email/set: adding folders to {total} email(s) failed: {e}"
-            ));
-            counts.failed += total;
-        }
-    }
+/// Escapes one JSON Pointer segment (RFC 6901), as JMAP patch paths use.
+fn pointer_escape(segment: &str) -> String {
+    segment.replace('~', "~0").replace('/', "~1")
 }
 
 fn build_mailbox_ids(row: &EmailRow, maps: &Maps) -> Option<Map<String, Value>> {
@@ -570,7 +573,12 @@ mod tests {
             id: id.to_owned(),
             size,
             mailboxes: mailboxes.map(|m| m.iter().map(|s| (*s).to_owned()).collect()),
+            keywords: None,
         }
+    }
+
+    fn set(items: &[&str]) -> HashSet<String> {
+        items.iter().map(|s| (*s).to_owned()).collect()
     }
 
     fn mid(m: &str) -> EmailKey {
@@ -628,19 +636,85 @@ mod tests {
         assert_eq!(pairs, vec![Some(0), None]);
     }
 
-    #[test]
-    fn missing_memberships_adds_only_the_absent_migrated_folders() {
+    fn two_folder_maps() -> Maps {
         let mut maps = Maps::default();
         maps.insert(ObjectType::Mailbox, 1, JmapId("T1".into()));
         maps.insert(ObjectType::Mailbox, 2, JmapId("T2".into()));
+        maps
+    }
+
+    #[test]
+    fn patch_adds_the_absent_migrated_folders() {
+        let maps = two_folder_maps();
         let r = row(10, &[1, 2, 3], &[]);
-        let patch = missing_memberships(&r, &target("E", None, Some(&["T1", "Own"])), &maps)
-            .expect("T2 is missing");
+        let patch = email_patch(
+            &r,
+            &target("E", None, Some(&["T1", "Own"])),
+            &maps,
+            &set(&["T1", "T2"]),
+        )
+        .expect("T2 is missing");
         assert_eq!(patch, json!({ "mailboxIds/T2": true }));
-        assert!(missing_memberships(&r, &target("E", None, Some(&["T1", "T2"])), &maps).is_none());
         assert!(
-            missing_memberships(&r, &target("E", None, None), &maps).is_none(),
+            email_patch(
+                &r,
+                &target("E", None, Some(&["T1", "T2"])),
+                &maps,
+                &set(&["T1", "T2"])
+            )
+            .is_none()
+        );
+        assert!(
+            email_patch(&r, &target("E", None, None), &maps, &set(&["T1", "T2"])).is_none(),
             "unknown membership is left alone"
         );
+    }
+
+    #[test]
+    fn patch_moves_between_migrated_folders_but_keeps_target_only_ones() {
+        let maps = two_folder_maps();
+        let r = row(10, &[2], &[]);
+        let patch = email_patch(
+            &r,
+            &target("E", None, Some(&["T1", "Own"])),
+            &maps,
+            &set(&["T1", "T2"]),
+        )
+        .unwrap();
+        assert_eq!(
+            patch,
+            json!({ "mailboxIds/T2": true, "mailboxIds/T1": null })
+        );
+    }
+
+    #[test]
+    fn patch_never_leaves_an_email_in_no_folder() {
+        let maps = two_folder_maps();
+        let r = row(10, &[9], &[]);
+        assert!(
+            email_patch(
+                &r,
+                &target("E", None, Some(&["T1"])),
+                &maps,
+                &set(&["T1", "T2"])
+            )
+            .is_none(),
+            "the only folder is not removed when nothing replaces it"
+        );
+    }
+
+    #[test]
+    fn patch_syncs_keywords_both_ways_case_insensitively() {
+        let maps = two_folder_maps();
+        let r = row(10, &[1], &["$Seen", "work/urgent"]);
+        let mut t = target("E", None, Some(&["T1"]));
+        t.keywords = Some(set(&["$seen", "$flagged"]));
+        let patch = email_patch(&r, &t, &maps, &set(&["T1", "T2"])).unwrap();
+        assert_eq!(
+            patch,
+            json!({ "keywords/work~1urgent": true, "keywords/$flagged": null })
+        );
+        t.keywords = Some(set(&["$seen", "work/urgent"]));
+        assert!(email_patch(&r, &t, &maps, &set(&["T1", "T2"])).is_none());
     }
 }
