@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -9,10 +10,10 @@ use quick_xml::events::Event;
 use serde_json::Value;
 use ureq::Agent;
 use ureq::config::Config;
-use ureq::tls::{RootCerts, TlsConfig};
 
 use crate::exchange_ews::error::EwsError;
 use crate::exchange_ews::parse::entity_to_char;
+use crate::net::{tls, with_timeouts};
 
 const V2_HOST: &str = "https://outlook.office365.com";
 const POX_REQ_NS: &str =
@@ -131,18 +132,12 @@ pub fn discover(
 }
 
 fn build_agent(allow_invalid_certs: bool) -> Agent {
-    let config: Config = Config::builder()
-        .http_status_as_error(false)
-        .tls_config(
-            TlsConfig::builder()
-                .unversioned_rustls_crypto_provider(std::sync::Arc::new(
-                    rustls::crypto::aws_lc_rs::default_provider(),
-                ))
-                .root_certs(RootCerts::PlatformVerifier)
-                .disable_verification(allow_invalid_certs)
-                .build(),
-        )
-        .build();
+    let config: Config = with_timeouts!(
+        Config::builder()
+            .http_status_as_error(false)
+            .tls_config(tls(allow_invalid_certs))
+    )
+    .build();
     config.new_agent()
 }
 

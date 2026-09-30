@@ -14,7 +14,6 @@ use ureq::Agent;
 use ureq::Body;
 use ureq::config::{Config, RedirectAuthHeaders};
 use ureq::http::{Method, Request, Response};
-use ureq::tls::{RootCerts, TlsConfig};
 
 use crate::dav::parse::{ControlStrippingReader, DavResponse, parse_multistatus};
 use crate::dav::retry::{DavOutcome, classify};
@@ -22,6 +21,7 @@ use crate::jmap::error::JmapError;
 use crate::jmap::http::{Auth, RetryPolicy, retry_after_header};
 use crate::jmap::retry::{self, RateLimitState};
 use crate::logging::{HttpCall, LEVEL_BODIES, LEVEL_DEFAULT, LEVEL_PROGRESS, Logger};
+use crate::net::{tls, with_timeouts};
 
 const MAX_BODY: u64 = 512 * 1024 * 1024;
 const LONG_RETRY_THRESHOLD: Duration = Duration::from_secs(10);
@@ -64,21 +64,15 @@ pub struct DavClient {
 
 impl DavClient {
     pub fn new(auth: Auth, retry: RetryPolicy, allow_invalid_certs: bool) -> Self {
-        let config: Config = Config::builder()
-            .http_status_as_error(false)
-            .allow_non_standard_methods(true)
-            .max_redirects(0)
-            .redirect_auth_headers(RedirectAuthHeaders::SameHost)
-            .tls_config(
-                TlsConfig::builder()
-                    .unversioned_rustls_crypto_provider(std::sync::Arc::new(
-                        rustls::crypto::aws_lc_rs::default_provider(),
-                    ))
-                    .root_certs(RootCerts::PlatformVerifier)
-                    .disable_verification(allow_invalid_certs)
-                    .build(),
-            )
-            .build();
+        let config: Config = with_timeouts!(
+            Config::builder()
+                .http_status_as_error(false)
+                .allow_non_standard_methods(true)
+                .max_redirects(0)
+                .redirect_auth_headers(RedirectAuthHeaders::SameHost)
+                .tls_config(tls(allow_invalid_certs))
+        )
+        .build();
         DavClient {
             inner: Arc::new(Inner {
                 agent: config.new_agent(),
@@ -941,6 +935,24 @@ fn truncate(body: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_timeout_is_a_retryable_transport_error() {
+        for t in [
+            ureq::Timeout::Connect,
+            ureq::Timeout::SendRequest,
+            ureq::Timeout::SendBody,
+            ureq::Timeout::RecvResponse,
+            ureq::Timeout::RecvBody,
+        ] {
+            let err = map_ureq_error(ureq::Error::Timeout(t));
+            assert!(matches!(err, JmapError::Transport(_)), "{t:?} -> {err:?}");
+            assert!(
+                matches!(transport_disposition(&err), retry::Disposition::Retryable),
+                "{t:?} must be retried"
+            );
+        }
+    }
 
     #[test]
     fn client_constructs_cleanly() {

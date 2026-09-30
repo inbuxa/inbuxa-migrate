@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -13,7 +14,6 @@ use encodify::base64::STANDARD;
 use serde_json::Value;
 use ureq::Agent;
 use ureq::config::{Config, RedirectAuthHeaders};
-use ureq::tls::{RootCerts, TlsConfig};
 use ureq::{ResponseExt, http::Uri};
 
 use crate::jmap::error::JmapError;
@@ -21,6 +21,7 @@ use crate::jmap::inflight::{Permit, Semaphore};
 use crate::jmap::retry::{self, Disposition, RateLimitState};
 use crate::jmap::session::Limits;
 use crate::logging::{HttpCall, LEVEL_BODIES, LEVEL_DEFAULT, LEVEL_PROGRESS, Logger};
+use crate::net::{send_body_budget, tls, with_timeouts};
 
 const MAX_BODY: u64 = 512 * 1024 * 1024;
 
@@ -104,19 +105,13 @@ enum Attempt {
 
 impl HttpClient {
     pub fn new(auth: Auth, retry: RetryPolicy, allow_invalid_certs: bool) -> Self {
-        let config: Config = Config::builder()
-            .http_status_as_error(false)
-            .redirect_auth_headers(RedirectAuthHeaders::SameHost)
-            .tls_config(
-                TlsConfig::builder()
-                    .unversioned_rustls_crypto_provider(std::sync::Arc::new(
-                        rustls::crypto::aws_lc_rs::default_provider(),
-                    ))
-                    .root_certs(RootCerts::PlatformVerifier)
-                    .disable_verification(allow_invalid_certs)
-                    .build(),
-            )
-            .build();
+        let config: Config = with_timeouts!(
+            Config::builder()
+                .http_status_as_error(false)
+                .redirect_auth_headers(RedirectAuthHeaders::SameHost)
+                .tls_config(tls(allow_invalid_certs))
+        )
+        .build();
         HttpClient {
             inner: Arc::new(Inner {
                 agent: config.new_agent(),
@@ -393,7 +388,12 @@ impl HttpClient {
             if let Some(ct) = content_type {
                 req = req.header("Content-Type", ct);
             }
-            req.send(payload)
+            // A blob upload can run to hundreds of megabytes, so its send
+            // budget grows with its size instead of the agent's flat default.
+            req.config()
+                .timeout_send_body(Some(send_body_budget(payload.len())))
+                .build()
+                .send(payload)
         } else {
             self.inner
                 .agent
@@ -644,6 +644,24 @@ pub fn format_retry_wait(d: Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_timeout_is_a_retryable_transport_error() {
+        for t in [
+            ureq::Timeout::Connect,
+            ureq::Timeout::SendRequest,
+            ureq::Timeout::SendBody,
+            ureq::Timeout::RecvResponse,
+            ureq::Timeout::RecvBody,
+        ] {
+            let err = map_ureq_error(ureq::Error::Timeout(t));
+            assert!(matches!(err, JmapError::Transport(_)), "{t:?} -> {err:?}");
+            assert!(
+                matches!(transport_disposition(&err), Disposition::Retryable),
+                "{t:?} must be retried"
+            );
+        }
+    }
 
     #[test]
     fn basic_header_matches_rfc7617_example() {

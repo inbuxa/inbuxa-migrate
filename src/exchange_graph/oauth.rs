@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -10,9 +11,9 @@ use std::time::{Duration, Instant};
 use encodify::base64::{Base64, Padding, URL_SAFE};
 use serde_json::Value;
 use ureq::config::Config;
-use ureq::tls::{RootCerts, TlsConfig};
 
 use crate::exchange_graph::error::GraphError;
+use crate::net::{tls, with_timeouts};
 
 pub const SCOPES: &str =
     "offline_access User.Read Mail.Read MailboxSettings.Read Calendars.Read Contacts.Read";
@@ -79,18 +80,12 @@ pub struct AcquiredToken {
 }
 
 fn build_agent(allow_invalid_certs: bool) -> ureq::Agent {
-    let config: Config = Config::builder()
-        .http_status_as_error(false)
-        .tls_config(
-            TlsConfig::builder()
-                .unversioned_rustls_crypto_provider(std::sync::Arc::new(
-                    rustls::crypto::aws_lc_rs::default_provider(),
-                ))
-                .root_certs(RootCerts::PlatformVerifier)
-                .disable_verification(allow_invalid_certs)
-                .build(),
-        )
-        .build();
+    let config: Config = with_timeouts!(
+        Config::builder()
+            .http_status_as_error(false)
+            .tls_config(tls(allow_invalid_certs))
+    )
+    .build();
     config.new_agent()
 }
 
