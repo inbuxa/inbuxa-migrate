@@ -229,6 +229,20 @@ what changed at the source in between.
 - **Sieve scripts** are matched by name, and the target's is replaced when
   its content differs from the archive's.
 
+Messages go in batches, as many to an `Email/import` as the target's
+`maxObjectsInSet` allows, up to 50, with their blobs uploaded several at a
+time -- the target's `maxConcurrentUpload`, and no more than `--threads`.
+Each message is still counted on its own: one the target rejects fails
+alone, and the rest of its batch lands. A batch that ends without a clear
+answer -- a dropped connection, a gateway timeout -- is never sent again as
+it was. The target is read first, the messages that arrived are counted as
+created, and only the rest are imported again, so none is ever doubled.
+
+While it runs, export prints a line every few seconds for mail, contacts and
+events: how many of how many, how fast, and about how long is left. Each
+type ends with a line of what was created, updated, left unchanged and
+failed.
+
 `--prune` also deletes what is on the target and not in the archive. It asks
 first; `--yes` answers for it, for scripts. Export speaks JMAP only.
 

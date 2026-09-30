@@ -17,6 +17,7 @@ use crate::logging::Logger;
 use crate::sync::import_jmap::mapping::{
     CALENDAR_EVENT_SELECT, CONTACT_CARD_SELECT, calendar_event_to_wire, contact_card_to_wire,
 };
+use crate::sync::progress::Progress;
 use crate::sync::prune::{TargetObj, candidates};
 use crate::sync::{Context, TypeCounts};
 use crate::types::ObjectType;
@@ -79,7 +80,13 @@ pub fn reconcile(
     let mut matched_uids: HashSet<String> = HashSet::new();
     let mut updates: Vec<(String, Value)> = Vec::new();
     let blobs = Uploader::new(net, &ctx.conn);
+    let mut progress = Progress::new(
+        format!("export: {}", ty.jmap_name()),
+        rows.len() as u64,
+        logger,
+    );
     for (local, uid) in &rows {
+        progress.add(1);
         if let Some((tid, existing)) = by_uid.get(uid) {
             maps.insert(ty, *local, crate::jmap::wire::JmapId(tid.clone()));
             matched_uids.insert(uid.clone());
