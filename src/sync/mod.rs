@@ -17,6 +17,7 @@ pub mod import_maildir;
 pub mod import_managesieve;
 pub mod import_takeout;
 pub mod keys;
+pub mod progress;
 pub mod prune;
 
 use std::path::PathBuf;

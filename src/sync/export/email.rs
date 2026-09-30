@@ -21,6 +21,7 @@ use crate::jmap::wire::JmapId;
 use crate::logging::Logger;
 use crate::sync::import_jmap::mapping::{EMAIL_SELECT, EmailRow, TargetResolver, row_to_email};
 use crate::sync::keys::{EmailIndex, EmailKey, email_index, email_keys, index_from_json};
+use crate::sync::progress::Progress;
 use crate::sync::{Context, TypeCounts};
 use crate::types::ObjectType;
 
@@ -61,45 +62,7 @@ pub fn reconcile(
     logger: &Logger,
 ) -> Result<Plan, Error> {
     let ty = ObjectType::Email;
-
-    let target_min = target_query_get(
-        net,
-        ty,
-        Some(&["messageId", "size", "mailboxIds", "keywords"]),
-    )
-    .map_err(Error::from)?;
-    let mut indices: Vec<EmailIndex> = target_min.iter().map(server_index).collect();
-
-    let fallback_ids: Vec<JmapId> = target_min
-        .iter()
-        .zip(indices.iter())
-        .filter(|(_, i)| i.mids.is_empty())
-        .filter_map(|(v, _)| jid(v).map(JmapId))
-        .collect();
-    if !fallback_ids.is_empty() {
-        let got = get_objects::<Value>(
-            &net.client,
-            &net.api,
-            &net.account,
-            ty.jmap_name(),
-            &fallback_ids,
-            Some(&["messageId", "from", "subject", "sentAt", "to"]),
-            &net.limits,
-        )
-        .map_err(Error::from)?;
-        let by_id: HashMap<String, &Value> = got
-            .list
-            .iter()
-            .filter_map(|v| jid(v).map(|i| (i, v)))
-            .collect();
-        for (v, slot) in target_min.iter().zip(indices.iter_mut()) {
-            if let Some(full) = jid(v).and_then(|i| by_id.get(&i)) {
-                *slot = server_index(full);
-            }
-        }
-    }
-    let targets: Vec<TargetEmail> = target_min.iter().map(TargetEmail::from_value).collect();
-    let target_keys = email_keys(&indices);
+    let (targets, target_keys) = target_emails(net).map_err(Error::from)?;
 
     let mut local: Vec<(i64, EmailRow)> = {
         let mut stmt = ctx
@@ -134,26 +97,332 @@ pub fn reconcile(
 
     let migrated = maps.targets_of(ObjectType::Mailbox);
     let mut updates: Vec<(String, Value)> = Vec::new();
+    let mut creates: Vec<usize> = Vec::new();
     for (i, unit) in units.iter().enumerate() {
         match pairs[i] {
             Some(t) => match email_patch(&unit.row, &targets[t], maps, &migrated) {
                 Some(patch) => updates.push((targets[t].id.clone(), patch)),
                 None => counts.skipped += 1,
             },
-            None => export_one(
-                net,
-                &mut uploader,
-                maps,
-                unit.local_id,
-                &unit.row,
-                counts,
-                logger,
-            ),
+            None => creates.push(i),
         }
     }
+    let mut progress = Progress::new("export: Email", creates.len() as u64, logger);
+    import_units(
+        net,
+        &mut uploader,
+        maps,
+        &units,
+        &creates,
+        counts,
+        logger,
+        &mut progress,
+    );
     update_batch(net, ty, updates, counts, logger);
 
     Ok(Plan::default())
+}
+
+/// The emails already on the target, and the key each one matches by.
+fn target_emails(net: &Net) -> Result<(Vec<TargetEmail>, Vec<EmailKey>), JmapError> {
+    let ty = ObjectType::Email;
+    let target_min = target_query_get(
+        net,
+        ty,
+        Some(&["messageId", "size", "mailboxIds", "keywords"]),
+    )?;
+    let mut indices: Vec<EmailIndex> = target_min.iter().map(server_index).collect();
+
+    let fallback_ids: Vec<JmapId> = target_min
+        .iter()
+        .zip(indices.iter())
+        .filter(|(_, i)| i.mids.is_empty())
+        .filter_map(|(v, _)| jid(v).map(JmapId))
+        .collect();
+    if !fallback_ids.is_empty() {
+        let got = get_objects::<Value>(
+            &net.client,
+            &net.api,
+            &net.account,
+            ty.jmap_name(),
+            &fallback_ids,
+            Some(&["messageId", "from", "subject", "sentAt", "to"]),
+            &net.limits,
+        )?;
+        let by_id: HashMap<String, &Value> = got
+            .list
+            .iter()
+            .filter_map(|v| jid(v).map(|i| (i, v)))
+            .collect();
+        for (v, slot) in target_min.iter().zip(indices.iter_mut()) {
+            if let Some(full) = jid(v).and_then(|i| by_id.get(&i)) {
+                *slot = server_index(full);
+            }
+        }
+    }
+    let targets: Vec<TargetEmail> = target_min.iter().map(TargetEmail::from_value).collect();
+    let keys = email_keys(&indices);
+    Ok((targets, keys))
+}
+
+/// The most emails one `Email/import` carries: the server's
+/// `maxObjectsInSet`, but no more than this, so that a request that fails
+/// without a clear answer leaves few messages to check.
+const IMPORT_BATCH_CAP: usize = 50;
+
+/// One message ready to import: its creation id, its place in `units`, and
+/// the `Email/import` entry.
+struct Pending {
+    cid: String,
+    unit: usize,
+    item: Value,
+}
+
+/// Writes the messages the target does not have yet. They go in batches of
+/// up to `maxObjectsInSet` (capped by `IMPORT_BATCH_CAP`), their blobs
+/// uploaded at once up to `maxConcurrentUpload`. Each message is still
+/// counted on its own: one rejected in a batch fails alone. A batch that
+/// fails without a clear answer is never resent blindly -- the target is
+/// checked first, and only what did not arrive is imported again.
+#[allow(clippy::too_many_arguments)]
+fn import_units(
+    net: &Net,
+    uploader: &mut Uploader,
+    maps: &Maps,
+    units: &[Unit],
+    creates: &[usize],
+    counts: &mut TypeCounts,
+    logger: &Logger,
+    progress: &mut Progress,
+) {
+    let batch = (net.limits.max_objects_in_set as usize).clamp(1, IMPORT_BATCH_CAP);
+    let mut unclear: Vec<Pending> = Vec::new();
+    for chunk in creates.chunks(batch) {
+        let mut ready: Vec<(usize, Map<String, Value>)> = Vec::new();
+        for &i in chunk {
+            let row = &units[i].row;
+            match build_mailbox_ids(row, maps) {
+                Some(mids) => ready.push((i, mids)),
+                None => {
+                    logger.warn(&format!(
+                        "Email/import e{} ({}) skipped: mailbox not on target",
+                        units[i].local_id,
+                        blob_hint(uploader, row)
+                    ));
+                    counts.failed += 1;
+                }
+            }
+        }
+        let blobs: Vec<i64> = ready
+            .iter()
+            .map(|(i, _)| units[*i].row.blob_local_id)
+            .collect();
+        let uploaded = uploader.upload_many(&blobs, "message/rfc822");
+        let mut pending: Vec<Pending> = Vec::new();
+        for ((i, mids), result) in ready.into_iter().zip(uploaded) {
+            let row = &units[i].row;
+            let cid = format!("e{}", units[i].local_id);
+            match result {
+                Ok(blob) => pending.push(Pending {
+                    cid,
+                    unit: i,
+                    item: import_item(blob.0, mids, build_keywords(row), &row.received_at),
+                }),
+                Err(e) => {
+                    logger.warn(&format!(
+                        "Email/import {cid} ({}) blob upload failed: {e}{}",
+                        blob_hint(uploader, row),
+                        size_note(&e)
+                    ));
+                    counts.failed += 1;
+                }
+            }
+        }
+        if net.dry_run {
+            counts.created += pending.len() as u64;
+        } else {
+            send_batch(
+                net,
+                uploader,
+                maps,
+                units,
+                pending,
+                counts,
+                logger,
+                &mut unclear,
+            );
+        }
+        progress.add(chunk.len() as u64);
+    }
+    if !unclear.is_empty() {
+        settle_unclear(net, uploader, maps, units, unclear, counts, logger);
+    }
+}
+
+/// Sends one `Email/import` for `batch` and counts each message's outcome.
+/// A request too large for the server is split in two; a method error that
+/// rejects the whole call is retried one message at a time, so the one at
+/// fault fails alone. Anything that leaves it unclear whether the server
+/// applied the call goes to `unclear`.
+#[allow(clippy::too_many_arguments)]
+fn send_batch(
+    net: &Net,
+    uploader: &mut Uploader,
+    maps: &Maps,
+    units: &[Unit],
+    batch: Vec<Pending>,
+    counts: &mut TypeCounts,
+    logger: &Logger,
+    unclear: &mut Vec<Pending>,
+) {
+    if batch.is_empty() {
+        return;
+    }
+    let mut emails = Map::new();
+    for p in &batch {
+        emails.insert(p.cid.clone(), p.item.clone());
+    }
+    let mut req = Request::new();
+    req.call(
+        "Email/import",
+        json!({ "accountId": net.account, "emails": Value::Object(emails) }),
+        "i",
+    );
+    let cids: Vec<&str> = batch.iter().map(|p| p.cid.as_str()).collect();
+    let sent = req.fits(&net.limits).and_then(|()| {
+        retry_method_call(
+            &net.client,
+            MethodCallKind::SingleObjectWrite,
+            logger,
+            || {
+                let resp = req.send_once(&net.client, &net.api)?;
+                let mr = resp.first()?;
+                check_method_error(mr)?;
+                Ok(cids
+                    .iter()
+                    .map(|cid| interpret_import_for(mr, cid, cids.len()))
+                    .collect::<Vec<_>>())
+            },
+        )
+    });
+    match sent {
+        Ok(outcomes) => {
+            for (p, outcome) in batch.into_iter().zip(outcomes) {
+                let row = &units[p.unit].row;
+                match outcome {
+                    SingleImport::Created => counts.created += 1,
+                    SingleImport::Skipped => counts.skipped += 1,
+                    SingleImport::NotCreated { error_type, .. } if error_type == "blobNotFound" => {
+                        retry_after_reupload(net, uploader, maps, &p.cid, row, counts, logger);
+                    }
+                    SingleImport::NotCreated { detail, .. } => {
+                        logger.warn(&format!(
+                            "Email/import {} ({}) failed: {detail}",
+                            p.cid,
+                            blob_hint(uploader, row)
+                        ));
+                        counts.failed += 1;
+                    }
+                }
+            }
+        }
+        Err(JmapError::RequestTooLarge | JmapError::SingleObjectTooLarge(_)) if batch.len() > 1 => {
+            let mut batch = batch;
+            let second = batch.split_off(batch.len() / 2);
+            send_batch(net, uploader, maps, units, batch, counts, logger, unclear);
+            send_batch(net, uploader, maps, units, second, counts, logger, unclear);
+        }
+        Err(e) if applied_unknown(&e) => {
+            logger.warn(&format!(
+                "Email/import of {} message(s) ended without a clear answer ({e}); the target is checked before any is sent again",
+                batch.len()
+            ));
+            unclear.extend(batch);
+        }
+        Err(JmapError::Method { .. }) if batch.len() > 1 => {
+            for p in batch {
+                send_batch(net, uploader, maps, units, vec![p], counts, logger, unclear);
+            }
+        }
+        Err(e) => {
+            for p in batch {
+                logger.warn(&format!(
+                    "Email/import {} ({}) send failed: {e}{}",
+                    p.cid,
+                    blob_hint(uploader, &units[p.unit].row),
+                    size_note(&e)
+                ));
+                counts.failed += 1;
+            }
+        }
+    }
+}
+
+/// Whether the server may have applied a call that failed with `e`: the
+/// connection broke after the request was sent, the answer was unreadable, or
+/// the server said it applied part of it.
+fn applied_unknown(e: &JmapError) -> bool {
+    match e {
+        JmapError::Transport(_)
+        | JmapError::RetriesExhausted(_)
+        | JmapError::Malformed(_)
+        | JmapError::HttpStatus { .. } => true,
+        JmapError::Method { error_type, .. } => error_type == "serverPartialFail",
+        _ => false,
+    }
+}
+
+/// Settles messages whose import ended without a clear answer: reads the
+/// target again, counts those that arrived as created, and imports the rest
+/// one at a time. If the target cannot be read, they are counted as failed --
+/// the next export matches whatever did arrive, so none is ever doubled.
+fn settle_unclear(
+    net: &Net,
+    uploader: &mut Uploader,
+    maps: &Maps,
+    units: &[Unit],
+    unclear: Vec<Pending>,
+    counts: &mut TypeCounts,
+    logger: &Logger,
+) {
+    let (targets, target_keys) = match target_emails(net) {
+        Ok(t) => t,
+        Err(e) => {
+            logger.warn(&format!(
+                "could not read the target to settle {} message(s) ({e}); they count as failed, and the next export matches whatever arrived",
+                unclear.len()
+            ));
+            counts.failed += unclear.len() as u64;
+            return;
+        }
+    };
+    let keys: Vec<EmailKey> = email_keys(
+        &unclear
+            .iter()
+            .map(|p| index_from_json(&units[p.unit].row.message_match))
+            .collect::<Vec<_>>(),
+    );
+    let sizes: Vec<Option<u64>> = unclear
+        .iter()
+        .map(|p| uploader.blob_len(units[p.unit].row.blob_local_id))
+        .collect();
+    let pairs = pair_with_targets(&keys, &sizes, &target_keys, &targets);
+    for (p, found) in unclear.into_iter().zip(pairs) {
+        if found.is_some() {
+            counts.created += 1;
+            continue;
+        }
+        let unit = &units[p.unit];
+        export_one(
+            net,
+            uploader,
+            maps,
+            unit.local_id,
+            &unit.row,
+            counts,
+            logger,
+        );
+    }
 }
 
 /// One message to write: the archive rows that hold the same bytes, folded
@@ -521,6 +790,13 @@ fn send_single_import(
 
 fn interpret_import(mr: &MethodCall, cid: &str) -> Result<SingleImport, JmapError> {
     check_method_error(mr)?;
+    Ok(interpret_import_for(mr, cid, 1))
+}
+
+/// One message's outcome in an `Email/import` answer. With a single message
+/// in the call, any `created` entry is taken as its own, as servers may key it
+/// differently.
+fn interpret_import_for(mr: &MethodCall, cid: &str, in_call: usize) -> SingleImport {
     if let Some(err) = mr
         .args
         .get("notCreated")
@@ -533,25 +809,21 @@ fn interpret_import(mr: &MethodCall, cid: &str) -> Result<SingleImport, JmapErro
             .unwrap_or("")
             .to_owned();
         if error_type == "alreadyExists" {
-            return Ok(SingleImport::Skipped);
+            return SingleImport::Skipped;
         }
-        return Ok(SingleImport::NotCreated {
+        return SingleImport::NotCreated {
             error_type,
             detail: err.to_string(),
-        });
+        };
     }
-    if mr
-        .args
-        .get("created")
-        .and_then(Value::as_object)
-        .is_some_and(|c| !c.is_empty())
-    {
-        return Ok(SingleImport::Created);
+    let created = mr.args.get("created").and_then(Value::as_object);
+    if created.is_some_and(|c| c.contains_key(cid) || (in_call == 1 && !c.is_empty())) {
+        return SingleImport::Created;
     }
-    Ok(SingleImport::NotCreated {
+    SingleImport::NotCreated {
         error_type: String::new(),
         detail: format!("Email/import returned neither created nor notCreated for {cid}"),
-    })
+    }
 }
 
 #[cfg(test)]

@@ -131,6 +131,14 @@ impl Request {
         let value = client.post_json(api_url, &self.envelope()?)?;
         Response::parse(value)
     }
+
+    /// As `send`, for a write that must not be applied twice: a transport
+    /// failure comes back as an error instead of being resent (see
+    /// `HttpClient::post_json_once`).
+    pub fn send_once(&self, client: &HttpClient, api_url: &str) -> Result<Response, JmapError> {
+        let value = client.post_json_once(api_url, &self.envelope()?)?;
+        Response::parse(value)
+    }
 }
 
 #[derive(Debug)]
