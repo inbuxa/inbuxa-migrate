@@ -9,10 +9,11 @@ use std::collections::{HashMap, HashSet};
 
 use serde_json::{Value, json};
 
-use super::common::{create_batch, jid, retry_if_blob_missing, target_get_all};
+use super::common::{create_batch, jid, retry_if_blob_missing, target_get_all, update_batch};
 use super::sieve_names;
 use super::{Maps, Net, Plan, Uploader};
 use crate::error::Error;
+use crate::jmap::blobxfer;
 use crate::jmap::request::{Request, check_method_error};
 use crate::logging::{LEVEL_DEFAULT, Logger};
 use crate::sync::import_jmap::mapping::BlobBytes;
@@ -31,10 +32,14 @@ pub fn reconcile(
     let targets = target_get_all(net, ty).map_err(Error::from)?;
 
     let mut target_by_name: HashMap<String, String> = HashMap::new();
+    let mut target_blob: HashMap<String, String> = HashMap::new();
     for t in &targets {
         let (Some(id), Some(name)) = (jid(t), t.get("name").and_then(Value::as_str)) else {
             continue;
         };
+        if let Some(blob) = t.get("blobId").and_then(Value::as_str) {
+            target_blob.insert(id.clone(), blob.to_owned());
+        }
         target_by_name.insert(name.to_owned(), id);
     }
 
@@ -66,19 +71,55 @@ pub fn reconcile(
         .find(|(_, _, a, _)| *a)
         .map(|(_, n, _, _)| n.clone().unwrap_or_default());
 
+    let mut updates: Vec<(String, Value)> = Vec::new();
+
     for (local, name, is_active, blob_local) in &locals {
         let matched = name.as_ref().and_then(|n| target_by_name.get(n)).cloned();
+        let label = name.as_deref().unwrap_or("(unnamed)");
+        let rewritten = if rename_vendor {
+            renamed_script(&uploader, *blob_local)?
+        } else {
+            None
+        };
         let target_id = if let Some(id) = matched {
-            counts.skipped += 1;
+            // Compare what would be written -- the renamed bytes where the
+            // script needed renaming -- so an unchanged script stays unchanged.
+            let ours = match &rewritten {
+                Some((bytes, _)) => bytes.clone(),
+                None => uploader.bytes(*blob_local).map_err(Error::from)?,
+            };
+            match content_differs(net, &ours, target_blob.get(&id)) {
+                Ok(false) => counts.skipped += 1,
+                Ok(true) => {
+                    let blob = match &rewritten {
+                        Some((bytes, renamed)) => {
+                            log_renames(label, renamed, logger);
+                            uploader.upload_bytes_as(*blob_local, "application/sieve", bytes)
+                        }
+                        None => uploader.upload_with(*blob_local, "application/sieve"),
+                    };
+                    match blob {
+                        Ok(b) => updates.push((id.clone(), json!({ "blobId": b.0 }))),
+                        Err(e) => {
+                            logger.warn(&format!(
+                                "SieveScript {label}: upload for update failed: {e}"
+                            ));
+                            counts.failed += 1;
+                        }
+                    }
+                }
+                Err(e) => {
+                    logger.warn(&format!("SieveScript {label}: not compared: {e}"));
+                    counts.skipped += 1;
+                }
+            }
             id
         } else {
             let cid = format!("c{local}");
-            let label = name.as_deref().unwrap_or("(unnamed)");
-            let rewritten = if rename_vendor {
-                renamed_script(&uploader, *blob_local, label, logger)?
-            } else {
-                None
-            };
+            if let Some((_, renamed)) = &rewritten {
+                log_renames(label, renamed, logger);
+            }
+            let rewritten = rewritten.as_ref().map(|(bytes, _)| bytes);
             let build = |up: &mut Uploader<'_>| -> Result<Value, Error> {
                 let blob_id = match &rewritten {
                     Some(bytes) => up.upload_bytes_as(*blob_local, "application/sieve", bytes),
@@ -119,6 +160,8 @@ pub fn reconcile(
             active_target = Some(target_id);
         }
     }
+
+    update_batch(net, ty, updates, counts, logger);
 
     if active_target.is_none() && locals.iter().all(|(_, _, a, _)| !*a) {
         deactivate = true;
@@ -190,22 +233,40 @@ fn target_sieve_extensions(net: &Net) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// A script's bytes after renaming, and the names that were renamed.
+type Renamed = (Vec<u8>, Vec<String>);
+
 /// The script's bytes with Stalwart's vendor names renamed for an inbuxa
-/// target, or `None` when it needs no change. Each rename is logged.
-fn renamed_script(
-    uploader: &Uploader<'_>,
-    blob_local: i64,
-    label: &str,
-    logger: &Logger,
-) -> Result<Option<Vec<u8>>, Error> {
+/// target, and the names renamed, or `None` when it needs no change.
+fn renamed_script(uploader: &Uploader<'_>, blob_local: i64) -> Result<Option<Renamed>, Error> {
     let bytes = uploader.bytes(blob_local).map_err(Error::from)?;
-    Ok(sieve_names::rewrite(&bytes).map(|(out, renamed)| {
-        for old in &renamed {
-            let new = old.replacen("vnd.stalwart.", "vnd.inbuxa.", 1);
-            if logger.enabled(LEVEL_DEFAULT) {
-                eprintln!("export: SieveScript {label}: renamed {old} to {new}");
-            }
+    Ok(sieve_names::rewrite(&bytes))
+}
+
+/// Prints each rename made to a script about to be written.
+fn log_renames(label: &str, renamed: &[String], logger: &Logger) {
+    for old in renamed {
+        let new = old.replacen("vnd.stalwart.", "vnd.inbuxa.", 1);
+        if logger.enabled(LEVEL_DEFAULT) {
+            eprintln!("export: SieveScript {label}: renamed {old} to {new}");
         }
-        out
-    }))
+    }
+}
+
+/// Whether the target's copy of a script differs from `ours`. A target that
+/// reports no blob is taken as different, so ours is written.
+fn content_differs(net: &Net, ours: &[u8], target_blob: Option<&String>) -> Result<bool, Error> {
+    let Some(target_blob) = target_blob else {
+        return Ok(true);
+    };
+    let theirs = blobxfer::download_bytes(
+        &net.client,
+        &net.session,
+        &net.account,
+        target_blob,
+        "application/sieve",
+        "script.sieve",
+    )
+    .map_err(Error::from)?;
+    Ok(ours != theirs.as_slice())
 }
