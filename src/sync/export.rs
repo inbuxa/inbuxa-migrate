@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -91,6 +92,34 @@ impl<'a> Uploader<'a> {
                 &self.net.account,
                 content_type,
                 &bytes,
+            )?
+        };
+        self.cache.insert(local_id, id.clone());
+        Ok(id)
+    }
+
+    /// As `upload_with`, but sends `bytes` in place of the stored blob: for
+    /// content rewritten on its way to the target. Cached under the same
+    /// local id, so a retry sends the rewritten bytes again.
+    fn upload_bytes_as(
+        &mut self,
+        local_id: i64,
+        content_type: &str,
+        bytes: &[u8],
+    ) -> Result<JmapId, JmapError> {
+        self.touched.push(local_id);
+        if let Some(id) = self.cache.get(&local_id) {
+            return Ok(id.clone());
+        }
+        let id = if self.net.dry_run {
+            JmapId(format!("dryrun-blob-{local_id}"))
+        } else {
+            blobxfer::upload_bytes(
+                &self.net.client,
+                &self.net.session,
+                &self.net.account,
+                content_type,
+                bytes,
             )?
         };
         self.cache.insert(local_id, id.clone());
@@ -434,6 +463,8 @@ mod flat;
 mod keyed;
 
 mod sieve;
+
+mod sieve_names;
 
 mod uidtype;
 

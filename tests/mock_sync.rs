@@ -2683,6 +2683,205 @@ fn export_sieve_script_matches_by_name_not_content() {
     let _ = std::fs::remove_file(&archive);
 }
 
+/// A session like `session_body_full`, whose Sieve capability lists
+/// `extensions` in `sieveExtensions`.
+fn session_body_sieve(base: &str, extensions: &[&str]) -> String {
+    let mut v: serde_json::Value = serde_json::from_str(&session_body_full(base)).unwrap();
+    v["accounts"]["w"]["accountCapabilities"]["urn:ietf:params:jmap:sieve"] =
+        json!({ "sieveExtensions": extensions });
+    v.to_string()
+}
+
+/// One active script `name` in a fresh archive, with `body` as its content.
+fn archive_with_active_sieve(name: &str, body: &[u8]) -> PathBuf {
+    let archive = tmp();
+    let conn = db::init::open(&archive).unwrap();
+    let blob = db::blobs::intern_blob(&conn, body).unwrap();
+    conn.execute(
+        "INSERT INTO sieve_scripts (id,name,is_active,blob_id) VALUES (1,?1,1,?2)",
+        rusqlite::params![name, blob],
+    )
+    .unwrap();
+    archive
+}
+
+/// Mocks for exporting one script to an empty target: get, upload (matched
+/// by `upload_body`), create, and activation answered with `activation`.
+/// Returns the upload mock and the activation mock.
+fn mock_sieve_export(
+    server: &mut mockito::ServerGuard,
+    session: String,
+    upload_body: Matcher,
+    create_ok: bool,
+    activation: serde_json::Value,
+) -> (mockito::Mock, mockito::Mock, Vec<mockito::Mock>) {
+    let api = "/jmap/api";
+    let mut keep = vec![
+        server.mock("GET", "/").with_status(404).create(),
+        server
+            .mock("GET", "/.well-known/jmap")
+            .with_body(session)
+            .expect_at_least(1)
+            .create(),
+        server
+            .mock("POST", api)
+            .match_body(Matcher::Regex("SieveScript/get".into()))
+            .with_body(
+                json!({"methodResponses":[["SieveScript/get",
+                    {"accountId":"w","list":[],"notFound":[]},"g"]]})
+                .to_string(),
+            )
+            .create(),
+    ];
+    let upload = server
+        .mock("POST", Matcher::Regex("/jmap/upload/".into()))
+        .match_body(upload_body)
+        .with_body(json!({"blobId":"UPN"}).to_string())
+        .expect(1)
+        .create();
+    let created = if create_ok {
+        json!({"accountId":"w","created":{"c1":{"id":"S1"}}})
+    } else {
+        json!({"accountId":"w","notCreated":{"c1":{"type":"invalidScript",
+            "description":"unknown extension"}}})
+    };
+    keep.push(
+        server
+            .mock("POST", api)
+            .match_body(Matcher::AllOf(vec![
+                Matcher::Regex("SieveScript/set".into()),
+                Matcher::Regex("\"create\"".into()),
+            ]))
+            .with_body(json!({"methodResponses":[["SieveScript/set", created, "s"]]}).to_string())
+            .create(),
+    );
+    let activate = server
+        .mock("POST", api)
+        .match_body(Matcher::AllOf(vec![
+            Matcher::Regex("SieveScript/set".into()),
+            Matcher::Regex("onSuccess".into()),
+        ]))
+        .with_body(json!({"methodResponses":[activation]}).to_string())
+        .expect(1)
+        .create();
+    (upload, activate, keep)
+}
+
+fn sieve_counts(summary: &sync::Summary) -> sync::TypeCounts {
+    summary
+        .per_type
+        .iter()
+        .find(|(t, _)| *t == "SieveScript")
+        .map(|(_, c)| c.clone())
+        .expect("sieve counts")
+}
+
+#[test]
+fn export_sieve_renames_stalwart_names_for_an_inbuxa_target() {
+    let mut server = mockito::Server::new();
+    let base = server.url();
+    let archive = archive_with_active_sieve(
+        "loop",
+        b"require [\"fileinto\", \"vnd.stalwart.while\"];\nkeep;\n",
+    );
+    let (upload, activate, _keep) = mock_sieve_export(
+        &mut server,
+        session_body_sieve(
+            &base,
+            &["fileinto", "vnd.inbuxa.while", "vnd.inbuxa.expressions"],
+        ),
+        Matcher::Exact("require [\"fileinto\", \"vnd.inbuxa.while\"];\nkeep;\n".into()),
+        true,
+        json!(["SieveScript/set", {"accountId":"w"}, "a"]),
+    );
+    let summary = sync::export::run(
+        common(&archive),
+        export_cfg_objects(&base, vec![ObjectType::SieveScript]),
+    )
+    .expect("export");
+    upload.assert();
+    activate.assert();
+    let c = sieve_counts(&summary);
+    assert_eq!((c.created, c.failed), (1, 0));
+    let _ = std::fs::remove_file(&archive);
+}
+
+#[test]
+fn export_sieve_keeps_stalwart_names_for_a_target_without_inbuxa_names() {
+    let mut server = mockito::Server::new();
+    let base = server.url();
+    let archive = archive_with_active_sieve(
+        "loop",
+        b"require [\"fileinto\", \"vnd.stalwart.while\"];\nkeep;\n",
+    );
+    let (upload, _activate, _keep) = mock_sieve_export(
+        &mut server,
+        session_body_sieve(&base, &["fileinto", "vnd.stalwart.while"]),
+        Matcher::Regex("vnd\\.stalwart\\.while".into()),
+        true,
+        json!(["SieveScript/set", {"accountId":"w"}, "a"]),
+    );
+    let summary = sync::export::run(
+        common(&archive),
+        export_cfg_objects(&base, vec![ObjectType::SieveScript]),
+    )
+    .expect("export");
+    upload.assert();
+    assert_eq!(sieve_counts(&summary).failed, 0);
+    let _ = std::fs::remove_file(&archive);
+}
+
+#[test]
+fn export_sieve_activation_error_is_a_failure() {
+    let mut server = mockito::Server::new();
+    let base = server.url();
+    let archive = archive_with_active_sieve("main", b"require [\"fileinto\"];\nkeep;\n");
+    let (_upload, activate, _keep) = mock_sieve_export(
+        &mut server,
+        session_body_full(&base),
+        Matcher::Any,
+        true,
+        json!(["error", {"type":"invalidArguments","description":"cannot activate"}, "a"]),
+    );
+    let summary = sync::export::run(
+        common(&archive),
+        export_cfg_objects(&base, vec![ObjectType::SieveScript]),
+    )
+    .expect("export");
+    activate.assert();
+    let c = sieve_counts(&summary);
+    assert_eq!(c.created, 1);
+    assert_eq!(
+        c.failed, 1,
+        "a failed activation is a failure, not a warning"
+    );
+    assert!(summary.any_failed(), "so export exits non-zero");
+    let _ = std::fs::remove_file(&archive);
+}
+
+#[test]
+fn export_sieve_active_script_not_created_is_a_failure() {
+    let mut server = mockito::Server::new();
+    let base = server.url();
+    let archive = archive_with_active_sieve("main", b"require [\"nope\"];\nkeep;\n");
+    let (_upload, _activate, _keep) = mock_sieve_export(
+        &mut server,
+        session_body_full(&base),
+        Matcher::Any,
+        false,
+        json!(["SieveScript/set", {"accountId":"w"}, "a"]),
+    );
+    let summary = sync::export::run(
+        common(&archive),
+        export_cfg_objects(&base, vec![ObjectType::SieveScript]),
+    )
+    .expect("export");
+    let c = sieve_counts(&summary);
+    assert_eq!((c.created, c.failed), (0, 1));
+    assert!(summary.any_failed());
+    let _ = std::fs::remove_file(&archive);
+}
+
 #[test]
 fn export_sieve_scripts_identical_content_different_names_both_created() {
     let mut server = mockito::Server::new();
