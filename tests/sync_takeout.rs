@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -11,9 +12,9 @@ use std::path::{Path, PathBuf};
 use rusqlite::Connection;
 use tempfile::TempDir;
 
-use vandelay::logging::Logger;
-use vandelay::sync::CommonConfig;
-use vandelay::sync::import_takeout::{TakeoutImportConfig, run};
+use inbuxa_migrate::logging::Logger;
+use inbuxa_migrate::sync::CommonConfig;
+use inbuxa_migrate::sync::import_takeout::{TakeoutImportConfig, run};
 
 const RESOURCES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/resources");
 
@@ -230,7 +231,7 @@ fn empty_directory_fails_with_usage() {
     let archive = td.path().join("a.sqlite");
     let err = run(common_for(&archive), config_for(td.path().to_path_buf())).unwrap_err();
     assert!(format!("{err}").contains("no .mbox"));
-    assert!(matches!(err, vandelay::error::Error::Usage(_)));
+    assert!(matches!(err, inbuxa_migrate::error::Error::Usage(_)));
     assert_eq!(err.exit_code(), 1);
 }
 
@@ -240,7 +241,7 @@ fn nonexistent_path_fails_with_usage() {
     let archive = td.path().join("a.sqlite");
     let missing = td.path().join("does-not-exist");
     let err = run(common_for(&archive), config_for(missing)).unwrap_err();
-    assert!(matches!(err, vandelay::error::Error::Usage(_)));
+    assert!(matches!(err, inbuxa_migrate::error::Error::Usage(_)));
     assert_eq!(err.exit_code(), 1);
 }
 
@@ -450,7 +451,7 @@ fn contacts_dedup_by_uid_across_two_vcf_files() {
     assert_eq!(with_uid, 2);
     let synthetic_uids: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM contact_cards WHERE uid LIKE 'vandelay-syn-%'",
+            "SELECT COUNT(*) FROM contact_cards WHERE uid LIKE 'inbuxa-migrate-syn-%'",
             [],
             |r| r.get(0),
         )
@@ -543,7 +544,7 @@ fn source_change_protection_refuses_different_path() {
     let archive = td.path().join("a.sqlite");
     run(common_for(&archive), config_for(a.clone())).unwrap();
     let err = run(common_for(&archive), config_for(b.clone())).unwrap_err();
-    assert!(matches!(err, vandelay::error::Error::SourceChange(_)));
+    assert!(matches!(err, inbuxa_migrate::error::Error::SourceChange(_)));
 
     let mut cfg2 = config_for(b);
     cfg2.allow_source_change = true;

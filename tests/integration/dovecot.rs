@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -126,7 +127,7 @@ pub struct Dovecot {
 
 impl Dovecot {
     pub fn start() -> ContainerResult<Self> {
-        let image: GenericImage = GenericBuildableImage::new("vandelay-dovecot", "test")
+        let image: GenericImage = GenericBuildableImage::new("inbuxa-migrate-dovecot", "test")
             .with_dockerfile_string(DOCKERFILE.to_owned())
             .with_data(DOVECOT_CONF.as_bytes().to_vec(), "dovecot.conf")
             .with_data(users_file().into_bytes(), "users")
@@ -374,10 +375,10 @@ impl Dovecot {
     ) -> ContainerResult<(Vec<u8>, String)> {
         let mut client = ImapSeed::connect(&self.imap.host, self.imap.port)?;
         client.login(&account.username, &account.password)?;
-        let message_id = format!("<added-{tag}-{}@vandelay.test>", account.username);
+        let message_id = format!("<added-{tag}-{}@inbuxa-migrate.test>", account.username);
         let body = format!(
-            "From: added-{tag}@vandelay.test\r\n\
-             To: {}@vandelay.test\r\n\
+            "From: added-{tag}@inbuxa-migrate.test\r\n\
+             To: {}@inbuxa-migrate.test\r\n\
              Subject: Added probe {tag}\r\n\
              Message-ID: {message_id}\r\n\
              Date: Wed, 01 Jan 2025 12:00:00 +0000\r\n\
@@ -446,10 +447,10 @@ fn histogram_total(h: &HashMap<String, usize>) -> usize {
 }
 
 pub fn flag_probe_message() -> Vec<u8> {
-    let body = "From: probe-flags@vandelay.test\r\n\
-                To: user@vandelay.test\r\n\
+    let body = "From: probe-flags@inbuxa-migrate.test\r\n\
+                To: user@inbuxa-migrate.test\r\n\
                 Subject: Flag probe\r\n\
-                Message-ID: <flag-probe@vandelay.test>\r\n\
+                Message-ID: <flag-probe@inbuxa-migrate.test>\r\n\
                 Date: Wed, 01 Jan 2025 12:00:00 +0000\r\n\
                 \r\n\
                 Flag probe body.\r\n";
@@ -457,8 +458,8 @@ pub fn flag_probe_message() -> Vec<u8> {
 }
 
 pub fn no_message_id_probe() -> Vec<u8> {
-    let body = "From: nomid@vandelay.test\r\n\
-                To: user@vandelay.test\r\n\
+    let body = "From: nomid@inbuxa-migrate.test\r\n\
+                To: user@inbuxa-migrate.test\r\n\
                 Subject: No Message-ID probe\r\n\
                 Date: Wed, 01 Jan 2025 12:00:00 +0000\r\n\
                 \r\n\
@@ -467,10 +468,10 @@ pub fn no_message_id_probe() -> Vec<u8> {
 }
 
 pub fn shared_message_id_probe() -> Vec<u8> {
-    let body = "From: shared@vandelay.test\r\n\
-                To: user@vandelay.test\r\n\
+    let body = "From: shared@inbuxa-migrate.test\r\n\
+                To: user@inbuxa-migrate.test\r\n\
                 Subject: Shared MID probe\r\n\
-                Message-ID: <shared-mid@vandelay.test>\r\n\
+                Message-ID: <shared-mid@inbuxa-migrate.test>\r\n\
                 Date: Wed, 01 Jan 2025 12:00:00 +0000\r\n\
                 \r\n\
                 Shared MID body.\r\n";

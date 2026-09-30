@@ -1,26 +1,27 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
 
 use std::path::{Path, PathBuf};
 
+use inbuxa_migrate::db;
+use inbuxa_migrate::jmap::account::AccountSelector;
+use inbuxa_migrate::jmap::http::Auth;
+use inbuxa_migrate::logging::Logger;
+use inbuxa_migrate::sync::{self, CommonConfig, ConnectConfig, ExportConfig, ImportConfig};
+use inbuxa_migrate::types::ObjectType;
 use mockito::Matcher;
 use serde_json::{Value, json};
-use vandelay::db;
-use vandelay::jmap::account::AccountSelector;
-use vandelay::jmap::http::Auth;
-use vandelay::logging::Logger;
-use vandelay::sync::{self, CommonConfig, ConnectConfig, ExportConfig, ImportConfig};
-use vandelay::types::ObjectType;
 
 fn tmp() -> PathBuf {
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut p = std::env::temp_dir();
     p.push(format!(
-        "vandelay-mocksync-{}-{:?}-{n}.sqlite",
+        "inbuxa-migrate-mocksync-{}-{:?}-{n}.sqlite",
         std::process::id(),
         std::thread::current().id(),
     ));
@@ -1585,8 +1586,8 @@ fn export_missing_target_email_is_created_on_rerun() {
             let raw =
                 format!("From: a@x\r\nSubject: m{n}\r\nMessage-ID: <m-{n}@h>\r\n\r\nbody {n}",);
             let blob = db::blobs::intern_blob(&conn, raw.as_bytes()).unwrap();
-            let mm = vandelay::sync::keys::index_to_json(
-                &vandelay::sync::emailmeta::email_index_from_blob(raw.as_bytes()),
+            let mm = inbuxa_migrate::sync::keys::index_to_json(
+                &inbuxa_migrate::sync::emailmeta::email_index_from_blob(raw.as_bytes()),
             );
             conn.execute(
                 "INSERT INTO emails (blob_id,received_at,mailbox_ids,keywords,message_match)
@@ -1700,8 +1701,8 @@ fn export_email_blake3_fallback_matches_when_no_message_id() {
         )
         .unwrap();
         let blob = db::blobs::intern_blob(&conn, raw.as_bytes()).unwrap();
-        let mm = vandelay::sync::keys::index_to_json(
-            &vandelay::sync::emailmeta::email_index_from_blob(raw.as_bytes()),
+        let mm = inbuxa_migrate::sync::keys::index_to_json(
+            &inbuxa_migrate::sync::emailmeta::email_index_from_blob(raw.as_bytes()),
         );
         conn.execute(
             "INSERT INTO emails (blob_id,received_at,mailbox_ids,keywords,message_match)
@@ -1711,7 +1712,7 @@ fn export_email_blake3_fallback_matches_when_no_message_id() {
         .unwrap();
     }
 
-    let local_idx = vandelay::sync::emailmeta::email_index_from_blob(raw.as_bytes());
+    let local_idx = inbuxa_migrate::sync::emailmeta::email_index_from_blob(raw.as_bytes());
     assert!(local_idx.mids.is_empty(), "blob must lack Message-ID");
 
     let _root = server.mock("GET", "/").with_status(404).create();
@@ -4144,7 +4145,7 @@ fn export_aborts_with_exit_two_when_the_advertised_api_url_is_unreachable() {
     .expect_err("an unreachable apiUrl must abort the run");
 
     assert!(
-        matches!(err, vandelay::error::Error::Connection(_)),
+        matches!(err, inbuxa_migrate::error::Error::Connection(_)),
         "a 404 from the advertised apiUrl is a whole-run connection failure, got {err:?}"
     );
     assert_eq!(err.exit_code(), 2, "must not report a partial failure");
@@ -4207,7 +4208,7 @@ fn aborting_import_still_reports_the_types_that_finished() {
         .as_ref()
         .expect("a 404 from the api endpoint aborts the run");
     assert!(
-        matches!(err, vandelay::error::Error::Connection(_)),
+        matches!(err, inbuxa_migrate::error::Error::Connection(_)),
         "the abort must keep its own exit code, got {err:?}"
     );
     assert_eq!(err.exit_code(), 2);

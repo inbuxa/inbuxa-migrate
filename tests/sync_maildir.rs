@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -19,16 +20,16 @@ use rusqlite::Connection;
 fn base_url() -> &'static str {
     shared_stalwart().base_url()
 }
-use vandelay::jmap::account::AccountSelector;
-use vandelay::jmap::http::Auth;
-use vandelay::logging::Logger;
-use vandelay::sync::import_maildir::{MaildirImportConfig, run as run_maildir};
-use vandelay::sync::{self, CommonConfig, ConnectConfig, ImportConfig};
+use inbuxa_migrate::jmap::account::AccountSelector;
+use inbuxa_migrate::jmap::http::Auth;
+use inbuxa_migrate::logging::Logger;
+use inbuxa_migrate::sync::import_maildir::{MaildirImportConfig, run as run_maildir};
+use inbuxa_migrate::sync::{self, CommonConfig, ConnectConfig, ImportConfig};
 
 fn tmp_archive(tag: &str) -> PathBuf {
     let mut p = std::env::temp_dir();
     p.push(format!(
-        "vandelay-sync-maildir-{tag}-{}-{}.sqlite",
+        "inbuxa-migrate-sync-maildir-{tag}-{}-{}.sqlite",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -551,8 +552,8 @@ fn maildir_and_jmap_imports_share_blob_bytes() {
             account: AccountSelector::Id(acc.account_id.clone()),
         },
         objects: Some(vec![
-            vandelay::types::ObjectType::Mailbox,
-            vandelay::types::ObjectType::Email,
+            inbuxa_migrate::types::ObjectType::Mailbox,
+            inbuxa_migrate::types::ObjectType::Email,
         ]),
         allow_source_change: false,
     };
@@ -627,8 +628,8 @@ fn maildir_message_count_matches_jmap_for_same_corpus() {
             account: AccountSelector::Id(acc.account_id.clone()),
         },
         objects: Some(vec![
-            vandelay::types::ObjectType::Mailbox,
-            vandelay::types::ObjectType::Email,
+            inbuxa_migrate::types::ObjectType::Mailbox,
+            inbuxa_migrate::types::ObjectType::Email,
         ]),
         allow_source_change: false,
     };

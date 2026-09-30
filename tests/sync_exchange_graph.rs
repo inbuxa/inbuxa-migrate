@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -9,15 +10,15 @@ mod seeder;
 
 use std::path::PathBuf;
 
+use inbuxa_migrate::exchange_graph::types::{EventBodyFormat, MailboxKind, Surfaces};
+use inbuxa_migrate::jmap::account::AccountSelector;
+use inbuxa_migrate::jmap::http::Auth;
+use inbuxa_migrate::logging::Logger;
+use inbuxa_migrate::sync::import_exchange_graph::{GraphAuth, GraphImportConfig};
+use inbuxa_migrate::sync::{self, CommonConfig, ConnectConfig, ExportConfig};
 use integration::stalwart::shared as shared_stalwart;
 use mockito::{Matcher, Server};
 use serde_json::{Value, json};
-use vandelay::exchange_graph::types::{EventBodyFormat, MailboxKind, Surfaces};
-use vandelay::jmap::account::AccountSelector;
-use vandelay::jmap::http::Auth;
-use vandelay::logging::Logger;
-use vandelay::sync::import_exchange_graph::{GraphAuth, GraphImportConfig};
-use vandelay::sync::{self, CommonConfig, ConnectConfig, ExportConfig};
 
 fn base_url() -> &'static str {
     shared_stalwart().base_url()
@@ -26,7 +27,7 @@ fn base_url() -> &'static str {
 fn tmp_archive(tag: &str) -> PathBuf {
     let mut p = std::env::temp_dir();
     p.push(format!(
-        "vandelay-{tag}-{}-{}.sqlite",
+        "inbuxa-migrate-{tag}-{}-{}.sqlite",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -96,9 +97,9 @@ fn graph_fixture(server: &mut Server) {
         .with_status(200)
         .with_header("content-type", "text/plain")
         .with_body(
-            "From: art@vandelay.example\r\nTo: alice@x.com\r\n\
+            "From: art@inbuxa-migrate.example\r\nTo: alice@x.com\r\n\
              Subject: Graph round trip\r\nDate: Tue, 01 Sep 2026 10:00:00 +0000\r\n\
-             Message-ID: <graph-rt-1@vandelay.example>\r\n\
+             Message-ID: <graph-rt-1@inbuxa-migrate.example>\r\n\
              MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n\
              Grüße aus Köln 🎉\r\n",
         )
@@ -219,8 +220,8 @@ fn graph_fixture(server: &mut Server) {
         server,
         "/me/contacts/C1",
         r#"{"id":"C1","displayName":"Graph Contact","givenName":"Graph","surname":"Contact",
-            "categories":["Work","VIP"],"imAddresses":["sip:graph@vandelay.example"],
-            "emailAddresses":[{"address":"graph@vandelay.example"}]}"#,
+            "categories":["Work","VIP"],"imAddresses":["sip:graph@inbuxa-migrate.example"],
+            "emailAddresses":[{"address":"graph@inbuxa-migrate.example"}]}"#,
     );
     server
         .mock("GET", "/me/contacts/C1/photo/$value")
@@ -393,7 +394,7 @@ fn graph_import_survives_a_full_export_to_stalwart() {
             .as_object()
             .and_then(|m| m.values().next())
             .and_then(|s| s["uri"].as_str()),
-        Some("sip:graph@vandelay.example"),
+        Some("sip:graph@inbuxa-migrate.example"),
         "a URI-shaped IM address must land in uri: Stalwart drops an OnlineService \
          that carries only user, even though RFC 9553 permits it"
     );

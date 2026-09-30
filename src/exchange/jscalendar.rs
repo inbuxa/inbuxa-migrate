@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -36,7 +37,7 @@ const CALENDAR_ADDRESS_DEPENDENTS: &[&str] = &[
 
 pub fn synthetic_attendee_address(identifier: &str) -> String {
     format!(
-        "urn:x-vandelay:attendee:{}",
+        "urn:x-inbuxa-migrate:attendee:{}",
         blake3::hash(identifier.as_bytes()).to_hex()
     )
 }
@@ -146,7 +147,7 @@ mod tests {
         let event = json!({
             "@type": "Event",
             "uid": "uid-1",
-            "prodId": "vandelay",
+            "prodId": "inbuxa-migrate",
             "privacy": "public",
             "organizerCalendarAddress": "mailto:alice@example.com",
             "recurrenceRule": {"frequency": "daily"},
@@ -173,7 +174,7 @@ mod tests {
         let addr = synthetic_attendee_address("Jane Doe");
         assert_eq!(addr, synthetic_attendee_address("Jane Doe"));
         assert_ne!(addr, synthetic_attendee_address("John Doe"));
-        assert!(addr.starts_with("urn:x-vandelay:attendee:"));
+        assert!(addr.starts_with("urn:x-inbuxa-migrate:attendee:"));
         assert!(
             !addr.starts_with("mailto:"),
             "export must never invite a fabricated address"
@@ -186,7 +187,7 @@ mod tests {
             "1": {
                 "@type": "Participant",
                 "name": "Room 4",
-                "calendarAddress": "urn:x-vandelay:attendee:abc",
+                "calendarAddress": "urn:x-inbuxa-migrate:attendee:abc",
                 "email": "room4@example.com",
                 "roles": {"required": true},
                 "kind": "resource",

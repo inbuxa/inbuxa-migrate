@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -385,7 +386,7 @@ fn spawn_token_refresher(
     let client = client.clone();
     let initial_refresh = initial.as_ref().and_then(|t| t.refresh_token.clone());
     std::thread::Builder::new()
-        .name("vandelay-ews-token-refresh".to_owned())
+        .name("inbuxa-migrate-ews-token-refresh".to_owned())
         .spawn(move || {
             let mut next_exp = exp_secs;
             let mut refresh_token = initial_refresh;

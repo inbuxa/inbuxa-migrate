@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -7,21 +8,21 @@
 use std::sync::Once;
 
 use encodify::base64::URL_SAFE_NO_PAD;
-use mockito::{Matcher, Server};
-use serde_json::json;
-use vandelay::exchange_graph::api::{Endpoints, collect_all_ids, paged_collect};
-use vandelay::exchange_graph::calendar_map::{EventType, classify_event_type, convert_event};
-use vandelay::exchange_graph::client::{Accept, GraphClient};
-use vandelay::exchange_graph::contact_map::convert_contact;
-use vandelay::exchange_graph::error::GraphError;
-use vandelay::exchange_graph::oauth::{
+use inbuxa_migrate::exchange_graph::api::{Endpoints, collect_all_ids, paged_collect};
+use inbuxa_migrate::exchange_graph::calendar_map::{EventType, classify_event_type, convert_event};
+use inbuxa_migrate::exchange_graph::client::{Accept, GraphClient};
+use inbuxa_migrate::exchange_graph::contact_map::convert_contact;
+use inbuxa_migrate::exchange_graph::error::GraphError;
+use inbuxa_migrate::exchange_graph::oauth::{
     DeviceCodeResponse, TokenResponse, parse_device_code_response, parse_token_response,
     run_device_code_polling_against,
 };
-use vandelay::exchange_graph::recurrence::convert_patterned_recurrence;
-use vandelay::exchange_graph::retry::{HttpClass, classify_http_status};
-use vandelay::exchange_graph::types::Surfaces;
-use vandelay::jmap::http::RetryPolicy;
+use inbuxa_migrate::exchange_graph::recurrence::convert_patterned_recurrence;
+use inbuxa_migrate::exchange_graph::retry::{HttpClass, classify_http_status};
+use inbuxa_migrate::exchange_graph::types::Surfaces;
+use inbuxa_migrate::jmap::http::RetryPolicy;
+use mockito::{Matcher, Server};
+use serde_json::json;
 
 static INIT: Once = Once::new();
 
@@ -525,7 +526,7 @@ fn contact_minimal_yields_jscontact_card() {
         "emailAddresses": [{"name": "Alice", "address": "alice@x.com"}]
     });
     let out = convert_contact(&c).unwrap();
-    assert!(out.uid.starts_with("vandelay-graph-"));
+    assert!(out.uid.starts_with("inbuxa-migrate-graph-"));
     assert_eq!(out.data["@type"], "Card");
     assert_eq!(out.data["name"]["full"], "Alice Liddell");
     let emails = out.data["emails"].as_object().unwrap();
@@ -569,23 +570,23 @@ fn integration_dry_run_against_mock_server_lists_three_surfaces() {
         .with_body(r#"{"value":[{"id":"CON1","displayName":"Contacts"}]}"#)
         .create();
     let base = server.url();
-    let common = vandelay::sync::CommonConfig {
+    let common = inbuxa_migrate::sync::CommonConfig {
         archive: tempfile::NamedTempFile::new().unwrap().path().to_owned(),
         threads: 2,
         dry_run: true,
         max_retries: 0,
         allow_invalid_certs: false,
-        logger: vandelay::logging::Logger::new(0),
+        logger: inbuxa_migrate::logging::Logger::new(0),
     };
-    let config = vandelay::sync::import_exchange_graph::GraphImportConfig {
-        auth: vandelay::sync::import_exchange_graph::GraphAuth::PreAcquired {
+    let config = inbuxa_migrate::sync::import_exchange_graph::GraphImportConfig {
+        auth: inbuxa_migrate::sync::import_exchange_graph::GraphAuth::PreAcquired {
             token: make_jwt(9999999999, "alice@x.com"),
         },
         api_base: base.clone(),
         user_target: None,
-        mailbox_kind: vandelay::exchange_graph::types::MailboxKind::Primary,
+        mailbox_kind: inbuxa_migrate::exchange_graph::types::MailboxKind::Primary,
         surfaces: Surfaces::ALL,
-        event_body_format: vandelay::exchange_graph::types::EventBodyFormat::Text,
+        event_body_format: inbuxa_migrate::exchange_graph::types::EventBodyFormat::Text,
         graph_connections: 2,
         top: 100,
         exception_window_years: 5,
@@ -593,7 +594,7 @@ fn integration_dry_run_against_mock_server_lists_three_surfaces() {
         event_attachments: true,
         allow_source_change: false,
     };
-    let summary = vandelay::sync::import_exchange_graph::run(common, config).unwrap();
+    let summary = inbuxa_migrate::sync::import_exchange_graph::run(common, config).unwrap();
     let mailbox = summary
         .per_type
         .iter()
@@ -681,23 +682,23 @@ fn integration_full_run_mail_only_imports_mime_via_value() {
 
     let tmp = tempfile::NamedTempFile::new().unwrap();
     let archive_path = tmp.path().to_owned();
-    let common = vandelay::sync::CommonConfig {
+    let common = inbuxa_migrate::sync::CommonConfig {
         archive: archive_path.clone(),
         threads: 2,
         dry_run: false,
         max_retries: 0,
         allow_invalid_certs: false,
-        logger: vandelay::logging::Logger::new(0),
+        logger: inbuxa_migrate::logging::Logger::new(0),
     };
-    let config = vandelay::sync::import_exchange_graph::GraphImportConfig {
-        auth: vandelay::sync::import_exchange_graph::GraphAuth::PreAcquired {
+    let config = inbuxa_migrate::sync::import_exchange_graph::GraphImportConfig {
+        auth: inbuxa_migrate::sync::import_exchange_graph::GraphAuth::PreAcquired {
             token: make_jwt(9999999999, "alice@x.com"),
         },
         api_base: server.url(),
         user_target: None,
-        mailbox_kind: vandelay::exchange_graph::types::MailboxKind::Primary,
+        mailbox_kind: inbuxa_migrate::exchange_graph::types::MailboxKind::Primary,
         surfaces: surfaces("mail"),
-        event_body_format: vandelay::exchange_graph::types::EventBodyFormat::Text,
+        event_body_format: inbuxa_migrate::exchange_graph::types::EventBodyFormat::Text,
         graph_connections: 2,
         top: 100,
         exception_window_years: 5,
@@ -706,7 +707,7 @@ fn integration_full_run_mail_only_imports_mime_via_value() {
         allow_source_change: false,
     };
     drop(tmp);
-    let summary = vandelay::sync::import_exchange_graph::run(common, config).unwrap();
+    let summary = inbuxa_migrate::sync::import_exchange_graph::run(common, config).unwrap();
     let emails = summary
         .per_type
         .iter()
@@ -780,23 +781,23 @@ fn integration_duplicate_message_id_does_not_abort_run() {
 
     let tmp = tempfile::NamedTempFile::new().unwrap();
     let archive_path = tmp.path().to_owned();
-    let common = vandelay::sync::CommonConfig {
+    let common = inbuxa_migrate::sync::CommonConfig {
         archive: archive_path.clone(),
         threads: 2,
         dry_run: false,
         max_retries: 0,
         allow_invalid_certs: false,
-        logger: vandelay::logging::Logger::new(0),
+        logger: inbuxa_migrate::logging::Logger::new(0),
     };
-    let config = vandelay::sync::import_exchange_graph::GraphImportConfig {
-        auth: vandelay::sync::import_exchange_graph::GraphAuth::PreAcquired {
+    let config = inbuxa_migrate::sync::import_exchange_graph::GraphImportConfig {
+        auth: inbuxa_migrate::sync::import_exchange_graph::GraphAuth::PreAcquired {
             token: make_jwt(9999999999, "alice@x.com"),
         },
         api_base: server.url(),
         user_target: None,
-        mailbox_kind: vandelay::exchange_graph::types::MailboxKind::Primary,
+        mailbox_kind: inbuxa_migrate::exchange_graph::types::MailboxKind::Primary,
         surfaces: surfaces("mail"),
-        event_body_format: vandelay::exchange_graph::types::EventBodyFormat::Text,
+        event_body_format: inbuxa_migrate::exchange_graph::types::EventBodyFormat::Text,
         graph_connections: 2,
         top: 100,
         exception_window_years: 5,
@@ -805,7 +806,7 @@ fn integration_duplicate_message_id_does_not_abort_run() {
         allow_source_change: false,
     };
     drop(tmp);
-    let summary = vandelay::sync::import_exchange_graph::run(common, config).unwrap();
+    let summary = inbuxa_migrate::sync::import_exchange_graph::run(common, config).unwrap();
     let emails = summary
         .per_type
         .iter()
@@ -880,15 +881,15 @@ fn integration_full_run_is_convergent_on_second_invocation() {
 
     let archive = tempfile::NamedTempFile::new().unwrap().path().to_owned();
     let api_base = server.url();
-    let make_config = || vandelay::sync::import_exchange_graph::GraphImportConfig {
-        auth: vandelay::sync::import_exchange_graph::GraphAuth::PreAcquired {
+    let make_config = || inbuxa_migrate::sync::import_exchange_graph::GraphImportConfig {
+        auth: inbuxa_migrate::sync::import_exchange_graph::GraphAuth::PreAcquired {
             token: make_jwt(9999999999, "alice@x.com"),
         },
         api_base: api_base.clone(),
         user_target: None,
-        mailbox_kind: vandelay::exchange_graph::types::MailboxKind::Primary,
+        mailbox_kind: inbuxa_migrate::exchange_graph::types::MailboxKind::Primary,
         surfaces: surfaces("mail"),
-        event_body_format: vandelay::exchange_graph::types::EventBodyFormat::Text,
+        event_body_format: inbuxa_migrate::exchange_graph::types::EventBodyFormat::Text,
         graph_connections: 2,
         top: 100,
         exception_window_years: 5,
@@ -896,18 +897,20 @@ fn integration_full_run_is_convergent_on_second_invocation() {
         event_attachments: true,
         allow_source_change: false,
     };
-    let make_common = |path: std::path::PathBuf| vandelay::sync::CommonConfig {
+    let make_common = |path: std::path::PathBuf| inbuxa_migrate::sync::CommonConfig {
         archive: path,
         threads: 2,
         dry_run: false,
         max_retries: 0,
         allow_invalid_certs: false,
-        logger: vandelay::logging::Logger::new(0),
+        logger: inbuxa_migrate::logging::Logger::new(0),
     };
 
-    let first =
-        vandelay::sync::import_exchange_graph::run(make_common(archive.clone()), make_config())
-            .unwrap();
+    let first = inbuxa_migrate::sync::import_exchange_graph::run(
+        make_common(archive.clone()),
+        make_config(),
+    )
+    .unwrap();
     let created_first = first
         .per_type
         .iter()
@@ -917,7 +920,8 @@ fn integration_full_run_is_convergent_on_second_invocation() {
     assert_eq!(created_first, 1);
 
     let second =
-        vandelay::sync::import_exchange_graph::run(make_common(archive), make_config()).unwrap();
+        inbuxa_migrate::sync::import_exchange_graph::run(make_common(archive), make_config())
+            .unwrap();
     let created_second = second
         .per_type
         .iter()
@@ -930,10 +934,10 @@ fn integration_full_run_is_convergent_on_second_invocation() {
 #[test]
 fn source_change_protection_refuses_a_different_account() {
     let archive = tempfile::NamedTempFile::new().unwrap().path().to_owned();
-    let conn = vandelay::db::init::open(&archive).unwrap();
-    vandelay::db::sources::upsert_source(
+    let conn = inbuxa_migrate::db::init::open(&archive).unwrap();
+    inbuxa_migrate::db::sources::upsert_source(
         &conn,
-        &vandelay::db::sources::SourceKey {
+        &inbuxa_migrate::db::sources::SourceKey {
             kind: "exchange_graph".to_owned(),
             session_url:
                 "https://login.microsoftonline.com/common|https://graph.microsoft.com/v1.0"
@@ -954,23 +958,23 @@ fn source_change_protection_refuses_a_different_account() {
         .with_body(r#"{"id":"new-user-id","userPrincipalName":"new@x.com"}"#)
         .create();
 
-    let common = vandelay::sync::CommonConfig {
+    let common = inbuxa_migrate::sync::CommonConfig {
         archive,
         threads: 2,
         dry_run: false,
         max_retries: 0,
         allow_invalid_certs: false,
-        logger: vandelay::logging::Logger::new(0),
+        logger: inbuxa_migrate::logging::Logger::new(0),
     };
-    let config = vandelay::sync::import_exchange_graph::GraphImportConfig {
-        auth: vandelay::sync::import_exchange_graph::GraphAuth::PreAcquired {
+    let config = inbuxa_migrate::sync::import_exchange_graph::GraphImportConfig {
+        auth: inbuxa_migrate::sync::import_exchange_graph::GraphAuth::PreAcquired {
             token: make_jwt(9999999999, "new@x.com"),
         },
         api_base: server.url(),
         user_target: None,
-        mailbox_kind: vandelay::exchange_graph::types::MailboxKind::Primary,
+        mailbox_kind: inbuxa_migrate::exchange_graph::types::MailboxKind::Primary,
         surfaces: Surfaces::ALL,
-        event_body_format: vandelay::exchange_graph::types::EventBodyFormat::Text,
+        event_body_format: inbuxa_migrate::exchange_graph::types::EventBodyFormat::Text,
         graph_connections: 2,
         top: 100,
         exception_window_years: 5,
@@ -978,9 +982,9 @@ fn source_change_protection_refuses_a_different_account() {
         event_attachments: true,
         allow_source_change: false,
     };
-    let err = vandelay::sync::import_exchange_graph::run(common, config).unwrap_err();
+    let err = inbuxa_migrate::sync::import_exchange_graph::run(common, config).unwrap_err();
     assert!(
-        matches!(err, vandelay::error::Error::SourceChange(_)),
+        matches!(err, inbuxa_migrate::error::Error::SourceChange(_)),
         "expected SourceChange error, got {err:?}"
     );
 }
@@ -1011,35 +1015,35 @@ fn stub_well_known_folders(server: &mut Server, inbox_id: &str) {
         .create();
 }
 
-fn make_common(archive: std::path::PathBuf) -> vandelay::sync::CommonConfig {
-    vandelay::sync::CommonConfig {
+fn make_common(archive: std::path::PathBuf) -> inbuxa_migrate::sync::CommonConfig {
+    inbuxa_migrate::sync::CommonConfig {
         archive,
         threads: 2,
         dry_run: false,
         max_retries: 0,
         allow_invalid_certs: false,
-        logger: vandelay::logging::Logger::new(0),
+        logger: inbuxa_migrate::logging::Logger::new(0),
     }
 }
 
-fn surfaces(list: &str) -> vandelay::exchange_graph::types::Surfaces {
-    vandelay::exchange_graph::types::Surfaces::parse_list(list).unwrap()
+fn surfaces(list: &str) -> inbuxa_migrate::exchange_graph::types::Surfaces {
+    inbuxa_migrate::exchange_graph::types::Surfaces::parse_list(list).unwrap()
 }
 
 fn make_config(
     api_base: String,
     user_target: Option<String>,
-    surfaces: vandelay::exchange_graph::types::Surfaces,
-) -> vandelay::sync::import_exchange_graph::GraphImportConfig {
-    vandelay::sync::import_exchange_graph::GraphImportConfig {
-        auth: vandelay::sync::import_exchange_graph::GraphAuth::PreAcquired {
+    surfaces: inbuxa_migrate::exchange_graph::types::Surfaces,
+) -> inbuxa_migrate::sync::import_exchange_graph::GraphImportConfig {
+    inbuxa_migrate::sync::import_exchange_graph::GraphImportConfig {
+        auth: inbuxa_migrate::sync::import_exchange_graph::GraphAuth::PreAcquired {
             token: make_jwt(9999999999, "alice@x.com"),
         },
         api_base,
         user_target,
-        mailbox_kind: vandelay::exchange_graph::types::MailboxKind::Primary,
+        mailbox_kind: inbuxa_migrate::exchange_graph::types::MailboxKind::Primary,
         surfaces,
-        event_body_format: vandelay::exchange_graph::types::EventBodyFormat::Text,
+        event_body_format: inbuxa_migrate::exchange_graph::types::EventBodyFormat::Text,
         graph_connections: 2,
         top: 100,
         exception_window_years: 5,
@@ -1097,15 +1101,15 @@ fn users_upn_routes_through_users_segment_not_me() {
         .expect_at_least(0)
         .create();
     let base = server.url();
-    let common = vandelay::sync::CommonConfig {
+    let common = inbuxa_migrate::sync::CommonConfig {
         archive: tempfile::NamedTempFile::new().unwrap().path().to_owned(),
         threads: 2,
         dry_run: true,
         max_retries: 0,
         allow_invalid_certs: false,
-        logger: vandelay::logging::Logger::new(0),
+        logger: inbuxa_migrate::logging::Logger::new(0),
     };
-    let summary = vandelay::sync::import_exchange_graph::run(
+    let summary = inbuxa_migrate::sync::import_exchange_graph::run(
         common,
         make_config(base, Some("alice@x.com".to_owned()), Surfaces::ALL),
     )
@@ -1207,7 +1211,7 @@ fn series_master_with_exception_merges_into_recurrence_overrides() {
         .create();
     let base = server.url();
     let archive = tempfile::NamedTempFile::new().unwrap().path().to_owned();
-    let summary = vandelay::sync::import_exchange_graph::run(
+    let summary = inbuxa_migrate::sync::import_exchange_graph::run(
         make_common(archive.clone()),
         make_config(base, None, surfaces("calendar")),
     )
@@ -1220,7 +1224,7 @@ fn series_master_with_exception_merges_into_recurrence_overrides() {
         .unwrap_or(0);
     assert_eq!(events, 1, "exactly one master row, exception merged in");
 
-    let conn = vandelay::db::init::open(&archive).unwrap();
+    let conn = inbuxa_migrate::db::init::open(&archive).unwrap();
     let row: String = conn
         .query_row("SELECT data FROM calendar_events", [], |row| row.get(0))
         .unwrap();
@@ -1312,7 +1316,7 @@ fn occurrence_event_is_skipped_no_row_no_id_mapping() {
         .create();
     let base = server.url();
     let archive = tempfile::NamedTempFile::new().unwrap().path().to_owned();
-    let summary = vandelay::sync::import_exchange_graph::run(
+    let summary = inbuxa_migrate::sync::import_exchange_graph::run(
         make_common(archive.clone()),
         make_config(base, None, surfaces("calendar")),
     )
@@ -1326,7 +1330,7 @@ fn occurrence_event_is_skipped_no_row_no_id_mapping() {
     assert_eq!(events, 0, "occurrence must not be fetched or stored");
     occ_get.assert();
 
-    let conn = vandelay::db::init::open(&archive).unwrap();
+    let conn = inbuxa_migrate::db::init::open(&archive).unwrap();
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM calendar_events", [], |row| row.get(0))
         .unwrap();
@@ -1392,12 +1396,12 @@ fn hidden_mail_folder_has_is_subscribed_zero() {
     stub_well_known_folders(&mut server, "FVISIBLE");
     let base = server.url();
     let archive = tempfile::NamedTempFile::new().unwrap().path().to_owned();
-    let _ = vandelay::sync::import_exchange_graph::run(
+    let _ = inbuxa_migrate::sync::import_exchange_graph::run(
         make_common(archive.clone()),
         make_config(base, None, surfaces("mail")),
     )
     .unwrap();
-    let conn = vandelay::db::init::open(&archive).unwrap();
+    let conn = inbuxa_migrate::db::init::open(&archive).unwrap();
     let visible: i64 = conn
         .query_row(
             "SELECT is_subscribed FROM mailboxes WHERE name = 'Inbox'",
@@ -1486,12 +1490,12 @@ fn well_known_folder_probes_assign_jmap_roles() {
     }
     let base = server.url();
     let archive = tempfile::NamedTempFile::new().unwrap().path().to_owned();
-    let _ = vandelay::sync::import_exchange_graph::run(
+    let _ = inbuxa_migrate::sync::import_exchange_graph::run(
         make_common(archive.clone()),
         make_config(base, None, surfaces("mail")),
     )
     .unwrap();
-    let conn = vandelay::db::init::open(&archive).unwrap();
+    let conn = inbuxa_migrate::db::init::open(&archive).unwrap();
     let mut stmt = conn
         .prepare("SELECT name, role FROM mailboxes ORDER BY name")
         .unwrap();
@@ -1563,7 +1567,7 @@ SGVsbG8=\r\n--X--\r\n";
         .create();
     let base = server.url();
     let archive = tempfile::NamedTempFile::new().unwrap().path().to_owned();
-    let summary = vandelay::sync::import_exchange_graph::run(
+    let summary = inbuxa_migrate::sync::import_exchange_graph::run(
         make_common(archive),
         make_config(base, None, surfaces("mail")),
     )
@@ -1651,7 +1655,7 @@ fn event_get_carries_outlook_timezone_and_body_content_type_prefer() {
         .create();
     let base = server.url();
     let archive = tempfile::NamedTempFile::new().unwrap().path().to_owned();
-    let _ = vandelay::sync::import_exchange_graph::run(
+    let _ = inbuxa_migrate::sync::import_exchange_graph::run(
         make_common(archive),
         make_config(base, None, surfaces("calendar")),
     )
@@ -1737,23 +1741,23 @@ fn full_run_records_graph_id_in_sync_id_exchange_graph_with_padding() {
 
     let tmp = tempfile::NamedTempFile::new().unwrap();
     let archive = tmp.path().to_owned();
-    let common = vandelay::sync::CommonConfig {
+    let common = inbuxa_migrate::sync::CommonConfig {
         archive: archive.clone(),
         threads: 2,
         dry_run: false,
         max_retries: 0,
         allow_invalid_certs: false,
-        logger: vandelay::logging::Logger::new(0),
+        logger: inbuxa_migrate::logging::Logger::new(0),
     };
-    let config = vandelay::sync::import_exchange_graph::GraphImportConfig {
-        auth: vandelay::sync::import_exchange_graph::GraphAuth::PreAcquired {
+    let config = inbuxa_migrate::sync::import_exchange_graph::GraphImportConfig {
+        auth: inbuxa_migrate::sync::import_exchange_graph::GraphAuth::PreAcquired {
             token: make_jwt(9999999999, "pad@x.com"),
         },
         api_base: server.url(),
         user_target: None,
-        mailbox_kind: vandelay::exchange_graph::types::MailboxKind::Primary,
+        mailbox_kind: inbuxa_migrate::exchange_graph::types::MailboxKind::Primary,
         surfaces: surfaces("mail"),
-        event_body_format: vandelay::exchange_graph::types::EventBodyFormat::Text,
+        event_body_format: inbuxa_migrate::exchange_graph::types::EventBodyFormat::Text,
         graph_connections: 2,
         top: 100,
         exception_window_years: 5,
@@ -1762,8 +1766,8 @@ fn full_run_records_graph_id_in_sync_id_exchange_graph_with_padding() {
         allow_source_change: false,
     };
     drop(tmp);
-    let _ = vandelay::sync::import_exchange_graph::run(common, config).unwrap();
-    let conn = vandelay::db::init::open(&archive).unwrap();
+    let _ = inbuxa_migrate::sync::import_exchange_graph::run(common, config).unwrap();
+    let conn = inbuxa_migrate::db::init::open(&archive).unwrap();
     let (graph_id, type_name): (String, String) = conn
         .query_row(
             "SELECT graph_id, type_name FROM sync_id_exchange_graph",
@@ -1810,23 +1814,23 @@ fn archive_mailbox_kind_encodes_synthetic_suffix_in_account_id() {
 
     let tmp = tempfile::NamedTempFile::new().unwrap();
     let archive = tmp.path().to_owned();
-    let common = vandelay::sync::CommonConfig {
+    let common = inbuxa_migrate::sync::CommonConfig {
         archive: archive.clone(),
         threads: 2,
         dry_run: false,
         max_retries: 0,
         allow_invalid_certs: false,
-        logger: vandelay::logging::Logger::new(0),
+        logger: inbuxa_migrate::logging::Logger::new(0),
     };
-    let config = vandelay::sync::import_exchange_graph::GraphImportConfig {
-        auth: vandelay::sync::import_exchange_graph::GraphAuth::PreAcquired {
+    let config = inbuxa_migrate::sync::import_exchange_graph::GraphImportConfig {
+        auth: inbuxa_migrate::sync::import_exchange_graph::GraphAuth::PreAcquired {
             token: make_jwt(9999999999, "a@x.com"),
         },
         api_base: server.url(),
         user_target: None,
-        mailbox_kind: vandelay::exchange_graph::types::MailboxKind::Archive,
+        mailbox_kind: inbuxa_migrate::exchange_graph::types::MailboxKind::Archive,
         surfaces: surfaces("mail"),
-        event_body_format: vandelay::exchange_graph::types::EventBodyFormat::Text,
+        event_body_format: inbuxa_migrate::exchange_graph::types::EventBodyFormat::Text,
         graph_connections: 2,
         top: 100,
         exception_window_years: 5,
@@ -1835,8 +1839,8 @@ fn archive_mailbox_kind_encodes_synthetic_suffix_in_account_id() {
         allow_source_change: false,
     };
     drop(tmp);
-    let _ = vandelay::sync::import_exchange_graph::run(common, config).unwrap();
-    let conn = vandelay::db::init::open(&archive).unwrap();
+    let _ = inbuxa_migrate::sync::import_exchange_graph::run(common, config).unwrap();
+    let conn = inbuxa_migrate::db::init::open(&archive).unwrap();
     let account_id: String = conn
         .query_row(
             "SELECT account_id FROM sources WHERE kind = 'exchange_graph'",
@@ -1850,10 +1854,10 @@ fn archive_mailbox_kind_encodes_synthetic_suffix_in_account_id() {
 #[test]
 fn allow_source_change_permits_overwriting_a_different_account() {
     let archive = tempfile::NamedTempFile::new().unwrap().path().to_owned();
-    let conn = vandelay::db::init::open(&archive).unwrap();
-    vandelay::db::sources::upsert_source(
+    let conn = inbuxa_migrate::db::init::open(&archive).unwrap();
+    inbuxa_migrate::db::sources::upsert_source(
         &conn,
-        &vandelay::db::sources::SourceKey {
+        &inbuxa_migrate::db::sources::SourceKey {
             kind: "exchange_graph".to_owned(),
             session_url: "https://login.microsoftonline.com/common|https://x.example".to_owned(),
             account_id: "different-uid".to_owned(),
@@ -1878,23 +1882,23 @@ fn allow_source_change_permits_overwriting_a_different_account() {
         .with_body(r#"{"value":[]}"#)
         .create();
 
-    let common = vandelay::sync::CommonConfig {
+    let common = inbuxa_migrate::sync::CommonConfig {
         archive: archive.clone(),
         threads: 2,
         dry_run: false,
         max_retries: 0,
         allow_invalid_certs: false,
-        logger: vandelay::logging::Logger::new(0),
+        logger: inbuxa_migrate::logging::Logger::new(0),
     };
-    let config = vandelay::sync::import_exchange_graph::GraphImportConfig {
-        auth: vandelay::sync::import_exchange_graph::GraphAuth::PreAcquired {
+    let config = inbuxa_migrate::sync::import_exchange_graph::GraphImportConfig {
+        auth: inbuxa_migrate::sync::import_exchange_graph::GraphAuth::PreAcquired {
             token: make_jwt(9999999999, "new@x.com"),
         },
         api_base: server.url(),
         user_target: None,
-        mailbox_kind: vandelay::exchange_graph::types::MailboxKind::Primary,
+        mailbox_kind: inbuxa_migrate::exchange_graph::types::MailboxKind::Primary,
         surfaces: surfaces("mail"),
-        event_body_format: vandelay::exchange_graph::types::EventBodyFormat::Text,
+        event_body_format: inbuxa_migrate::exchange_graph::types::EventBodyFormat::Text,
         graph_connections: 2,
         top: 100,
         exception_window_years: 5,
@@ -1902,7 +1906,7 @@ fn allow_source_change_permits_overwriting_a_different_account() {
         event_attachments: true,
         allow_source_change: true,
     };
-    let result = vandelay::sync::import_exchange_graph::run(common, config);
+    let result = inbuxa_migrate::sync::import_exchange_graph::run(common, config);
     assert!(
         result.is_ok(),
         "--allow-source-change must permit a different account, got {result:?}"
@@ -1962,23 +1966,23 @@ fn dry_run_makes_no_per_item_get_and_no_sqlite_writes() {
 
     let tmp = tempfile::NamedTempFile::new().unwrap();
     let archive = tmp.path().to_owned();
-    let common = vandelay::sync::CommonConfig {
+    let common = inbuxa_migrate::sync::CommonConfig {
         archive: archive.clone(),
         threads: 2,
         dry_run: true,
         max_retries: 0,
         allow_invalid_certs: false,
-        logger: vandelay::logging::Logger::new(0),
+        logger: inbuxa_migrate::logging::Logger::new(0),
     };
-    let config = vandelay::sync::import_exchange_graph::GraphImportConfig {
-        auth: vandelay::sync::import_exchange_graph::GraphAuth::PreAcquired {
+    let config = inbuxa_migrate::sync::import_exchange_graph::GraphImportConfig {
+        auth: inbuxa_migrate::sync::import_exchange_graph::GraphAuth::PreAcquired {
             token: make_jwt(9999999999, "a@x.com"),
         },
         api_base: server.url(),
         user_target: None,
-        mailbox_kind: vandelay::exchange_graph::types::MailboxKind::Primary,
+        mailbox_kind: inbuxa_migrate::exchange_graph::types::MailboxKind::Primary,
         surfaces: Surfaces::ALL,
-        event_body_format: vandelay::exchange_graph::types::EventBodyFormat::Text,
+        event_body_format: inbuxa_migrate::exchange_graph::types::EventBodyFormat::Text,
         graph_connections: 2,
         top: 100,
         exception_window_years: 5,
@@ -1987,10 +1991,10 @@ fn dry_run_makes_no_per_item_get_and_no_sqlite_writes() {
         allow_source_change: false,
     };
     drop(tmp);
-    let _ = vandelay::sync::import_exchange_graph::run(common, config).unwrap();
+    let _ = inbuxa_migrate::sync::import_exchange_graph::run(common, config).unwrap();
     no_messages.assert();
     no_well_known.assert();
-    let conn = vandelay::db::init::open(&archive).unwrap();
+    let conn = inbuxa_migrate::db::init::open(&archive).unwrap();
     let sources: i64 = conn
         .query_row("SELECT count(*) FROM sources", [], |row| row.get(0))
         .unwrap();
@@ -2025,10 +2029,10 @@ fn token_response_bad_code_recognised() {
 #[test]
 fn folder_enumeration_failure_skips_vanished_deletion() {
     let archive = tempfile::NamedTempFile::new().unwrap().path().to_owned();
-    let setup_conn = vandelay::db::init::open(&archive).unwrap();
-    let sid = vandelay::db::sources::upsert_source(
+    let setup_conn = inbuxa_migrate::db::init::open(&archive).unwrap();
+    let sid = inbuxa_migrate::db::sources::upsert_source(
         &setup_conn,
-        &vandelay::db::sources::SourceKey {
+        &inbuxa_migrate::db::sources::SourceKey {
             kind: "exchange_graph".to_owned(),
             session_url: "stale".to_owned(),
             account_id: "stale-uid".to_owned(),
@@ -2043,10 +2047,10 @@ fn folder_enumeration_failure_skips_vanished_deletion() {
             [],
         )
         .unwrap();
-    vandelay::db::exchange_graph_ids::insert(
+    inbuxa_migrate::db::exchange_graph_ids::insert(
         &setup_conn,
         sid,
-        vandelay::db::exchange_graph_ids::MAILBOX,
+        inbuxa_migrate::db::exchange_graph_ids::MAILBOX,
         "FMAIL",
         42,
     )
@@ -2067,10 +2071,10 @@ fn folder_enumeration_failure_skips_vanished_deletion() {
             rusqlite::params![blob_id],
         )
         .unwrap();
-    vandelay::db::exchange_graph_ids::insert(
+    inbuxa_migrate::db::exchange_graph_ids::insert(
         &setup_conn,
         sid,
-        vandelay::db::exchange_graph_ids::EMAIL,
+        inbuxa_migrate::db::exchange_graph_ids::EMAIL,
         "MSG-LOCAL",
         1,
     )
@@ -2133,23 +2137,23 @@ fn folder_enumeration_failure_skips_vanished_deletion() {
         .with_body("transient outage")
         .create();
 
-    let common = vandelay::sync::CommonConfig {
+    let common = inbuxa_migrate::sync::CommonConfig {
         archive: archive.clone(),
         threads: 2,
         dry_run: false,
         max_retries: 0,
         allow_invalid_certs: false,
-        logger: vandelay::logging::Logger::new(0),
+        logger: inbuxa_migrate::logging::Logger::new(0),
     };
-    let config = vandelay::sync::import_exchange_graph::GraphImportConfig {
-        auth: vandelay::sync::import_exchange_graph::GraphAuth::PreAcquired {
+    let config = inbuxa_migrate::sync::import_exchange_graph::GraphImportConfig {
+        auth: inbuxa_migrate::sync::import_exchange_graph::GraphAuth::PreAcquired {
             token: make_jwt(9999999999, "flake@x.com"),
         },
         api_base: server.url(),
         user_target: None,
-        mailbox_kind: vandelay::exchange_graph::types::MailboxKind::Primary,
+        mailbox_kind: inbuxa_migrate::exchange_graph::types::MailboxKind::Primary,
         surfaces: surfaces("mail"),
-        event_body_format: vandelay::exchange_graph::types::EventBodyFormat::Text,
+        event_body_format: inbuxa_migrate::exchange_graph::types::EventBodyFormat::Text,
         graph_connections: 2,
         top: 100,
         exception_window_years: 5,
@@ -2157,8 +2161,8 @@ fn folder_enumeration_failure_skips_vanished_deletion() {
         event_attachments: true,
         allow_source_change: true,
     };
-    let _ = vandelay::sync::import_exchange_graph::run(common, config).unwrap();
-    let conn = vandelay::db::init::open(&archive).unwrap();
+    let _ = inbuxa_migrate::sync::import_exchange_graph::run(common, config).unwrap();
+    let conn = inbuxa_migrate::db::init::open(&archive).unwrap();
     let remaining: i64 = conn
         .query_row("SELECT count(*) FROM emails WHERE id = 1", [], |row| {
             row.get(0)
@@ -2324,7 +2328,7 @@ fn contacts_surface_imports_only_address_books_and_cards() {
 
     let base = server.url();
     let archive = tempfile::NamedTempFile::new().unwrap().path().to_owned();
-    vandelay::sync::import_exchange_graph::run(
+    inbuxa_migrate::sync::import_exchange_graph::run(
         make_common(archive.clone()),
         make_config(base, None, surfaces("contacts")),
     )
@@ -2332,7 +2336,7 @@ fn contacts_surface_imports_only_address_books_and_cards() {
     no_mail.assert();
     no_calendars.assert();
 
-    let conn = vandelay::db::init::open(&archive).unwrap();
+    let conn = inbuxa_migrate::db::init::open(&archive).unwrap();
     assert_eq!(row_count(&conn, "address_books"), 1);
     assert_eq!(row_count(&conn, "contact_cards"), 1);
     assert_eq!(row_count(&conn, "mailboxes"), 0);
@@ -2368,7 +2372,7 @@ fn mail_surface_imports_only_mailboxes_and_emails() {
 
     let base = server.url();
     let archive = tempfile::NamedTempFile::new().unwrap().path().to_owned();
-    vandelay::sync::import_exchange_graph::run(
+    inbuxa_migrate::sync::import_exchange_graph::run(
         make_common(archive.clone()),
         make_config(base, None, surfaces("mail")),
     )
@@ -2376,7 +2380,7 @@ fn mail_surface_imports_only_mailboxes_and_emails() {
     no_calendars.assert();
     no_contact_folders.assert();
 
-    let conn = vandelay::db::init::open(&archive).unwrap();
+    let conn = inbuxa_migrate::db::init::open(&archive).unwrap();
     assert_eq!(row_count(&conn, "mailboxes"), 1);
     assert_eq!(row_count(&conn, "emails"), 1);
     assert_eq!(row_count(&conn, "address_books"), 0);
@@ -2442,7 +2446,7 @@ fn default_contact_folder_is_imported_although_contactfolders_omits_it() {
 
     let base = server.url();
     let archive = tempfile::NamedTempFile::new().unwrap().path().to_owned();
-    let summary = vandelay::sync::import_exchange_graph::run(
+    let summary = inbuxa_migrate::sync::import_exchange_graph::run(
         make_common(archive.clone()),
         make_config(base, None, surfaces("contacts")),
     )
@@ -2468,7 +2472,7 @@ fn default_contact_folder_is_imported_although_contactfolders_omits_it() {
         "both default-folder contacts import"
     );
 
-    let conn = vandelay::db::init::open(&archive).unwrap();
+    let conn = inbuxa_migrate::db::init::open(&archive).unwrap();
     let is_default: i64 = conn
         .query_row("SELECT is_default FROM address_books", [], |row| row.get(0))
         .unwrap();
@@ -2518,13 +2522,13 @@ fn default_contact_folder_falls_back_to_parent_of_an_existing_contact() {
 
     let base = server.url();
     let archive = tempfile::NamedTempFile::new().unwrap().path().to_owned();
-    vandelay::sync::import_exchange_graph::run(
+    inbuxa_migrate::sync::import_exchange_graph::run(
         make_common(archive.clone()),
         make_config(base, None, surfaces("contacts")),
     )
     .unwrap();
 
-    let conn = vandelay::db::init::open(&archive).unwrap();
+    let conn = inbuxa_migrate::db::init::open(&archive).unwrap();
     let name: String = conn
         .query_row("SELECT name FROM address_books", [], |row| row.get(0))
         .unwrap();
@@ -2568,7 +2572,7 @@ fn contact_folder_reachable_by_two_paths_is_inserted_once() {
 
     let base = server.url();
     let archive = tempfile::NamedTempFile::new().unwrap().path().to_owned();
-    let summary = vandelay::sync::import_exchange_graph::run(
+    let summary = inbuxa_migrate::sync::import_exchange_graph::run(
         make_common(archive.clone()),
         make_config(base, None, surfaces("contacts")),
     )
@@ -2638,13 +2642,13 @@ fn message_state_becomes_jmap_keywords() {
 
     let base = server.url();
     let archive = tempfile::NamedTempFile::new().unwrap().path().to_owned();
-    vandelay::sync::import_exchange_graph::run(
+    inbuxa_migrate::sync::import_exchange_graph::run(
         make_common(archive.clone()),
         make_config(base, None, surfaces("mail")),
     )
     .unwrap();
 
-    let conn = vandelay::db::init::open(&archive).unwrap();
+    let conn = inbuxa_migrate::db::init::open(&archive).unwrap();
     let mut stmt = conn
         .prepare("SELECT keywords FROM emails ORDER BY id")
         .unwrap();
@@ -2708,7 +2712,7 @@ fn drive_items_import_as_file_nodes_and_skip_facetless_items() {
 
     let base = server.url();
     let archive = tempfile::NamedTempFile::new().unwrap().path().to_owned();
-    let summary = vandelay::sync::import_exchange_graph::run(
+    let summary = inbuxa_migrate::sync::import_exchange_graph::run(
         make_common(archive.clone()),
         make_config(base, None, surfaces("files")),
     )
@@ -2725,7 +2729,7 @@ fn drive_items_import_as_file_nodes_and_skip_facetless_items() {
         "one directory and two files; the remoteItem has no file or folder facet and is skipped"
     );
 
-    let conn = vandelay::db::init::open(&archive).unwrap();
+    let conn = inbuxa_migrate::db::init::open(&archive).unwrap();
     let vault: i64 = conn
         .query_row(
             "SELECT count(*) FROM file_nodes WHERE name = 'Personal Vault'",
@@ -2844,13 +2848,13 @@ fn a_deleted_occurrence_becomes_an_excluded_override() {
 
     let base = server.url();
     let archive = tempfile::NamedTempFile::new().unwrap().path().to_owned();
-    vandelay::sync::import_exchange_graph::run(
+    inbuxa_migrate::sync::import_exchange_graph::run(
         make_common(archive.clone()),
         make_config(base, None, surfaces("calendar")),
     )
     .unwrap();
 
-    let conn = vandelay::db::init::open(&archive).unwrap();
+    let conn = inbuxa_migrate::db::init::open(&archive).unwrap();
     let row: String = conn
         .query_row("SELECT data FROM calendar_events", [], |row| row.get(0))
         .unwrap();
@@ -2910,13 +2914,13 @@ fn event_file_attachments_become_enclosure_links() {
 
     let base = server.url();
     let archive = tempfile::NamedTempFile::new().unwrap().path().to_owned();
-    vandelay::sync::import_exchange_graph::run(
+    inbuxa_migrate::sync::import_exchange_graph::run(
         make_common(archive.clone()),
         make_config(base, None, surfaces("calendar")),
     )
     .unwrap();
 
-    let conn = vandelay::db::init::open(&archive).unwrap();
+    let conn = inbuxa_migrate::db::init::open(&archive).unwrap();
     let row: String = conn
         .query_row("SELECT data FROM calendar_events", [], |row| row.get(0))
         .unwrap();
@@ -2985,9 +2989,9 @@ fn contact_photo_categories_and_im_addresses_are_imported() {
     let archive = tempfile::NamedTempFile::new().unwrap().path().to_owned();
     let mut config = make_config(base, None, surfaces("contacts"));
     config.contact_photos = true;
-    vandelay::sync::import_exchange_graph::run(make_common(archive.clone()), config).unwrap();
+    inbuxa_migrate::sync::import_exchange_graph::run(make_common(archive.clone()), config).unwrap();
 
-    let conn = vandelay::db::init::open(&archive).unwrap();
+    let conn = inbuxa_migrate::db::init::open(&archive).unwrap();
     let row: String = conn
         .query_row("SELECT data FROM contact_cards", [], |row| row.get(0))
         .unwrap();

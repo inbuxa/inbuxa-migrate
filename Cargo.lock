@@ -1324,6 +1324,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "inbuxa-migrate"
+version = "2026.9.30"
+dependencies = [
+ "blake3",
+ "calcard",
+ "chrono",
+ "chrono-tz",
+ "clap",
+ "crossbeam-channel",
+ "encodify",
+ "flate2",
+ "indexmap 2.14.2",
+ "mail-parser",
+ "mockito",
+ "num_cpus",
+ "psl",
+ "quick-xml",
+ "regex",
+ "rusqlite",
+ "rustls",
+ "rustls-platform-verifier",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "testcontainers",
+ "thiserror",
+ "time",
+ "ureq",
+ "url",
+]
+
+[[package]]
 name = "indexmap"
 version = "1.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2934,38 +2966,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2ef6dac1e96601b4fb3acccccff2139741fcb757cb9a36089bf5be91cfb285ce"
 dependencies = [
  "sha1_smol",
-]
-
-[[package]]
-name = "vandelay"
-version = "1.0.11"
-dependencies = [
- "blake3",
- "calcard",
- "chrono",
- "chrono-tz",
- "clap",
- "crossbeam-channel",
- "encodify",
- "flate2",
- "indexmap 2.14.2",
- "mail-parser",
- "mockito",
- "num_cpus",
- "psl",
- "quick-xml",
- "regex",
- "rusqlite",
- "rustls",
- "rustls-platform-verifier",
- "serde",
- "serde_json",
- "tempfile",
- "testcontainers",
- "thiserror",
- "time",
- "ureq",
- "url",
 ]
 
 [[package]]

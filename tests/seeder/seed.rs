@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -230,8 +231,8 @@ fn seed_sieve(jmap: &Jmap, account_id: &str, active: bool) -> SeedResult<()> {
         "SieveScript/set",
         account_id,
         json!({
-            "s0": { "name": "vandelay-test-filter", "blobId": primary_blob },
-            "s1": { "name": "vandelay-vacation", "blobId": secondary_blob }
+            "s0": { "name": "inbuxa-migrate-test-filter", "blobId": primary_blob },
+            "s1": { "name": "inbuxa-migrate-vacation", "blobId": secondary_blob }
         }),
         &extra,
     )?;
@@ -247,8 +248,8 @@ fn seed_identity(jmap: &Jmap, account_id: &str, account_email: &str) -> SeedResu
             "i0": {
                 "name": super::CUSTOM_IDENTITY_NAME,
                 "email": account_email,
-                "textSignature": "-- \nVandelay Industries",
-                "htmlSignature": "<p>Vandelay Industries</p>"
+                "textSignature": "-- \nInbuxa Industries",
+                "htmlSignature": "<p>Inbuxa Industries</p>"
             }
         }),
         &[],
@@ -339,7 +340,7 @@ fn seed_contacts_calendars(
             &[CORE, CONTACTS],
             "AddressBook/set",
             account_id,
-            json!({ "ab": { "name": "Vandelay Work Contacts" } }),
+            json!({ "ab": { "name": "Inbuxa Work Contacts" } }),
             &[],
         )?;
         if let Some(id) = response
@@ -359,7 +360,7 @@ fn seed_contacts_calendars(
             &[CORE, CALENDARS],
             "Calendar/set",
             account_id,
-            json!({ "cal": { "name": "Vandelay Team Calendar", "color": "#3366cc" } }),
+            json!({ "cal": { "name": "Inbuxa Team Calendar", "color": "#3366cc" } }),
             &[],
         )?;
         if let Some(id) = response

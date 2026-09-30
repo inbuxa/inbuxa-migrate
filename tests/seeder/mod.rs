@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -17,14 +18,14 @@ use seed::{FileSpec, Layout, MailboxSpec};
 
 pub const ADMIN_USER: &str = "admin";
 pub const ADMIN_PASSWORD: &str = "admin";
-pub const DOMAIN: &str = "vandelay.org";
-pub const USER_PASSWORD: &str = "VandelayUser#2026";
-pub const ADMIN_ACCOUNT_PASSWORD: &str = "VandelayAdmin#2026";
+pub const DOMAIN: &str = "inbuxa-migrate.org";
+pub const USER_PASSWORD: &str = "InbuxaUser#2026";
+pub const ADMIN_ACCOUNT_PASSWORD: &str = "InbuxaAdmin#2026";
 
 pub const SYNC_IN: [&str; 3] = ["test1", "test2", "test3"];
 pub const SYNC_OUT: [&str; 3] = ["test4", "test5", "test6"];
 pub const ADMIN_LOCALPART: &str = "vandeladmin";
-pub const CUSTOM_IDENTITY_NAME: &str = "Vandelay Test (Custom)";
+pub const CUSTOM_IDENTITY_NAME: &str = "Inbuxa Test (Custom)";
 
 macro_rules! mailbox {
     ($k:expr, $n:expr, $p:expr, $r:expr) => {

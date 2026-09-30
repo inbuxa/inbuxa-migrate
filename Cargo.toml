@@ -1,22 +1,16 @@
 [package]
-name = "vandelay"
-description = "JMAP account migration utility"
-version = "1.0.11"
-authors = ["Stalwart Labs LLC <hello@stalw.art>"]
+name = "inbuxa-migrate"
+description = "Account migration and backup for inbuxa"
+version = "2026.9.30"
+authors = ["John Coffey <johnellis@linux.com>"]
 license = "Apache-2.0 OR MIT"
-repository = "https://github.com/stalwartlabs/vandelay"
-homepage = "https://github.com/stalwartlabs/vandelay"
+repository = "https://git.coffeylabs.org/inbuxa/inbuxa-migrate"
+homepage = "https://git.coffeylabs.org/inbuxa/inbuxa-migrate"
 edition = "2024"
 readme = "README.md"
 
-[package.metadata.wix]
-upgrade-guid = "5C8148E7-34A9-4216-A802-FFB8345AECC4"
-path-guid = "FA9E97EB-5E5C-4809-9018-9DC1EDB0E93D"
-license = false
-eula = false
-
 [[bin]]
-name = "vandelay"
+name = "inbuxa-migrate"
 path = "src/main.rs"
 
 [features]
@@ -52,7 +46,3 @@ psl = "2.1.226"
 mockito = "1.7.2"
 tempfile = "3.13"
 testcontainers = { version = "0.28", features = ["blocking"] }
-
-[profile.dist]
-inherits = "release"
-lto = "thin"

@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -10,7 +11,7 @@ use crate::exchange_ews::parse::{ContactItemRaw, RawContactAddress};
 
 pub fn synthetic_uid(item_id: &str) -> String {
     let hash = blake3::hash(item_id.as_bytes()).to_hex();
-    format!("vandelay-ews-syn-{hash}")
+    format!("inbuxa-migrate-ews-syn-{hash}")
 }
 
 pub fn to_jscontact(raw: &ContactItemRaw) -> Value {
@@ -389,7 +390,7 @@ mod tests {
         let u2 = synthetic_uid("ITEM-1");
         assert_eq!(u1, u2);
         assert_ne!(u1, synthetic_uid("ITEM-2"));
-        assert!(u1.starts_with("vandelay-ews-syn-"));
+        assert!(u1.starts_with("inbuxa-migrate-ews-syn-"));
     }
 
     #[test]

@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -139,7 +140,7 @@ impl std::fmt::Display for OriginMismatch {
         }
         write!(
             f,
-            " on {} (connected to {}); vandelay must use the advertised URL. \
+            " on {} (connected to {}); inbuxa-migrate must use the advertised URL. \
              If this is wrong, fix the server's advertised HTTP URL setting.",
             self.session_origin, self.connect_origin
         )

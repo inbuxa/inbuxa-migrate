@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -81,7 +82,7 @@ impl EwsClient {
                 retries_total: AtomicU64::new(0),
                 retry_after_sleeps: AtomicU64::new(0),
                 soap_calls: AtomicU64::new(0),
-                user_agent: format!("vandelay/{}", env!("CARGO_PKG_VERSION")),
+                user_agent: format!("inbuxa-migrate/{}", env!("CARGO_PKG_VERSION")),
             }),
         }
     }

@@ -1,17 +1,18 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
 
 use std::io::Cursor;
 
-use vandelay::dav::client::DavClient;
-use vandelay::dav::discover::{DavKind, discover};
-use vandelay::dav::parse::{parse_multistatus, strip_ascii_control_chars};
-use vandelay::dav::xml;
-use vandelay::jmap::error::JmapError;
-use vandelay::jmap::http::{Auth, RetryPolicy};
+use inbuxa_migrate::dav::client::DavClient;
+use inbuxa_migrate::dav::discover::{DavKind, discover};
+use inbuxa_migrate::dav::parse::{parse_multistatus, strip_ascii_control_chars};
+use inbuxa_migrate::dav::xml;
+use inbuxa_migrate::jmap::error::JmapError;
+use inbuxa_migrate::jmap::http::{Auth, RetryPolicy};
 
 fn client(retries: u32) -> DavClient {
     DavClient::new(
@@ -75,7 +76,7 @@ fn discovery_resolves_per_user_principal_even_when_url_lists_collections() {
         r#"<?xml version="1.0"?>
 <d:multistatus xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
   <d:response>
-    <d:href>{url}/dav/cal/secondary@vandelay.org/default/</d:href>
+    <d:href>{url}/dav/cal/secondary@inbuxa-migrate.org/default/</d:href>
     <d:propstat>
       <d:prop>
         <d:resourcetype><d:collection/><c:calendar/></d:resourcetype>
@@ -101,7 +102,7 @@ fn discovery_resolves_per_user_principal_even_when_url_lists_collections() {
     <d:href>{url}/dav/cal/</d:href>
     <d:propstat>
       <d:prop>
-        <d:current-user-principal><d:href>{url}/dav/principals/secondary@vandelay.org/</d:href></d:current-user-principal>
+        <d:current-user-principal><d:href>{url}/dav/principals/secondary@inbuxa-migrate.org/</d:href></d:current-user-principal>
       </d:prop>
       <d:status>HTTP/1.1 200 OK</d:status>
     </d:propstat>
@@ -121,7 +122,7 @@ fn discovery_resolves_per_user_principal_even_when_url_lists_collections() {
     assert_eq!(disc.collections.len(), 1);
     assert_eq!(
         disc.principal_url.as_deref(),
-        Some(format!("{url}/dav/principals/secondary@vandelay.org/").as_str()),
+        Some(format!("{url}/dav/principals/secondary@inbuxa-migrate.org/").as_str()),
         "account identity must be the per-user principal, not the shared base DAV root"
     );
 }
@@ -212,7 +213,7 @@ fn discovery_returns_not_found_when_no_collections() {
     let err = discover(&c, DavKind::Caldav, &server.url()).unwrap_err();
     assert!(matches!(
         err,
-        vandelay::dav::discover::DiscoveryError::NotFound { .. }
+        inbuxa_migrate::dav::discover::DiscoveryError::NotFound { .. }
     ));
 }
 
@@ -489,14 +490,14 @@ fn webdav_listing_returns_collection_and_file() {
 
 #[test]
 fn google_usage_limits_403_classified_retryable() {
-    use vandelay::dav::retry::{DavOutcome, classify};
+    use inbuxa_migrate::dav::retry::{DavOutcome, classify};
     let body = br#"{"error":{"errors":[{"domain":"usageLimits"}]}}"#;
     assert_eq!(classify(403, body), DavOutcome::Retryable);
 }
 
 #[test]
 fn non_quota_403_is_auth() {
-    use vandelay::dav::retry::{DavOutcome, classify};
+    use inbuxa_migrate::dav::retry::{DavOutcome, classify};
     assert_eq!(classify(403, b"forbidden"), DavOutcome::Auth);
 }
 
@@ -801,7 +802,7 @@ fn webdav_cycle_breaks_on_lex_smallest() {
 
 #[test]
 fn multiget_405_method_not_allowed_triggers_get_fallback() {
-    use vandelay::dav::retry::{DavOutcome, classify};
+    use inbuxa_migrate::dav::retry::{DavOutcome, classify};
     assert_eq!(classify(405, b""), DavOutcome::Fatal);
 }
 
@@ -893,8 +894,8 @@ fn streaming_propfind_404_returns_empty_responses() {
 
 #[test]
 fn source_change_protection_rejects_different_account_id() {
+    use inbuxa_migrate::db::{init, sources};
     use rusqlite::Connection;
-    use vandelay::db::{init, sources};
 
     let conn = Connection::open_in_memory().unwrap();
     init::apply_schema(&conn).unwrap();
@@ -1049,15 +1050,15 @@ fn webdav_discovery_keeps_only_self_row_as_root() {
 
 #[test]
 fn webdav_root_collection_is_not_materialised_children_map_to_target_root() {
+    use inbuxa_migrate::dav::discover::DiscoveredCollection;
+    use inbuxa_migrate::dav::href::Href;
+    use inbuxa_migrate::dav::parse::ResourceProps;
+    use inbuxa_migrate::db;
+    use inbuxa_migrate::db::sources::SourceKey;
+    use inbuxa_migrate::logging::Logger;
+    use inbuxa_migrate::sync::TypeCounts;
+    use inbuxa_migrate::sync::import_dav::tree::{WebDavCtx, reconcile_filenodes};
     use rusqlite::Connection;
-    use vandelay::dav::discover::DiscoveredCollection;
-    use vandelay::dav::href::Href;
-    use vandelay::dav::parse::ResourceProps;
-    use vandelay::db;
-    use vandelay::db::sources::SourceKey;
-    use vandelay::logging::Logger;
-    use vandelay::sync::TypeCounts;
-    use vandelay::sync::import_dav::tree::{WebDavCtx, reconcile_filenodes};
 
     let mut server = mockito::Server::new();
     let url = server.url();
@@ -1336,10 +1337,10 @@ fn webdav_display_or_basename_test_via_parser_keeps_basename_semantics() {
 
 #[test]
 fn dry_run_writes_nothing_but_emits_per_collection_counts() {
+    use inbuxa_migrate::logging::Logger;
+    use inbuxa_migrate::sync::CommonConfig;
+    use inbuxa_migrate::sync::import_dav::{DavAuth, DavImportConfig, DavKindArg, run};
     use std::path::PathBuf;
-    use vandelay::logging::Logger;
-    use vandelay::sync::CommonConfig;
-    use vandelay::sync::import_dav::{DavAuth, DavImportConfig, DavKindArg, run};
 
     let mut server = mockito::Server::new();
     let url = server.url();
@@ -1381,7 +1382,7 @@ fn dry_run_writes_nothing_but_emits_per_collection_counts() {
     let _items = multistatus_response(&mut server, "PROPFIND", "/dav/cal/u/default/", &items_body);
 
     let archive: PathBuf = std::env::temp_dir().join(format!(
-        "vandelay-dryrun-{}-{}.sqlite",
+        "inbuxa-migrate-dryrun-{}-{}.sqlite",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1449,10 +1450,10 @@ fn dry_run_writes_nothing_but_emits_per_collection_counts() {
 #[test]
 fn dav_source_change_protection_fires_across_users_on_same_root() {
     use encodify::base64::STANDARD;
+    use inbuxa_migrate::logging::Logger;
+    use inbuxa_migrate::sync::CommonConfig;
+    use inbuxa_migrate::sync::import_dav::{DavAuth, DavImportConfig, DavKindArg, run};
     use std::path::PathBuf;
-    use vandelay::logging::Logger;
-    use vandelay::sync::CommonConfig;
-    use vandelay::sync::import_dav::{DavAuth, DavImportConfig, DavKindArg, run};
 
     let mut server = mockito::Server::new();
     let url = server.url();
@@ -1499,8 +1500,14 @@ fn dav_source_change_protection_fires_across_users_on_same_root() {
         .with_body(&empty_items)
         .create();
 
-    let auth_a = format!("Basic {}", STANDARD.encode("secondary@vandelay.org:passA"));
-    let auth_b = format!("Basic {}", STANDARD.encode("tertiary@vandelay.org:passB"));
+    let auth_a = format!(
+        "Basic {}",
+        STANDARD.encode("secondary@inbuxa-migrate.org:passA")
+    );
+    let auth_b = format!(
+        "Basic {}",
+        STANDARD.encode("tertiary@inbuxa-migrate.org:passB")
+    );
     let principal = |who: &str| {
         format!(
             r#"<?xml version="1.0"?>
@@ -1521,7 +1528,7 @@ fn dav_source_change_protection_fires_across_users_on_same_root() {
         .match_header("authorization", auth_a.as_str())
         .with_status(207)
         .with_header("content-type", "application/xml; charset=utf-8")
-        .with_body(principal("secondary@vandelay.org"))
+        .with_body(principal("secondary@inbuxa-migrate.org"))
         .create();
     let _pb = server
         .mock("PROPFIND", "/dav/cal/")
@@ -1529,11 +1536,11 @@ fn dav_source_change_protection_fires_across_users_on_same_root() {
         .match_header("authorization", auth_b.as_str())
         .with_status(207)
         .with_header("content-type", "application/xml; charset=utf-8")
-        .with_body(principal("tertiary@vandelay.org"))
+        .with_body(principal("tertiary@inbuxa-migrate.org"))
         .create();
 
     let archive: PathBuf = std::env::temp_dir().join(format!(
-        "vandelay-dav-srcchange-{}-{}.sqlite",
+        "inbuxa-migrate-dav-srcchange-{}-{}.sqlite",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1563,19 +1570,27 @@ fn dav_source_change_protection_fires_across_users_on_same_root() {
         allow_source_change: false,
     };
 
-    run(common(&archive), config("secondary@vandelay.org", "passA")).expect("user A import ok");
-    let err = run(common(&archive), config("tertiary@vandelay.org", "passB")).unwrap_err();
+    run(
+        common(&archive),
+        config("secondary@inbuxa-migrate.org", "passA"),
+    )
+    .expect("user A import ok");
+    let err = run(
+        common(&archive),
+        config("tertiary@inbuxa-migrate.org", "passB"),
+    )
+    .unwrap_err();
     let _ = std::fs::remove_file(&archive);
     assert!(
-        matches!(err, vandelay::error::Error::SourceChange(_)),
+        matches!(err, inbuxa_migrate::error::Error::SourceChange(_)),
         "importing a different user into the same archive must trigger source-change protection; got {err:?}"
     );
 }
 
 #[test]
 fn source_change_protection_rejects_different_session_url_same_account() {
+    use inbuxa_migrate::db::{init, sources};
     use rusqlite::Connection;
-    use vandelay::db::{init, sources};
 
     let conn = Connection::open_in_memory().unwrap();
     init::apply_schema(&conn).unwrap();
@@ -1627,8 +1642,8 @@ fn etag_missing_in_enumeration_propagates_to_storage_layer() {
 
 #[test]
 fn mixed_source_archive_allows_distinct_kinds_against_same_url() {
+    use inbuxa_migrate::db::{init, sources};
     use rusqlite::Connection;
-    use vandelay::db::{init, sources};
 
     let conn = Connection::open_in_memory().unwrap();
     init::apply_schema(&conn).unwrap();
@@ -1663,7 +1678,7 @@ fn dav_archive() -> std::path::PathBuf {
     let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut p = std::env::temp_dir();
     p.push(format!(
-        "vandelay-mockdav-{}-{:?}-{n}.sqlite",
+        "inbuxa-migrate-mockdav-{}-{:?}-{n}.sqlite",
         std::process::id(),
         std::thread::current().id(),
     ));
@@ -1671,11 +1686,11 @@ fn dav_archive() -> std::path::PathBuf {
     p
 }
 
-fn caldav_import_config(url: &str) -> vandelay::sync::import_dav::DavImportConfig {
-    vandelay::sync::import_dav::DavImportConfig {
-        kind: vandelay::sync::import_dav::DavKindArg::Caldav,
+fn caldav_import_config(url: &str) -> inbuxa_migrate::sync::import_dav::DavImportConfig {
+    inbuxa_migrate::sync::import_dav::DavImportConfig {
+        kind: inbuxa_migrate::sync::import_dav::DavKindArg::Caldav,
         url: url.to_owned(),
-        auth: vandelay::sync::import_dav::DavAuth::Basic {
+        auth: inbuxa_migrate::sync::import_dav::DavAuth::Basic {
             user: "u".to_owned(),
             password: "p".to_owned(),
         },
@@ -1686,14 +1701,14 @@ fn caldav_import_config(url: &str) -> vandelay::sync::import_dav::DavImportConfi
     }
 }
 
-fn dav_common(archive: &std::path::Path) -> vandelay::sync::CommonConfig {
-    vandelay::sync::CommonConfig {
+fn dav_common(archive: &std::path::Path) -> inbuxa_migrate::sync::CommonConfig {
+    inbuxa_migrate::sync::CommonConfig {
         archive: archive.to_path_buf(),
         threads: 1,
         dry_run: false,
         max_retries: 0,
         allow_invalid_certs: false,
-        logger: vandelay::logging::Logger::from_flags(true, 0),
+        logger: inbuxa_migrate::logging::Logger::from_flags(true, 0),
     }
 }
 
@@ -1788,7 +1803,7 @@ END:VCALENDAR
         .create();
 
     let archive = dav_archive();
-    let summary = vandelay::sync::import_dav::run(
+    let summary = inbuxa_migrate::sync::import_dav::run(
         dav_common(&archive),
         caldav_import_config(&format!("{url}/dav/cal/u/")),
     )
@@ -1828,14 +1843,14 @@ fn credentials_rejected_during_discovery_still_aborts_the_run() {
         .create();
 
     let archive = dav_archive();
-    let err = vandelay::sync::import_dav::run(
+    let err = inbuxa_migrate::sync::import_dav::run(
         dav_common(&archive),
         caldav_import_config(&format!("{url}/dav/cal/u/")),
     )
     .expect_err("credentials rejected for the principal aborts the run");
 
     assert!(
-        matches!(err, vandelay::error::Error::Connection(_)),
+        matches!(err, inbuxa_migrate::error::Error::Connection(_)),
         "discovery-level auth rejection is a whole-run failure, got {err:?}"
     );
     assert_eq!(err.exit_code(), 2);
@@ -1871,7 +1886,7 @@ fn dav_import_reports_both_phases_when_every_collection_fails() {
         .create();
 
     let archive = dav_archive();
-    let outcome = vandelay::sync::import_dav::run_reporting(
+    let outcome = inbuxa_migrate::sync::import_dav::run_reporting(
         dav_common(&archive),
         caldav_import_config(&format!("{url}/dav/cal/u/")),
     );

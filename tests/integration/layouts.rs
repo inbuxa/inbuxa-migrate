@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -63,7 +64,7 @@ pub const ACCOUNT1: &str = "user1";
 pub const ACCOUNT2: &str = "user2";
 pub const ACCOUNT3: &str = "user3";
 
-pub const PASSWORD: &str = "VandelayUser#2026";
+pub const PASSWORD: &str = "InbuxaUser#2026";
 
 pub static MAILBOXES_DEEP: &[MailboxSpec] = &[
     mailbox!("proj", "Projects", None),

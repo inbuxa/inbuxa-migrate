@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -13,14 +14,14 @@ use std::thread;
 use std::time::Duration;
 
 use encodify::base64::STANDARD;
+use inbuxa_migrate::db;
+use inbuxa_migrate::imap::client::{ConnectMode, ImapClient};
+use inbuxa_migrate::imap::error::ImapError;
+use inbuxa_migrate::imap::transport::Connector;
+use inbuxa_migrate::logging::Logger;
+use inbuxa_migrate::sync::CommonConfig;
+use inbuxa_migrate::sync::import_imap::{ImapAuth, ImapImportConfig, run};
 use rusqlite::Connection;
-use vandelay::db;
-use vandelay::imap::client::{ConnectMode, ImapClient};
-use vandelay::imap::error::ImapError;
-use vandelay::imap::transport::Connector;
-use vandelay::logging::Logger;
-use vandelay::sync::CommonConfig;
-use vandelay::sync::import_imap::{ImapAuth, ImapImportConfig, run};
 
 type Script = Box<dyn FnOnce(&mut MockConn) -> std::io::Result<()> + Send + 'static>;
 
@@ -129,7 +130,7 @@ fn connect_mock(server: &MockImap) -> Result<ImapClient, ImapError> {
 fn tempfile(label: &str) -> PathBuf {
     let counter = COUNTER.fetch_add(1, Ordering::SeqCst);
     let mut p = std::env::temp_dir();
-    p.push(format!("vandelay_mock_imap_{label}_{counter}.sqlite"));
+    p.push(format!("inbuxa_migrate_mock_imap_{label}_{counter}.sqlite"));
     if p.exists() {
         let _ = std::fs::remove_file(&p);
     }
@@ -143,7 +144,7 @@ fn run_import(
     user: &str,
     archive: PathBuf,
     config_tweak: impl FnOnce(&mut ImapImportConfig),
-) -> Result<vandelay::sync::Summary, vandelay::error::Error> {
+) -> Result<inbuxa_migrate::sync::Summary, inbuxa_migrate::error::Error> {
     let common = CommonConfig {
         archive: archive.clone(),
         threads: 1,
@@ -364,14 +365,14 @@ fn run_collect_parses_fetch_with_literal_body() {
         .run_collect("UID FETCH 5 (UID BODY.PEEK[])")
         .expect("fetch");
     let body = r.untagged.iter().find_map(|u| match u {
-        vandelay::imap::response::Untagged::Fetch { items, .. } => Some(items.clone()),
+        inbuxa_migrate::imap::response::Untagged::Fetch { items, .. } => Some(items.clone()),
         _ => None,
     });
     let items = body.expect("fetch items");
     let body_item = items.iter().find(|(n, _)| n == "BODY[]").unwrap();
     match &body_item.1 {
-        vandelay::imap::response::Value::Str(s) => assert_eq!(s, "Hello world"),
-        vandelay::imap::response::Value::Bytes(b) => assert_eq!(b, b"Hello world"),
+        inbuxa_migrate::imap::response::Value::Str(s) => assert_eq!(s, "Hello world"),
+        inbuxa_migrate::imap::response::Value::Bytes(b) => assert_eq!(b, b"Hello world"),
         other => panic!("unexpected body shape: {other:?}"),
     }
 }
@@ -1094,7 +1095,7 @@ fn coordinator_source_change_detected_on_different_url() {
     let server2 = MockImap::start_scripts(vec![control2]);
 
     let err = run_import(&server2, "alice", archive.clone(), |_| {}).unwrap_err();
-    assert!(matches!(err, vandelay::error::Error::SourceChange(_)));
+    assert!(matches!(err, inbuxa_migrate::error::Error::SourceChange(_)));
 }
 
 #[test]
@@ -1483,7 +1484,7 @@ fn coordinator_auth_plain_and_login_both_refused_aborts_run() {
     });
     let archive = tempfile("dual_refuse");
     let err = run_import(&server, "alice", archive, |_| {}).unwrap_err();
-    assert!(matches!(err, vandelay::error::Error::Connection(_)));
+    assert!(matches!(err, inbuxa_migrate::error::Error::Connection(_)));
     assert_eq!(err.exit_code(), 2);
 }
 
@@ -1812,7 +1813,7 @@ fn coordinator_authenticationfailed_yields_exit2_connection_error() {
     });
     let archive = tempfile("authfail");
     let err = run_import(&server, "alice", archive, |_| {}).unwrap_err();
-    assert!(matches!(err, vandelay::error::Error::Connection(_)));
+    assert!(matches!(err, inbuxa_migrate::error::Error::Connection(_)));
     assert_eq!(err.exit_code(), 2);
 }
 

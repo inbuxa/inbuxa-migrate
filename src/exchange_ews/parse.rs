@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -724,7 +725,7 @@ fn wrap_inner_with_namespaces(inner: &str) -> String {
         return String::new();
     }
     format!(
-        "<vandelay-inner xmlns=\"{NS_TYPES}\" xmlns:t=\"{NS_TYPES}\" xmlns:m=\"{NS_MESSAGES}\">{inner}</vandelay-inner>",
+        "<inbuxa-migrate-inner xmlns=\"{NS_TYPES}\" xmlns:t=\"{NS_TYPES}\" xmlns:m=\"{NS_MESSAGES}\">{inner}</inbuxa-migrate-inner>",
     )
 }
 

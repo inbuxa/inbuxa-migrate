@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -137,7 +138,7 @@ pub struct WebDav {
 
 impl WebDav {
     pub fn start() -> ContainerResult<Self> {
-        let image: GenericImage = GenericBuildableImage::new("vandelay-webdav", "test")
+        let image: GenericImage = GenericBuildableImage::new("inbuxa-migrate-webdav", "test")
             .with_dockerfile_string(DOCKERFILE.to_owned())
             .with_data(APACHE_CONF.as_bytes().to_vec(), "apache.conf")
             .with_data(htpasswd_for_test().into_bytes(), "htpasswd")

@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -16,14 +17,14 @@ use integration::validate::{
     mailbox_id_by_path, mailbox_path, open_archive, tmp_archive,
 };
 
+use inbuxa_migrate::error::Error;
+use inbuxa_migrate::imap::client::{ConnectMode, ImapClient};
+use inbuxa_migrate::imap::transport::Connector;
+use inbuxa_migrate::logging::Logger;
+use inbuxa_migrate::sync::import_imap::{ImapAuth, ImapImportConfig};
+use inbuxa_migrate::sync::import_managesieve::{ManageSieveAuth, ManageSieveImportConfig};
+use inbuxa_migrate::sync::{import_imap, import_managesieve};
 use rusqlite::Connection;
-use vandelay::error::Error;
-use vandelay::imap::client::{ConnectMode, ImapClient};
-use vandelay::imap::transport::Connector;
-use vandelay::logging::Logger;
-use vandelay::sync::import_imap::{ImapAuth, ImapImportConfig};
-use vandelay::sync::import_managesieve::{ManageSieveAuth, ManageSieveImportConfig};
-use vandelay::sync::{import_imap, import_managesieve};
 
 fn imap_config(account: &Account, imap: &integration::Endpoint) -> ImapImportConfig {
     ImapImportConfig {
@@ -526,10 +527,10 @@ fn dovecot_non_ascii_mailbox_names_round_trip() {
 
     let mutf7_name = "Envoy&AOk-s";
     let utf8_name = "Envoyés";
-    let message = b"From: accents@vandelay.test\r\n\
-         To: user1@vandelay.test\r\n\
+    let message = b"From: accents@inbuxa-migrate.test\r\n\
+         To: user1@inbuxa-migrate.test\r\n\
          Subject: Accents\r\n\
-         Message-ID: <accents-1@vandelay.test>\r\n\
+         Message-ID: <accents-1@inbuxa-migrate.test>\r\n\
          Date: Wed, 01 Jan 2025 12:00:00 +0000\r\n\
          \r\n\
          Accented folder probe.\r\n";

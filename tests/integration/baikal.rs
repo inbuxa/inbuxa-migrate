@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -34,7 +35,7 @@ const BAIKAL_YAML: &str = "system:
     timezone: 'UTC'
     card_enabled: true
     cal_enabled: true
-    invite_from: 'noreply@vandelay.test'
+    invite_from: 'noreply@inbuxa-migrate.test'
     dav_auth_type: 'Basic'
     admin_passwordhash: '004b53ae84286ba6003b34e8ef404826'
     failed_access_message: 'user %u authentication failure for Baikal'
@@ -64,7 +65,7 @@ impl Baikal {
     pub fn start() -> ContainerResult<Self> {
         let db_bytes = build_sqlite_db()?;
 
-        let image: GenericImage = GenericBuildableImage::new("vandelay-baikal", "test")
+        let image: GenericImage = GenericBuildableImage::new("inbuxa-migrate-baikal", "test")
             .with_dockerfile_string(DOCKERFILE.to_owned())
             .with_data(BAIKAL_YAML.as_bytes().to_vec(), "baikal.yaml")
             .with_data(db_bytes, "db.sqlite")
@@ -325,8 +326,8 @@ fn build_sqlite_db() -> ContainerResult<Vec<u8>> {
             )
             .map_err(|e| ContainerError::Seed(format!("baikal user {name}: {e}")))?;
             let uri = format!("principals/{name}");
-            let email = format!("{name}@vandelay.test");
-            let display = format!("Vandelay {name}");
+            let email = format!("{name}@inbuxa-migrate.test");
+            let display = format!("Inbuxa {name}");
             conn.execute(
                 "INSERT INTO principals (uri, email, displayname) VALUES (?1, ?2, ?3)",
                 params![uri, email, display],
