@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -108,6 +109,10 @@ pub fn reconcile(
                             ty.jmap_name(),
                             id
                         ));
+                    } else if net.dry_run {
+                        // The object only exists in the plan; claiming the
+                        // default would be a write.
+                        default_claimed = true;
                     } else {
                         let mut req = crate::jmap::request::Request::new();
                         req.call(
