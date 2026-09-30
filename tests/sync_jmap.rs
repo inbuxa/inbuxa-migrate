@@ -9,6 +9,7 @@ mod seeder;
 
 use std::path::{Path, PathBuf};
 
+use encodify::base64::STANDARD;
 use integration::stalwart::shared as shared_stalwart;
 use rusqlite::Connection;
 use serde_json::{Map, Value, json};
@@ -693,7 +694,6 @@ const ISSUE30_CARD_UID: &str = "vandelay-issue30-card";
 const ISSUE30_EVENT_UID: &str = "vandelay-issue30-event";
 
 fn data_uri_bytes(resource: &Value, uri_key: &str, expect_media_type: &str) -> Vec<u8> {
-    use base64::Engine;
     let uri = resource
         .get(uri_key)
         .and_then(Value::as_str)
@@ -706,9 +706,7 @@ fn data_uri_bytes(resource: &Value, uri_key: &str, expect_media_type: &str) -> V
     let payload = uri
         .strip_prefix(&prefix)
         .unwrap_or_else(|| panic!("{uri_key} is not a {prefix}... data URI: {resource}"));
-    base64::engine::general_purpose::STANDARD
-        .decode(payload)
-        .expect("base64 payload")
+    STANDARD.decode(payload).expect("base64 payload")
 }
 
 #[test]
@@ -1245,6 +1243,10 @@ fn apply_jmap_settings(
             .is_some(),
         "x:Jmap/set not applied: {resp}"
     );
+    assert!(
+        resp.pointer("/methodResponses/1/1/created/r").is_some(),
+        "ReloadSettings failed, so the x:Jmap/set values are not in effect: {resp}"
+    );
 }
 
 #[test]
@@ -1257,8 +1259,13 @@ fn live_blob_quota_429_triggers_retry_after_then_succeeds() {
     let fx = seeder::provision(base_url()).expect("provision");
     let acc = fx.account("test1").expect("test1");
 
+    let blob_size = 8 * 1024 * 1024;
     let mut updates = serde_json::Map::new();
     updates.insert("uploadTtl".to_owned(), serde_json::json!(5_000));
+    updates.insert(
+        "uploadQuota".to_owned(),
+        serde_json::json!(blob_size * 5 / 2),
+    );
     let _ttl_guard = JmapSettingsGuard::override_settings(updates);
 
     let client = HttpClient::new(basic("test1"), RetryPolicy::new(20), true);
@@ -1266,7 +1273,6 @@ fn live_blob_quota_429_triggers_retry_after_then_succeeds() {
     let limits = session.core_limits().expect("core limits");
     client.set_limits(&limits);
 
-    let blob_size = 8 * 1024 * 1024;
     let mut blob = vec![0u8; blob_size];
     let max_uploads = 8u32;
     let mut accepted = 0u32;

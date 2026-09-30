@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
 
+use encodify::base64::{LENIENT, STANDARD};
 use mockito::Matcher;
 use vandelay::exchange_ews::EwsClient;
 use vandelay::exchange_ews::autodiscover::{DiscoverySource, discover};
@@ -220,7 +221,7 @@ fn get_item_mixed_success_and_per_item_error() {
            </m:GetItemResponseMessage>\
          </m:ResponseMessages></m:GetItemResponse>"
     ));
-    let r = parse_response_messages(body.as_bytes(), b"GetItemResponseMessage").unwrap();
+    let r = parse_response_messages(body.as_bytes(), "GetItemResponseMessage").unwrap();
     assert_eq!(r.len(), 2);
     assert!(r[0].success);
     assert!(r[0].inner_xml.contains("SGVsbG8="));
@@ -300,8 +301,7 @@ fn http_401_surfaces_as_auth_error() {
 #[test]
 fn mime_content_round_trips_through_base64_decode() {
     let original = b"From: alice@x\r\nSubject: hi\r\n\r\nbody";
-    use base64::Engine;
-    let encoded = base64::engine::general_purpose::STANDARD.encode(original);
+    let encoded = STANDARD.encode(original);
     let body = envelope(&format!(
         "<m:GetItemResponse{NS}><m:ResponseMessages>\
          <m:GetItemResponseMessage ResponseClass=\"Success\">\
@@ -312,13 +312,10 @@ fn mime_content_round_trips_through_base64_decode() {
              </t:Message></m:Items></m:GetItemResponseMessage>\
          </m:ResponseMessages></m:GetItemResponse>"
     ));
-    let r = parse_response_messages(body.as_bytes(), b"GetItemResponseMessage").unwrap();
+    let r = parse_response_messages(body.as_bytes(), "GetItemResponseMessage").unwrap();
     let item = vandelay::exchange_ews::parse::parse_message_item(&r[0].inner_xml).unwrap();
     let s = item.mime_content.unwrap();
-    let cleaned: String = s.chars().filter(|c| !c.is_whitespace()).collect();
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(cleaned.as_bytes())
-        .unwrap();
+    let bytes = LENIENT.decode(&s).unwrap();
     assert_eq!(bytes, original);
 }
 
@@ -893,7 +890,7 @@ fn warning_response_class_is_treated_as_success_in_mock() {
          <m:Items><t:Message><t:ItemId Id=\"W1\" ChangeKey=\"K\"/></t:Message></m:Items>\
          </m:GetItemResponseMessage></m:ResponseMessages></m:GetItemResponse>"
     ));
-    let r = parse_response_messages(body.as_bytes(), b"GetItemResponseMessage").unwrap();
+    let r = parse_response_messages(body.as_bytes(), "GetItemResponseMessage").unwrap();
     assert!(r[0].success);
 }
 
@@ -933,7 +930,7 @@ fn get_folder_messages_preserve_position_when_one_errors() {
          </m:GetFolderResponseMessage>\
          </m:ResponseMessages></m:GetFolderResponse>"
     ));
-    let msgs = parse_response_messages(body.as_bytes(), b"GetFolderResponseMessage").unwrap();
+    let msgs = parse_response_messages(body.as_bytes(), "GetFolderResponseMessage").unwrap();
     assert_eq!(msgs.len(), 3, "all three messages must be present");
     assert!(msgs[0].success);
     assert!(!msgs[1].success);

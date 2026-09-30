@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::thread;
 use std::time::Duration;
 
+use encodify::base64::STANDARD;
 use rusqlite::Connection;
 use vandelay::db;
 use vandelay::imap::client::{ConnectMode, ImapClient};
@@ -230,7 +231,6 @@ fn authenticate_oauthbearer_sasl_ir() {
 
 #[test]
 fn authenticate_oauthbearer_continuation_payload_uses_gs2_header() {
-    use base64::Engine;
     let server = MockImap::start(|conn| {
         conn.write_line("* OK Hello")?;
         let (tag, _) = conn.read_command()?;
@@ -242,9 +242,7 @@ fn authenticate_oauthbearer_continuation_payload_uses_gs2_header() {
         let mut line = String::new();
         conn.reader.read_line(&mut line)?;
         let payload = line.trim_end_matches(['\r', '\n']).to_owned();
-        let decoded = base64::engine::general_purpose::STANDARD
-            .decode(&payload)
-            .expect("base64");
+        let decoded = STANDARD.decode(&payload).expect("base64");
         let text = std::str::from_utf8(&decoded).unwrap_or("");
         assert!(
             text.starts_with("n,a=alice@example.com,"),
@@ -489,26 +487,35 @@ fn write_fetch_message(
     conn.write_raw(b")\r\n")
 }
 
+fn serve_one_folder(
+    conn: &mut MockConn,
+    uidvalidity: u32,
+    uidnext: u32,
+    uids: &[u32],
+) -> std::io::Result<()> {
+    let (tag, cmd) = conn.read_command()?;
+    assert_eq!(cmd, "LIST \"\" \"*\"");
+    conn.write_line("* LIST () \"/\" \"INBOX\"")?;
+    conn.write_line(&format!("{tag} OK LIST done"))?;
+    let (tag, cmd) = conn.read_command()?;
+    assert_eq!(cmd, "LSUB \"\" \"*\"");
+    conn.write_line(&format!("{tag} OK LSUB done"))?;
+    let (tag, cmd) = conn.read_command()?;
+    assert_eq!(cmd, "SELECT \"INBOX\"");
+    write_select(conn, &tag, uidvalidity, uidnext, uids.len() as u32)?;
+    let (tag, cmd) = conn.read_command()?;
+    assert_eq!(cmd, "UID SEARCH ALL");
+    let uid_strs: Vec<String> = uids.iter().map(|u| u.to_string()).collect();
+    conn.write_line(&format!("* SEARCH {}", uid_strs.join(" ")))?;
+    conn.write_line(&format!("{tag} OK SEARCH done"))?;
+    drain_until_close(conn);
+    Ok(())
+}
+
 fn control_script_one_folder(uidvalidity: u32, uidnext: u32, uids: &'static [u32]) -> Script {
     Box::new(move |conn: &mut MockConn| -> std::io::Result<()> {
         auth_preamble(conn, "IMAP4rev2 LITERAL+ AUTH=PLAIN")?;
-        let (tag, cmd) = conn.read_command()?;
-        assert_eq!(cmd, "LIST \"\" \"*\"");
-        conn.write_line("* LIST () \"/\" \"INBOX\"")?;
-        conn.write_line(&format!("{tag} OK LIST done"))?;
-        let (tag, cmd) = conn.read_command()?;
-        assert_eq!(cmd, "LSUB \"\" \"*\"");
-        conn.write_line(&format!("{tag} OK LSUB done"))?;
-        let (tag, cmd) = conn.read_command()?;
-        assert_eq!(cmd, "SELECT \"INBOX\"");
-        write_select(conn, &tag, uidvalidity, uidnext, uids.len() as u32)?;
-        let (tag, cmd) = conn.read_command()?;
-        assert_eq!(cmd, "UID SEARCH ALL");
-        let uid_strs: Vec<String> = uids.iter().map(|u| u.to_string()).collect();
-        conn.write_line(&format!("* SEARCH {}", uid_strs.join(" ")))?;
-        conn.write_line(&format!("{tag} OK SEARCH done"))?;
-        drain_until_close(conn);
-        Ok(())
+        serve_one_folder(conn, uidvalidity, uidnext, uids)
     })
 }
 
@@ -583,6 +590,63 @@ fn coordinator_imports_one_folder_one_message() {
     assert_eq!(count(&conn, "emails"), 1);
     assert_eq!(count(&conn, "blobs"), 1);
     assert_eq!(folder_role(&conn, "INBOX"), Some("inbox".to_owned()));
+}
+
+const DOVECOT_PRE_LOGIN_CAPS: &str =
+    "IMAP4rev1 SASL-IR LOGIN-REFERRALS ID ENABLE IDLE LITERAL+ AUTH=PLAIN AUTH=LOGIN";
+const DOVECOT_POST_LOGIN_CAPS: &str = "IMAP4rev1 SASL-IR LOGIN-REFERRALS ID ENABLE IDLE SORT \
+    UIDPLUS LITERAL+ NOTIFY IMAPSIEVE=sieve://127.0.0.1:4190 \
+    QUOTA ACL RIGHTS=texk";
+
+#[test]
+fn coordinator_accepts_dovecot_post_login_capability_with_imapsieve_url() {
+    let control: Script = Box::new(|conn: &mut MockConn| -> std::io::Result<()> {
+        conn.write_line(&format!(
+            "* OK [CAPABILITY {DOVECOT_PRE_LOGIN_CAPS}] Dovecot (Debian) ready."
+        ))?;
+        let (tag, cmd) = conn.read_command()?;
+        assert_eq!(cmd, "CAPABILITY");
+        write_capability(conn, DOVECOT_PRE_LOGIN_CAPS)?;
+        conn.write_line(&format!(
+            "{tag} OK Pre-login capabilities listed, post-login capabilities have more."
+        ))?;
+        let (tag, cmd) = conn.read_command()?;
+        assert!(
+            cmd.starts_with("AUTHENTICATE PLAIN "),
+            "expected SASL-IR form, got {cmd}"
+        );
+        write_capability(conn, DOVECOT_POST_LOGIN_CAPS)?;
+        conn.write_line(&format!(
+            "{tag} OK [CAPABILITY {DOVECOT_POST_LOGIN_CAPS}] Logged in"
+        ))?;
+        let (tag, cmd) = conn.read_command()?;
+        assert_eq!(cmd, "CAPABILITY");
+        write_capability(conn, DOVECOT_POST_LOGIN_CAPS)?;
+        conn.write_line(&format!("{tag} OK Capability completed."))?;
+        serve_one_folder(conn, 12345, 2, &[1])
+    });
+    let server = MockImap::start_scripts(vec![
+        control,
+        worker_fetch_script(
+            "IMAP4rev1 SASL-IR LITERAL+ AUTH=PLAIN IMAPSIEVE=sieve://127.0.0.1:4190",
+            "INBOX",
+            12345,
+            2,
+            1,
+            vec![(1, 1, MSG_BODY)],
+        ),
+    ]);
+    let archive = tempfile("dovecot-imapsieve");
+    let summary = run_import(&server, "alice", archive.clone(), |_| {}).expect("import");
+    let email = summary
+        .per_type
+        .iter()
+        .find(|(k, _)| *k == "email")
+        .unwrap();
+    assert_eq!(email.1.created, 1, "summary={summary:?}");
+    let conn = Connection::open(&archive).unwrap();
+    db::init::apply_schema(&conn).unwrap();
+    assert_eq!(count(&conn, "emails"), 1);
 }
 
 #[test]
@@ -1871,22 +1935,33 @@ fn mutf7_server_gets_the_folder_name_back_as_mutf7() {
 }
 
 #[test]
-fn utf8_name_from_a_server_that_never_enabled_utf8_falls_back_on_select() {
-    let control: Script = Box::new(|conn: &mut MockConn| -> std::io::Result<()> {
+fn utf8_name_from_a_server_that_never_enabled_utf8_is_selected_as_listed() {
+    assert_name_selected_as_listed(FRENCH_SENT_UTF8, FRENCH_SENT_UTF8, "utf8_no_enable");
+}
+
+#[test]
+fn raw_ampersand_name_is_selected_as_listed_not_reencoded() {
+    assert_name_selected_as_listed("R&D", "R&D", "raw_ampersand");
+}
+
+#[test]
+fn modified_utf7_name_is_selected_as_listed() {
+    assert_name_selected_as_listed(FRENCH_SENT_MUTF7, FRENCH_SENT_UTF8, "mutf7_as_listed");
+}
+
+fn assert_name_selected_as_listed(listed: &'static str, stored: &str, archive_name: &str) {
+    let control: Script = Box::new(move |conn: &mut MockConn| -> std::io::Result<()> {
         auth_preamble(conn, "IMAP4rev2 LITERAL+ AUTH=PLAIN")?;
         let (tag, cmd) = conn.read_command()?;
         assert_eq!(cmd, "LIST \"\" \"*\"");
-        conn.write_line(&format!("* LIST () \"/\" \"{FRENCH_SENT_UTF8}\""))?;
+        conn.write_line(&format!("* LIST () \"/\" \"{listed}\""))?;
         conn.write_line(&format!("{tag} OK LIST done"))?;
         let (tag, _) = conn.read_command()?;
         conn.write_line(&format!("{tag} OK LSUB done"))?;
         let (tag, name) = read_select_mailbox(conn)?;
-        assert_eq!(name, FRENCH_SENT_MUTF7);
-        conn.write_line(&format!("{tag} NO [NONEXISTENT] Mailbox does not exist."))?;
-        let (tag, name) = read_select_mailbox(conn)?;
         assert_eq!(
-            name, FRENCH_SENT_UTF8,
-            "a refused modified UTF-7 name must be retried as UTF-8"
+            name, listed,
+            "the name must go back exactly as the server listed it"
         );
         write_select(conn, &tag, 902, 2, 1)?;
         let (tag, cmd) = conn.read_command()?;
@@ -1896,13 +1971,13 @@ fn utf8_name_from_a_server_that_never_enabled_utf8_falls_back_on_select() {
         drain_until_close(conn);
         Ok(())
     });
-    let worker: Script = Box::new(|conn: &mut MockConn| -> std::io::Result<()> {
+    let worker: Script = Box::new(move |conn: &mut MockConn| -> std::io::Result<()> {
         auth_preamble(conn, "IMAP4rev2 LITERAL+ AUTH=PLAIN")?;
         let (tag, name) = read_select_mailbox(conn)?;
-        assert_eq!(name, FRENCH_SENT_MUTF7);
-        conn.write_line(&format!("{tag} NO [NONEXISTENT] Mailbox does not exist."))?;
-        let (tag, name) = read_select_mailbox(conn)?;
-        assert_eq!(name, FRENCH_SENT_UTF8);
+        assert_eq!(
+            name, listed,
+            "the fetch worker must agree with the coordinator"
+        );
         write_select(conn, &tag, 902, 2, 1)?;
         let (tag, _) = conn.read_command()?;
         write_fetch_message(conn, 1, 1, MSG_BODY)?;
@@ -1912,7 +1987,7 @@ fn utf8_name_from_a_server_that_never_enabled_utf8_falls_back_on_select() {
     });
 
     let server = MockImap::start_scripts(vec![control, worker]);
-    let archive = tempfile("utf8_no_enable");
+    let archive = tempfile(archive_name);
     let summary = run_import(&server, "alice", archive.clone(), |_| {}).expect("import");
     let email = summary
         .per_type
@@ -1925,7 +2000,7 @@ fn utf8_name_from_a_server_that_never_enabled_utf8_falls_back_on_select() {
     assert_eq!(
         conn.query_row::<String, _, _>("SELECT name FROM mailboxes", [], |r| r.get(0))
             .unwrap(),
-        FRENCH_SENT_UTF8
+        stored
     );
     let _ = std::fs::remove_file(&archive);
 }

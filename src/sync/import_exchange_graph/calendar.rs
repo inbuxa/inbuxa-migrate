@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 
+use encodify::base64::STANDARD;
 use rusqlite::{Connection, Transaction, params};
 use serde_json::{Value, json};
 
@@ -32,7 +33,6 @@ fn fetch_event_attachments(
     endpoints: &crate::exchange_graph::api::Endpoints,
     event_id: &str,
 ) -> Vec<EventAttachment> {
-    use base64::Engine;
     let url = endpoints.event_attachments(event_id);
     let Ok(body) = client.get_json_with_prefer(&url, &[]) else {
         return Vec::new();
@@ -50,7 +50,7 @@ fn fetch_event_attachments(
         let Some(encoded) = item.get("contentBytes").and_then(Value::as_str) else {
             continue;
         };
-        let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(encoded) else {
+        let Ok(bytes) = STANDARD.decode(encoded) else {
             continue;
         };
         if bytes.is_empty() {

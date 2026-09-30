@@ -190,17 +190,7 @@ impl<'r, R: BufRead> Parser<'r, R> {
                 }
                 Ok(Untagged::StatusLine(line))
             }
-            "CAPABILITY" => {
-                let mut caps = Vec::new();
-                while !self.at_end() {
-                    self.skip_ws();
-                    if self.at_end() {
-                        break;
-                    }
-                    caps.push(self.read_atom_string()?);
-                }
-                Ok(Untagged::Capability(caps))
-            }
+            "CAPABILITY" => Ok(Untagged::Capability(self.read_space_separated()?)),
             "LIST" | "LSUB" => {
                 self.skip_ws();
                 self.expect(b'(')?;
@@ -300,17 +290,7 @@ impl<'r, R: BufRead> Parser<'r, R> {
                 Ok(Untagged::Flags(flags))
             }
             "NAMESPACE" => self.parse_namespace(),
-            "ENABLED" => {
-                let mut exts = Vec::new();
-                while !self.at_end() {
-                    self.skip_ws();
-                    if self.at_end() {
-                        break;
-                    }
-                    exts.push(self.read_atom_string()?);
-                }
-                Ok(Untagged::Enabled(exts))
-            }
+            "ENABLED" => Ok(Untagged::Enabled(self.read_space_separated()?)),
             _ => {
                 if let Ok(num) = upper.parse::<u32>() {
                     self.skip_ws();
@@ -651,6 +631,15 @@ impl<'r, R: BufRead> Parser<'r, R> {
             .map_err(|e| ImapError::Parse(format!("non-utf8 atom: {e}")))
     }
 
+    fn read_space_separated(&mut self) -> Result<Vec<String>, ImapError> {
+        let end = self.buf.len().saturating_sub(self.tail_crlf_len());
+        let rest = self.buf.get(self.pos..end).unwrap_or_default();
+        self.pos = self.pos.max(end);
+        std::str::from_utf8(rest)
+            .map(|s| s.split_ascii_whitespace().map(str::to_owned).collect())
+            .map_err(|e| ImapError::Parse(format!("non-utf8 token: {e}")))
+    }
+
     fn read_seq_set_token(&mut self) -> String {
         let start = self.pos;
         while let Some(b) = self.peek() {
@@ -735,10 +724,7 @@ impl<'r, R: BufRead> Parser<'r, R> {
 }
 
 fn is_atom_byte(b: u8) -> bool {
-    matches!(b, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9'
-        | b'-' | b'.' | b'_' | b'!' | b'#' | b'$' | b'&'
-        | b'\'' | b'+' | b'/' | b';' | b'<' | b'=' | b'>' | b'?'
-        | b'@' | b'\\' | b'^' | b'`' | b'|' | b'~' | b'*')
+    b.is_ascii_graphic() && !matches!(b, b'(' | b')' | b'{' | b'%' | b'"' | b']')
 }
 
 fn parse_seq_set(s: &str) -> Vec<u32> {
@@ -830,6 +816,60 @@ mod tests {
                 assert_eq!(caps.len(), 11);
             }
             _ => panic!("expected Capability"),
+        }
+    }
+
+    #[test]
+    fn untagged_capability_accepts_uri_valued_tokens() {
+        let r = parse(
+            b"* CAPABILITY IMAP4rev1 SASL-IR SPECIAL-USE IMAPSIEVE=sieve://127.0.0.1:4190 QUOTA ACL RIGHTS=texk\r\n",
+        );
+        match r {
+            Response::Untagged(Untagged::Capability(caps)) => assert_eq!(
+                caps,
+                vec![
+                    "IMAP4rev1",
+                    "SASL-IR",
+                    "SPECIAL-USE",
+                    "IMAPSIEVE=sieve://127.0.0.1:4190",
+                    "QUOTA",
+                    "ACL",
+                    "RIGHTS=texk",
+                ]
+            ),
+            other => panic!("expected Capability, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn untagged_enabled_accepts_non_atom_tokens() {
+        let r = parse(b"* ENABLED UTF8=ACCEPT X-VENDOR=a:b,c\r\n");
+        match r {
+            Response::Untagged(Untagged::Enabled(exts)) => {
+                assert_eq!(exts, vec!["UTF8=ACCEPT", "X-VENDOR=a:b,c"]);
+            }
+            other => panic!("expected Enabled, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn atom_accepts_colon_comma_and_brackets() {
+        let r = parse(b"* LIST (\\HasNoChildren) \"/\" Work:2026,Q1[a}\r\n");
+        match r {
+            Response::Untagged(Untagged::List { name, .. }) => {
+                assert_eq!(name, "Work:2026,Q1[a}");
+            }
+            other => panic!("expected List, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn atom_stops_at_atom_specials() {
+        for b in b"(){%\"] \x7f\x00" {
+            assert!(!is_atom_byte(*b), "{b:#04x} must not be an atom byte");
+        }
+        for b in b":,[}=/.-_+" {
+            assert!(is_atom_byte(*b), "{:?} must be an atom byte", *b as char);
         }
     }
 

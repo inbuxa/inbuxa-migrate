@@ -82,6 +82,10 @@ service managesieve-login {
   }
 }
 
+protocol imap {
+  mail_plugins = $mail_plugins imap_sieve
+}
+
 protocol sieve {
   managesieve_max_line_length = 1M
   managesieve_max_compile_errors = 5
@@ -96,6 +100,7 @@ info_log_path = /dev/stderr
 plugin {
   sieve = file:~/sieve;active=~/.dovecot.sieve
   sieve_max_script_size = 1M
+  imapsieve_url = sieve://127.0.0.1:4190
 }
 "#;
 
@@ -139,6 +144,7 @@ impl Dovecot {
         let host = container.get_host()?.to_string();
         let imap = Endpoint::new(host.clone(), container.get_host_port_ipv4(IMAP_PORT.tcp())?);
         let sieve = Endpoint::new(host, container.get_host_port_ipv4(SIEVE_PORT.tcp())?);
+        ImapSeed::connect(&imap.host, imap.port)?.logout()?;
 
         let accounts: Vec<Account> = layouts::accounts()
             .iter()
