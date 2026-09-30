@@ -150,6 +150,14 @@ jobs:
     env:
       TAG: ${{ github.ref_name }}
     steps:
+      # The release notes are this version's section of CHANGELOG.md, so the
+      # release, and the announcement made from it, say what changed. Checked
+      # out first: a checkout cleans the workspace, and would take dist/ with
+      # it if it ran after the download.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: CHANGELOG.md
+          sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: dist
@@ -158,18 +166,16 @@ jobs:
       - run: |
           (cd dist && sha256sum ./*.tar.gz | sed 's| \./| |' > SHA256SUMS)
           cat dist/SHA256SUMS
-      # The release notes are this version's section of CHANGELOG.md, so the
-      # release, and the announcement made from it, say what changed.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          sparse-checkout: CHANGELOG.md
-          sparse-checkout-cone-mode: false
       - env:
           GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
         run: |
           set -euo pipefail
           API="$GITEA_URL/api/v1/repos/$GITHUB_REPOSITORY"
           auth=(-H "Authorization: token $GITEA_TOKEN")
+          # Everything the release carries has to be here before a release is made.
+          for f in inbuxa-migrate-linux-amd64.tar.gz inbuxa-migrate-linux-arm64.tar.gz SHA256SUMS; do
+            [ -s "dist/$f" ] || { echo "::error::dist/$f is missing; not creating a release"; exit 1; }
+          done
           files="Binaries for linux/amd64 and linux/arm64. Verify with SHA256SUMS."
           notes="$(awk -v v="${TAG#v}" 'index($0, "## [" v "]") == 1 {f = 1; next}
                                          f && (/^## / || /^---$/) {exit}
