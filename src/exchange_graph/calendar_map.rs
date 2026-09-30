@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -701,7 +702,7 @@ mod tests {
         let p = &conv.data["participants"]["att-1"];
         let addr = p["calendarAddress"].as_str().unwrap();
         assert!(
-            addr.starts_with("urn:x-vandelay:attendee:"),
+            addr.starts_with("urn:x-inbuxa-migrate:attendee:"),
             "a hybrid X500 reference must not become a malformed mailto, got {addr}"
         );
         assert!(
@@ -755,7 +756,7 @@ mod tests {
         let p = &conv.data["participants"]["att-1"];
         let addr = p["calendarAddress"].as_str().unwrap();
         assert!(
-            addr.starts_with("urn:x-vandelay:attendee:"),
+            addr.starts_with("urn:x-inbuxa-migrate:attendee:"),
             "a name-only attendee needs a synthetic calendarAddress, got {addr}"
         );
         assert!(
@@ -799,7 +800,7 @@ mod tests {
         v["organizer"] = json!({"emailAddress": {"name": "Alice Example"}});
         let conv = convert_event(&v, None).unwrap();
         let organizer_address = conv.data["organizerCalendarAddress"].as_str().unwrap();
-        assert!(organizer_address.starts_with("urn:x-vandelay:attendee:"));
+        assert!(organizer_address.starts_with("urn:x-inbuxa-migrate:attendee:"));
         assert_eq!(
             conv.data["participants"]["organizer"]["calendarAddress"],
             organizer_address

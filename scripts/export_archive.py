@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+#
+# SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+# SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
+#
+# SPDX-License-Identifier: Apache-2.0 OR MIT
+#
 
 import argparse
 import json
@@ -136,7 +142,7 @@ def export_mail(conn, root):
             if directory is None:
                 continue
             sequence += 1
-            name = f"{stamp}.M{email_id}P{sequence}.vandelay:2,{info}"
+            name = f"{stamp}.M{email_id}P{sequence}.inbuxa-migrate:2,{info}"
             with open(os.path.join(directory, "cur", name), "wb") as handle:
                 handle.write(data)
             written += 1
@@ -320,7 +326,7 @@ def export_files(conn, root):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Export a Vandelay SQLite archive to a directory tree."
+        description="Export an inbuxa-migrate SQLite archive to a directory tree."
     )
     parser.add_argument("archive")
     parser.add_argument("target")

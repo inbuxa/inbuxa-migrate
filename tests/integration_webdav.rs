@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -15,9 +16,9 @@ use integration::validate::{
 use integration::webdav::{AccountSeed, WebDav};
 use integration::{Account, Endpoint};
 
-use vandelay::error::Error;
-use vandelay::sync::import_dav;
-use vandelay::sync::import_dav::{DavAuth, DavImportConfig, DavKindArg};
+use inbuxa_migrate::error::Error;
+use inbuxa_migrate::sync::import_dav;
+use inbuxa_migrate::sync::import_dav::{DavAuth, DavImportConfig, DavKindArg};
 
 fn webdav_config(account: &Account, http: &Endpoint) -> DavImportConfig {
     DavImportConfig {
@@ -319,7 +320,7 @@ fn webdav_starts_seeds_and_imports() {
         drop(conn);
 
         let new_payload = format!(
-            "added-{} content for vandelay webdav add-after-import probe\n",
+            "added-{} content for inbuxa-migrate webdav add-after-import probe\n",
             seed.username
         );
         let new_payload_bytes = new_payload.as_bytes().to_vec();

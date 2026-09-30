@@ -1,25 +1,28 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
 
 use encodify::base64::{LENIENT, STANDARD};
-use mockito::Matcher;
-use vandelay::exchange_ews::EwsClient;
-use vandelay::exchange_ews::autodiscover::{DiscoverySource, discover};
-use vandelay::exchange_ews::error::EwsError;
-use vandelay::exchange_ews::parse::{
+use inbuxa_migrate::exchange_ews::EwsClient;
+use inbuxa_migrate::exchange_ews::autodiscover::{DiscoverySource, discover};
+use inbuxa_migrate::exchange_ews::error::EwsError;
+use inbuxa_migrate::exchange_ews::parse::{
     EnvelopeKind, parse_find_folder_response, parse_find_item_response,
     parse_get_attachment_inline, parse_response_messages, parse_sync_folder_items_response,
     read_envelope_summary,
 };
-use vandelay::exchange_ews::types::{FolderClass, FolderId, ItemId, ResponseCode, ServerVersion};
-use vandelay::exchange_ews::xml::{
+use inbuxa_migrate::exchange_ews::types::{
+    FolderClass, FolderId, ItemId, ResponseCode, ServerVersion,
+};
+use inbuxa_migrate::exchange_ews::xml::{
     FolderRef, ItemShape, Traversal, find_folder_body, find_item_body, get_attachment_body,
     get_item_body, sync_folder_items_body,
 };
-use vandelay::jmap::http::{Auth, RetryPolicy};
+use inbuxa_migrate::jmap::http::{Auth, RetryPolicy};
+use mockito::Matcher;
 
 const TXT_XML: &str = "text/xml; charset=utf-8";
 const APP_JSON: &str = "application/json";
@@ -59,7 +62,7 @@ fn autodiscover_v2_returns_global_endpoint() {
         .create();
     let _ = server;
     let url = "https://outlook.office365.com/EWS/Exchange.asmx";
-    assert!(vandelay::exchange_ews::autodiscover::is_fully_qualified_ews_url(url));
+    assert!(inbuxa_migrate::exchange_ews::autodiscover::is_fully_qualified_ews_url(url));
     let r = discover(Some(url), None, None, false).unwrap();
     assert_eq!(r.source, DiscoverySource::SuppliedUrl);
     assert_eq!(r.ews_url, url);
@@ -265,7 +268,7 @@ fn server_busy_with_back_off_triggers_retry_and_eventually_succeeds() {
     let c = client(3);
     let body = find_folder_body(
         FolderRef::Distinguished(
-            vandelay::exchange_ews::types::DistinguishedFolderId::MsgFolderRoot,
+            inbuxa_migrate::exchange_ews::types::DistinguishedFolderId::MsgFolderRoot,
         ),
         Traversal::Deep,
     );
@@ -290,7 +293,7 @@ fn http_401_surfaces_as_auth_error() {
     let c = client(0);
     let body = find_folder_body(
         FolderRef::Distinguished(
-            vandelay::exchange_ews::types::DistinguishedFolderId::MsgFolderRoot,
+            inbuxa_migrate::exchange_ews::types::DistinguishedFolderId::MsgFolderRoot,
         ),
         Traversal::Deep,
     );
@@ -313,7 +316,7 @@ fn mime_content_round_trips_through_base64_decode() {
          </m:ResponseMessages></m:GetItemResponse>"
     ));
     let r = parse_response_messages(body.as_bytes(), "GetItemResponseMessage").unwrap();
-    let item = vandelay::exchange_ews::parse::parse_message_item(&r[0].inner_xml).unwrap();
+    let item = inbuxa_migrate::exchange_ews::parse::parse_message_item(&r[0].inner_xml).unwrap();
     let s = item.mime_content.unwrap();
     let bytes = LENIENT.decode(&s).unwrap();
     assert_eq!(bytes, original);
@@ -341,7 +344,7 @@ fn get_attachment_inline_decodes_photo_blob() {
 
 #[test]
 fn calendar_item_master_inlines_modified_and_deleted_occurrences() {
-    let body = "<vandelay-inner xmlns:t=\"http://schemas.microsoft.com/exchange/services/2006/types\">\
+    let body = "<inbuxa-migrate-inner xmlns:t=\"http://schemas.microsoft.com/exchange/services/2006/types\">\
          <t:CalendarItem>\
          <t:ItemId Id=\"M1\" ChangeKey=\"K1\"/>\
          <t:Subject>Daily</t:Subject>\
@@ -359,8 +362,8 @@ fn calendar_item_master_inlines_modified_and_deleted_occurrences() {
          <t:DeletedOccurrences>\
            <t:DeletedOccurrence><t:Start>2025-06-17T14:00:00Z</t:Start></t:DeletedOccurrence>\
          </t:DeletedOccurrences>\
-         </t:CalendarItem></vandelay-inner>";
-    let item = vandelay::exchange_ews::parse::parse_calendar_item(body).unwrap();
+         </t:CalendarItem></inbuxa-migrate-inner>";
+    let item = inbuxa_migrate::exchange_ews::parse::parse_calendar_item(body).unwrap();
     assert_eq!(item.id.id, "M1");
     assert_eq!(item.uid.as_deref(), Some("uid-1"));
     assert_eq!(item.modified_occurrences.len(), 1);
@@ -373,7 +376,7 @@ fn calendar_item_master_inlines_modified_and_deleted_occurrences() {
 
 #[test]
 fn organizer_and_attendee_addresses_survive_an_ex_routing_type() {
-    let body = "<vandelay-inner xmlns:t=\"http://schemas.microsoft.com/exchange/services/2006/types\">\
+    let body = "<inbuxa-migrate-inner xmlns:t=\"http://schemas.microsoft.com/exchange/services/2006/types\">\
          <t:CalendarItem>\
          <t:ItemId Id=\"M3\" ChangeKey=\"K1\"/>\
          <t:Subject>Review</t:Subject>\
@@ -386,9 +389,9 @@ fn organizer_and_attendee_addresses_survive_an_ex_routing_type() {
          <t:RequiredAttendees><t:Attendee><t:Mailbox><t:Name>Kristina Morgental</t:Name>\
            <t:EmailAddress>/o=ExchangeLabs/ou=Exchange Administrative Group (FYDIBOHF23SPDLT)/cn=Recipients/cn=bdc77b18152647a29d28ce1188376dc9-kristina</t:EmailAddress>\
            <t:RoutingType>EX</t:RoutingType></t:Mailbox><t:ResponseType>Unknown</t:ResponseType></t:Attendee></t:RequiredAttendees>\
-         </t:CalendarItem></vandelay-inner>";
-    let item = vandelay::exchange_ews::parse::parse_calendar_item(body).unwrap();
-    let event = vandelay::exchange_ews::calendar_map::to_jscalendar(&item);
+         </t:CalendarItem></inbuxa-migrate-inner>";
+    let item = inbuxa_migrate::exchange_ews::parse::parse_calendar_item(body).unwrap();
+    let event = inbuxa_migrate::exchange_ews::calendar_map::to_jscalendar(&item);
 
     assert_eq!(
         event.data["organizerCalendarAddress"], "mailto:alice@example.com",
@@ -409,7 +412,7 @@ fn organizer_and_attendee_addresses_survive_an_ex_routing_type() {
         attendee["calendarAddress"]
             .as_str()
             .unwrap()
-            .starts_with("urn:x-vandelay:attendee:"),
+            .starts_with("urn:x-inbuxa-migrate:attendee:"),
         "a legacy directory reference cannot be resolved and stays synthetic"
     );
     assert!(
@@ -420,7 +423,7 @@ fn organizer_and_attendee_addresses_survive_an_ex_routing_type() {
 
 #[test]
 fn recurrence_end_date_with_a_timezone_offset_yields_a_bounded_series() {
-    let body = "<vandelay-inner xmlns:t=\"http://schemas.microsoft.com/exchange/services/2006/types\">\
+    let body = "<inbuxa-migrate-inner xmlns:t=\"http://schemas.microsoft.com/exchange/services/2006/types\">\
          <t:CalendarItem>\
          <t:ItemId Id=\"M2\" ChangeKey=\"K1\"/>\
          <t:Subject>Biweekly</t:Subject>\
@@ -432,9 +435,9 @@ fn recurrence_end_date_with_a_timezone_offset_yields_a_bounded_series() {
            <t:WeeklyRecurrence><t:Interval>2</t:Interval><t:DaysOfWeek>Wednesday</t:DaysOfWeek></t:WeeklyRecurrence>\
            <t:EndDateRecurrence><t:StartDate>2021-08-04-06:00</t:StartDate><t:EndDate>2021-09-30-06:00</t:EndDate></t:EndDateRecurrence>\
          </t:Recurrence>\
-         </t:CalendarItem></vandelay-inner>";
-    let item = vandelay::exchange_ews::parse::parse_calendar_item(body).unwrap();
-    let event = vandelay::exchange_ews::calendar_map::to_jscalendar(&item);
+         </t:CalendarItem></inbuxa-migrate-inner>";
+    let item = inbuxa_migrate::exchange_ews::parse::parse_calendar_item(body).unwrap();
+    let event = inbuxa_migrate::exchange_ews::calendar_map::to_jscalendar(&item);
     let rule = &event.data["recurrenceRule"];
     assert_eq!(rule["frequency"], "weekly");
     assert_eq!(
@@ -486,8 +489,8 @@ fn invalid_sync_state_data_fault_is_surfaced() {
 
 #[test]
 fn coordinator_diff_classifies_new_vanished_changed_unchanged() {
-    use vandelay::db::exchange_ews_ids::ItemRow;
-    use vandelay::sync::import_exchange_ews::items::{EnumeratedItem, diff};
+    use inbuxa_migrate::db::exchange_ews_ids::ItemRow;
+    use inbuxa_migrate::sync::import_exchange_ews::items::{EnumeratedItem, diff};
 
     let server = vec![
         EnumeratedItem {
@@ -532,9 +535,9 @@ fn coordinator_diff_classifies_new_vanished_changed_unchanged() {
 
 #[test]
 fn source_change_protection_refuses_different_account() {
+    use inbuxa_migrate::db;
+    use inbuxa_migrate::db::sources::SourceKey;
     use rusqlite::Connection;
-    use vandelay::db;
-    use vandelay::db::sources::SourceKey;
 
     let tmp = tempfile::NamedTempFile::new().unwrap();
     let conn = Connection::open(tmp.path()).unwrap();
@@ -557,9 +560,9 @@ fn source_change_protection_refuses_different_account() {
 
 #[test]
 fn mailbox_kinds_are_three_separate_sources() {
+    use inbuxa_migrate::db;
+    use inbuxa_migrate::db::sources::SourceKey;
     use rusqlite::Connection;
-    use vandelay::db;
-    use vandelay::db::sources::SourceKey;
 
     let tmp = tempfile::NamedTempFile::new().unwrap();
     let conn = Connection::open(tmp.path()).unwrap();
@@ -653,7 +656,7 @@ fn http_500_with_server_busy_body_is_treated_as_fault_and_retried() {
     let c = client(3);
     let body = find_folder_body(
         FolderRef::Distinguished(
-            vandelay::exchange_ews::types::DistinguishedFolderId::MsgFolderRoot,
+            inbuxa_migrate::exchange_ews::types::DistinguishedFolderId::MsgFolderRoot,
         ),
         Traversal::Deep,
     );
@@ -710,7 +713,7 @@ fn invalid_server_version_fault_downgrades_and_succeeds() {
     assert_eq!(c.server_version(), ServerVersion::Exchange2013Sp1);
     let body = find_folder_body(
         FolderRef::Distinguished(
-            vandelay::exchange_ews::types::DistinguishedFolderId::MsgFolderRoot,
+            inbuxa_migrate::exchange_ews::types::DistinguishedFolderId::MsgFolderRoot,
         ),
         Traversal::Deep,
     );
@@ -748,7 +751,7 @@ fn unsupported_version_floor_surfaces_as_soap_fault() {
     let c = client(0);
     let body = find_folder_body(
         FolderRef::Distinguished(
-            vandelay::exchange_ews::types::DistinguishedFolderId::MsgFolderRoot,
+            inbuxa_migrate::exchange_ews::types::DistinguishedFolderId::MsgFolderRoot,
         ),
         Traversal::Deep,
     );
@@ -801,7 +804,7 @@ fn server_affinity_cookie_is_captured_and_resent() {
     let c = client(0);
     let body = find_folder_body(
         FolderRef::Distinguished(
-            vandelay::exchange_ews::types::DistinguishedFolderId::MsgFolderRoot,
+            inbuxa_migrate::exchange_ews::types::DistinguishedFolderId::MsgFolderRoot,
         ),
         Traversal::Deep,
     );
@@ -823,7 +826,7 @@ fn http_456_surfaces_as_account_locked_auth_error() {
     let c = client(0);
     let body = find_folder_body(
         FolderRef::Distinguished(
-            vandelay::exchange_ews::types::DistinguishedFolderId::MsgFolderRoot,
+            inbuxa_migrate::exchange_ews::types::DistinguishedFolderId::MsgFolderRoot,
         ),
         Traversal::Deep,
     );
@@ -836,8 +839,8 @@ fn http_456_surfaces_as_account_locked_auth_error() {
 
 #[test]
 fn for_each_fetched_item_streams_every_id_across_windows() {
-    use vandelay::logging::Logger;
-    use vandelay::sync::import_exchange_ews::items::{ItemRunCtx, for_each_fetched_item};
+    use inbuxa_migrate::logging::Logger;
+    use inbuxa_migrate::sync::import_exchange_ews::items::{ItemRunCtx, for_each_fetched_item};
 
     let mut server = mockito::Server::new();
     let url = format!("{}/EWS/Exchange.asmx", server.url());

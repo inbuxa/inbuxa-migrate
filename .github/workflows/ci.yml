@@ -1,0 +1,257 @@
+# SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
+# SPDX-License-Identifier: Apache-2.0 OR MIT
+#
+# CI on GitHub Actions, for the GitHub copy of this repository.
+#
+# The repository lives on the self-hosted Gitea; GitHub holds a push mirror
+# that Gitea updates on every commit. Nothing is merged here -- pull requests
+# happen on Gitea, and their branches reach GitHub as ordinary pushes, which is
+# why this workflow runs on `push` and not on `pull_request`.
+#
+# Which forge does the building is one switch, the variable BUILD_ON, set on
+# both forges at the organization level:
+#
+#   BUILD_ON=github  every job here runs; .gitea/workflows/ci.yml skips its
+#                    test job and waits for the status this workflow reports
+#                    back instead.
+#   unset / other    every job here skips; Gitea runs the tests. Releases need
+#                    GitHub: they are built on native amd64 and arm64 runners.
+#
+# The result goes back to Gitea as one commit status, "github/ci (branch)" or
+# "github/ci (tag)", which is what Gitea's `github` job waits on.
+#
+# v* tags build a release: the tag must be on main and name the version in
+# Cargo.toml; each architecture is built on its own native runner by
+# scripts/build-release.sh, and the archives plus SHA256SUMS are attached to
+# the Gitea Release -- Gitea is where the install guide points. The Release is
+# created as a draft, filled, then published, so it is never visible with
+# assets missing; if an upload fails, a Release this run created is deleted.
+# Gitea announces the release once this run has reported success.
+#
+# The binaries link glibc dynamically, so they are built on Ubuntu 22.04: the
+# oldest glibc GitHub offers, and so the widest range of servers they run on.
+#
+# Configuration, all at the organization level on GitHub: variables BUILD_ON,
+# GITEA_URL; secret GITEA_TOKEN (write:repository on Gitea).
+#
+# Every `uses:` is pinned to a full commit SHA, with the release it was in the
+# trailing comment. Nothing schedules here: schedules belong to Gitea.
+name: ci
+
+on:
+  push:
+    branches: ['**']
+    tags: ['**']
+  # For a run GitHub queued and then orphaned. Run it from a tag to redo that
+  # tag's release; attaching skips any file already on the Release.
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+permissions:
+  contents: read
+
+env:
+  GITEA_URL: ${{ vars.GITEA_URL }}
+  CONTEXT: github/ci (${{ github.ref_type }})
+  CARGO_TERM_COLOR: never
+
+jobs:
+  # Tells Gitea a result is on its way, so a status that is still missing
+  # reads as "running" rather than "never started".
+  pending:
+    if: vars.BUILD_ON == 'github'
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
+        run: |
+          curl -fsS -o /dev/null -X POST -H "Authorization: token $GITEA_TOKEN" -H 'Content-Type: application/json' \
+            "$GITEA_URL/api/v1/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -d "$(jq -n --arg c "$CONTEXT" --arg u "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+                  '{state:"pending", context:$c, target_url:$u, description:"GitHub Actions"}')"
+
+  # The unit and mock tests. The #[ignore]d ones need live servers or
+  # containers and run by hand (README, "Testing").
+  test:
+    if: vars.BUILD_ON == 'github'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-test-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: cargo-test-${{ runner.os }}-${{ runner.arch }}-
+      # rustup is on the runner; rust-toolchain.toml picks the toolchain.
+      - run: rustup show active-toolchain || rustup toolchain install
+      - run: cargo test --locked
+
+  # Guards shared by both architectures, checked once.
+  version:
+    if: vars.BUILD_ON == 'github' && github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      # Full history: the ancestry check cannot be answered from a shallow
+      # clone.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      # A release can never describe code that was not reviewed onto main,
+      # and its tag must be the version the binary reports.
+      - run: |
+          git fetch --quiet origin main
+          git merge-base --is-ancestor "$(git rev-parse "${TAG}^{commit}")" origin/main \
+            || { echo "::error::$TAG is not on main"; exit 1; }
+          want="v$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')"
+          [ "$TAG" = "$want" ] || { echo "::error::$TAG does not match Cargo.toml ($want)"; exit 1; }
+
+  build:
+    if: vars.BUILD_ON == 'github' && github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
+    needs: [test, version]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-22.04
+          - arch: arm64
+            runner: ubuntu-22.04-arm
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - run: rustup show active-toolchain || rustup toolchain install
+      - run: |
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct "$TAG")" scripts/build-release.sh "$TAG" dist
+          sha256sum dist/*.tar.gz
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: archive-${{ matrix.arch }}
+          path: dist/*.tar.gz
+          retention-days: 7
+          overwrite: true
+          if-no-files-found: error
+
+  release:
+    if: vars.BUILD_ON == 'github' && github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
+    needs: [build]
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+          pattern: archive-*
+          merge-multiple: true
+      - run: |
+          (cd dist && sha256sum ./*.tar.gz | sed 's| \./| |' > SHA256SUMS)
+          cat dist/SHA256SUMS
+      - env:
+          GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
+        run: |
+          set -euo pipefail
+          API="$GITEA_URL/api/v1/repos/$GITHUB_REPOSITORY"
+          auth=(-H "Authorization: token $GITEA_TOKEN")
+          # Reuse the Release if the tag already has one (a re-run), else make a
+          # draft of our own.
+          created=0
+          id="$(curl -fsS "${auth[@]}" "$API/releases/tags/$TAG" 2>/dev/null | jq -r '.id // empty' || true)"
+          if [ -z "$id" ]; then
+            id="$(curl -fsS "${auth[@]}" -H 'Content-Type: application/json' \
+                  -d "$(jq -n --arg t "$TAG" '{tag_name:$t, name:$t, draft:true,
+                        body:"Binaries for linux/amd64 and linux/arm64. Verify with SHA256SUMS."}')" \
+                  "$API/releases" | jq -r '.id // empty')"
+            [ -n "$id" ] || { echo "::error::could not create the release"; exit 1; }
+            created=1
+          fi
+          have="$(curl -fsS "${auth[@]}" "$API/releases/$id/assets" | jq -r '.[].name')"
+          for f in dist/*; do
+            n="$(basename "$f")"
+            if grep -qxF "$n" <<<"$have"; then echo "already attached: $n"; continue; fi
+            echo "uploading $n"
+            curl -fsS -o /dev/null "${auth[@]}" --form "attachment=@$f" "$API/releases/$id/assets?name=$n" || {
+              [ "$created" = 1 ] && curl -sS -o /dev/null "${auth[@]}" -X DELETE "$API/releases/$id"
+              exit 1
+            }
+          done
+          if [ "$created" = 1 ]; then
+            curl -fsS -o /dev/null "${auth[@]}" -H 'Content-Type: application/json' -X PATCH \
+              -d '{"draft":false}' "$API/releases/$id"
+          fi
+
+  # ---------------------------------------------------- github release ------
+  # Copies this tag's Gitea release -- notes and files -- to a GitHub release,
+  # so the replica's Releases page, and anyone watching it, keeps up. Gitea's
+  # release is the real one; this is left out of the report to Gitea, so a
+  # failure here cannot fail a release. PR and issue numbers in the notes are
+  # rewritten to Gitea links: on GitHub a bare #16 is some other PR.
+  github-release:
+    if: ${{ vars.BUILD_ON == 'github' && github.ref_type == 'tag' }}
+    needs: [release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GITEA_URL: ${{ vars.GITEA_URL }}
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "GitHub already has a release for $TAG"; exit 0
+          fi
+          # The Gitea release exists by now if this run made it; allow a few
+          # minutes either way.
+          code=0
+          for _ in $(seq 1 15); do
+            code="$(curl -sS -o rel.json -w '%{http_code}' "$GITEA_URL/api/v1/repos/$GITHUB_REPOSITORY/releases/tags/$TAG")"
+            [ "$code" = 200 ] && break
+            sleep 20
+          done
+          if [ "$code" != 200 ]; then echo "No Gitea release for $TAG; nothing to copy"; exit 0; fi
+          if [ "$(jq -r .draft rel.json)" = true ]; then echo "The Gitea release is a draft; not copying"; exit 0; fi
+          export BASE="$(jq -r '.html_url | sub("/releases/tag/.*$"; "")' rel.json)"
+          jq -r '.body // ""' rel.json | perl -pe 's{(?<![\w/&\[])#(\d+)\b}{[#$1]($ENV{BASE}/pulls/$1)}g' > notes.md
+          printf '\n\n_Mirrored from [the Gitea release](%s); report issues on [Gitea](%s/issues)._\n' \
+            "$(jq -r .html_url rel.json)" "$BASE" >> notes.md
+          files=()
+          mkdir -p files
+          while IFS=$'\t' read -r name url; do
+            curl -fsSL -o "files/$name" "$url"; files+=("files/$name")
+          done < <(jq -r '.assets[]? | [.name, .browser_download_url] | @tsv' rel.json)
+          title="$(jq -r '.name // ""' rel.json)"; [ -n "$title" ] || title="$TAG"
+          if [ "$(jq -r .prerelease rel.json)" = true ]; then kind=--prerelease; else kind=--latest; fi
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$title" \
+            --notes-file notes.md "$kind" "${files[@]}"
+          echo "created the GitHub release for $TAG with ${#files[@]} file(s)"
+
+  report:
+    if: always() && vars.BUILD_ON == 'github'
+    needs: [pending, test, version, build, release]
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
+          STATE: ${{ contains(needs.*.result, 'failure') && 'failure' || (contains(needs.*.result, 'cancelled') && 'cancelled' || 'success') }}
+        run: |
+          # A cancelled run was superseded by a newer run for the same commit (the
+          # mirror can push one commit twice); that run reports. Posting "failure"
+          # here would fail the Gitea check while the real build is still going.
+          if [ "$STATE" = cancelled ]; then echo "cancelled: leaving the result to the newer run"; exit 0; fi
+          curl -fsS -o /dev/null -X POST -H "Authorization: token $GITEA_TOKEN" -H 'Content-Type: application/json' \
+            "$GITEA_URL/api/v1/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -d "$(jq -n --arg s "$STATE" --arg c "$CONTEXT" --arg u "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+                  '{state:$s, context:$c, target_url:$u, description:"GitHub Actions"}')"

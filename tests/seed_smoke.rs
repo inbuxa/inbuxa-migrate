@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -98,7 +99,9 @@ fn verify_account(label: &str, user: &Jmap, account_id: &str, s: &SeedStats) {
             assert_eq!(list.len(), 2, "{label}: sieve script count");
             let primary = list
                 .iter()
-                .find(|s| s.get("name").and_then(Value::as_str) == Some("vandelay-test-filter"))
+                .find(|s| {
+                    s.get("name").and_then(Value::as_str) == Some("inbuxa-migrate-test-filter")
+                })
                 .expect("primary sieve script present");
             assert_eq!(
                 primary.get("isActive").and_then(Value::as_bool),

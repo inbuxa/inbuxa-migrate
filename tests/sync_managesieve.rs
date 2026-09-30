@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -25,16 +26,16 @@ fn sieves_url() -> String {
     let s = shared_stalwart();
     format!("sieves://{}:{}", s.host, s.sieve_port)
 }
-use vandelay::jmap::account::AccountSelector;
-use vandelay::jmap::http::Auth;
-use vandelay::logging::Logger;
-use vandelay::sync::import_managesieve::{ManageSieveAuth, ManageSieveImportConfig};
-use vandelay::sync::{self, CommonConfig, ConnectConfig, ImportConfig};
+use inbuxa_migrate::jmap::account::AccountSelector;
+use inbuxa_migrate::jmap::http::Auth;
+use inbuxa_migrate::logging::Logger;
+use inbuxa_migrate::sync::import_managesieve::{ManageSieveAuth, ManageSieveImportConfig};
+use inbuxa_migrate::sync::{self, CommonConfig, ConnectConfig, ImportConfig};
 
 fn tmp_archive(tag: &str) -> PathBuf {
     let mut p = std::env::temp_dir();
     p.push(format!(
-        "vandelay-managesieve-{tag}-{}-{}.sqlite",
+        "inbuxa-migrate-managesieve-{tag}-{}-{}.sqlite",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -226,7 +227,7 @@ fn managesieve_and_jmap_imports_share_blob_bytes() {
             },
             account: AccountSelector::Id(acc.account_id.clone()),
         },
-        objects: Some(vec![vandelay::types::ObjectType::SieveScript]),
+        objects: Some(vec![inbuxa_migrate::types::ObjectType::SieveScript]),
         allow_source_change: false,
     };
     let jmap_common = CommonConfig {
@@ -319,7 +320,7 @@ fn managesieve_source_change_protection_refuses_second_account() {
 
     let err = sync::import_managesieve::run(common(&archive), basic_config(&acc2.localpart))
         .expect_err("should refuse the second source without override");
-    assert!(matches!(err, vandelay::error::Error::SourceChange(_)));
+    assert!(matches!(err, inbuxa_migrate::error::Error::SourceChange(_)));
 
     let _ = std::fs::remove_file(&archive);
     seeder::teardown(base_url()).expect("teardown");
@@ -336,7 +337,7 @@ fn managesieve_implicit_tls_path_succeeds_when_offered() {
     cfg.url = sieves_url();
     let result = sync::import_managesieve::run(common(&archive), cfg);
 
-    if let Err(vandelay::error::Error::Connection(msg)) = &result {
+    if let Err(inbuxa_migrate::error::Error::Connection(msg)) = &result {
         eprintln!("(expected on cleartext-only deployments) {msg}");
     }
 
@@ -382,7 +383,7 @@ fn managesieve_round_trip_via_jmap_export_converges() {
         allow_invalid_certs: true,
         logger: Logger::from_flags(false, 0),
     };
-    let export_cfg = vandelay::sync::ExportConfig {
+    let export_cfg = inbuxa_migrate::sync::ExportConfig {
         connect: ConnectConfig {
             url: fx.base_url.clone(),
             auth: Auth::Basic {
@@ -391,7 +392,7 @@ fn managesieve_round_trip_via_jmap_export_converges() {
             },
             account: AccountSelector::Id(dst.account_id.clone()),
         },
-        objects: Some(vec![vandelay::types::ObjectType::SieveScript]),
+        objects: Some(vec![inbuxa_migrate::types::ObjectType::SieveScript]),
         prune: false,
         yes: false,
     };
@@ -416,7 +417,7 @@ fn managesieve_round_trip_via_jmap_export_converges() {
         allow_invalid_certs: true,
         logger: Logger::from_flags(false, 0),
     };
-    let export_cfg2 = vandelay::sync::ExportConfig {
+    let export_cfg2 = inbuxa_migrate::sync::ExportConfig {
         connect: ConnectConfig {
             url: fx.base_url.clone(),
             auth: Auth::Basic {
@@ -425,7 +426,7 @@ fn managesieve_round_trip_via_jmap_export_converges() {
             },
             account: AccountSelector::Id(dst.account_id.clone()),
         },
-        objects: Some(vec![vandelay::types::ObjectType::SieveScript]),
+        objects: Some(vec![inbuxa_migrate::types::ObjectType::SieveScript]),
         prune: false,
         yes: false,
     };

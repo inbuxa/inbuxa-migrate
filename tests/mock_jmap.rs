@@ -1,22 +1,23 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
 
 use std::time::Instant;
 
-use serde_json::json;
-use vandelay::jmap::account::{self, AccountSelector};
-use vandelay::jmap::error::JmapError;
-use vandelay::jmap::http::{Auth, HttpClient, RetryPolicy};
-use vandelay::jmap::request::{
+use inbuxa_migrate::jmap::account::{self, AccountSelector};
+use inbuxa_migrate::jmap::error::JmapError;
+use inbuxa_migrate::jmap::http::{Auth, HttpClient, RetryPolicy};
+use inbuxa_migrate::jmap::request::{
     self, SetRequest, get_all, get_changes, get_objects, get_state, set_call,
 };
-use vandelay::jmap::session::{Limits, Session};
-use vandelay::jmap::wire::JmapId;
-use vandelay::jmap::wire::identity::Identity;
-use vandelay::jmap::wire::mailbox::Mailbox;
+use inbuxa_migrate::jmap::session::{Limits, Session};
+use inbuxa_migrate::jmap::wire::JmapId;
+use inbuxa_migrate::jmap::wire::identity::Identity;
+use inbuxa_migrate::jmap::wire::mailbox::Mailbox;
+use serde_json::json;
 
 fn client(retries: u32) -> HttpClient {
     HttpClient::new(
@@ -672,7 +673,7 @@ fn retries_counter_increments_on_429() {
 
 #[test]
 fn upload_size_precheck_blocks_before_contacting_server() {
-    use vandelay::jmap::blobxfer;
+    use inbuxa_migrate::jmap::blobxfer;
 
     let mut server = mockito::Server::new();
     let no_hits = server
@@ -739,7 +740,7 @@ fn concurrent_requests_400_problem_is_retried_then_succeeds() {
 
 #[test]
 fn concurrent_uploads_400_problem_is_retried_then_succeeds() {
-    use vandelay::jmap::blobxfer;
+    use inbuxa_migrate::jmap::blobxfer;
 
     let mut server = mockito::Server::new();
     server
@@ -772,7 +773,7 @@ fn concurrent_uploads_400_problem_is_retried_then_succeeds() {
 
 #[test]
 fn blob_upload_quota_429_with_retry_after_is_honoured() {
-    use vandelay::jmap::blobxfer;
+    use inbuxa_migrate::jmap::blobxfer;
 
     let mut server = mockito::Server::new();
     server
@@ -883,7 +884,7 @@ fn ratelimit_headers_without_retry_after_fall_back_to_backoff() {
 
 #[test]
 fn upload_extracts_blob_id_and_download_streams_via_download_url() {
-    use vandelay::jmap::blobxfer;
+    use inbuxa_migrate::jmap::blobxfer;
 
     let mut server = mockito::Server::new();
     let base = server.url();
@@ -974,7 +975,7 @@ fn persistent_problem_json_429_without_retry_after_eventually_succeeds_via_share
 
 #[test]
 fn persistent_429_on_download_uses_shared_throttle() {
-    use vandelay::jmap::blobxfer;
+    use inbuxa_migrate::jmap::blobxfer;
 
     let mut server = mockito::Server::new();
     let session = upload_session(&server.url());
@@ -1207,7 +1208,7 @@ fn archive_path() -> std::path::PathBuf {
     let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut p = std::env::temp_dir();
     p.push(format!(
-        "vandelay-mockjmap-{}-{n}.sqlite",
+        "inbuxa-migrate-mockjmap-{}-{n}.sqlite",
         std::process::id()
     ));
     let _ = std::fs::remove_file(&p);
@@ -1264,17 +1265,17 @@ fn import_aborts_with_exit_two_when_the_advertised_api_url_is_unreachable() {
         .create();
 
     let archive = archive_path();
-    let err = vandelay::sync::import_jmap::run(
-        vandelay::sync::CommonConfig {
+    let err = inbuxa_migrate::sync::import_jmap::run(
+        inbuxa_migrate::sync::CommonConfig {
             archive: archive.clone(),
             threads: 1,
             dry_run: false,
             max_retries: 0,
             allow_invalid_certs: false,
-            logger: vandelay::logging::Logger::from_flags(true, 0),
+            logger: inbuxa_migrate::logging::Logger::from_flags(true, 0),
         },
-        vandelay::sync::ImportConfig {
-            connect: vandelay::sync::ConnectConfig {
+        inbuxa_migrate::sync::ImportConfig {
+            connect: inbuxa_migrate::sync::ConnectConfig {
                 url: session_base.clone(),
                 auth: Auth::Basic {
                     user: "u".into(),
@@ -1289,7 +1290,7 @@ fn import_aborts_with_exit_two_when_the_advertised_api_url_is_unreachable() {
     .expect_err("an unreachable apiUrl must abort the run");
 
     assert!(
-        matches!(err, vandelay::error::Error::Connection(_)),
+        matches!(err, inbuxa_migrate::error::Error::Connection(_)),
         "a 404 from the advertised apiUrl is a whole-run connection failure, got {err:?}"
     );
     assert_eq!(err.exit_code(), 2, "must not report a partial failure");

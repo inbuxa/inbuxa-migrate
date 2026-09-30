@@ -1,0 +1,99 @@
+# SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
+# SPDX-License-Identifier: Apache-2.0 OR MIT
+#
+# CI on the self-hosted Gitea. Gitea reads .gitea/workflows and ignores
+# .github/ once this directory exists; .github/workflows is GitHub's side of
+# the switch below.
+#
+# Every job runs in an image pinned by digest (tag in the trailing comment),
+# and the only actions used are coffey-labs/actions ones pinned by SHA. The
+# instance resolves short `uses:` against itself, never GitHub, so nothing
+# unreviewed can be pulled in.
+#
+# BUILD ON GITHUB. The org variable BUILD_ON decides which forge builds.
+# Set to 'github', the test job below skips and .github/workflows/ci.yml does
+# the work on GitHub's runners -- GitHub holds a push mirror of this
+# repository, updated on every commit -- and reports back as the commit status
+# "github/ci (branch)" or "github/ci (tag)". The `github` job waits for that
+# status and passes or fails with it, so a run here still says whether the
+# commit is good. Unset (or anything but 'github'), the tests run here.
+#
+# Releases are built only on GitHub: each architecture is compiled on a
+# native runner there, and these runners are amd64 only. With BUILD_ON unset
+# a v* tag is tested here but not released.
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The unit and mock tests; the #[ignore]d ones need live servers or
+  # containers and run by hand (README, "Testing").
+  test:
+    if: ${{ vars.BUILD_ON != 'github' }}
+    runs-on: light
+    container:
+      image: rust:1-bookworm@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e # 1-bookworm
+    steps:
+      - uses: coffey-labs/actions/checkout@fab0c4d45e0162963965f1555df27b7bed5e20ec
+      - run: cargo test --locked
+
+  # Stands in for test and release while GitHub builds: waits for the status
+  # GitHub's ci.yml posts on this commit and passes or fails with it. A pull
+  # request is checked at its head commit, which is what GitHub built when
+  # the branch reached the mirror. Two and a half hours covers a slow queue;
+  # a timeout here with BUILD_ON=github usually means GitHub never got the
+  # push -- check the mirror's last error in the repository settings.
+  github:
+    if: ${{ vars.BUILD_ON == 'github' }}
+    # Its own runner label with plenty of slots: this job only polls, but holds a slot
+    # for as long as the GitHub build takes, and must not starve the build runners.
+    runs-on: wait
+    timeout-minutes: 150
+    container:
+      image: rust:1-bookworm@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e # 1-bookworm
+    steps:
+      - shell: bash
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          IS_TAG: ${{ startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          set -euo pipefail
+          apt-get update -qq && apt-get install -y -qq --no-install-recommends jq >/dev/null
+          ctx="github/ci (branch)"; [ "$IS_TAG" = true ] && ctx="github/ci (tag)"
+          echo "waiting for '$ctx' on $SHA"
+          while :; do
+            s="$(curl -fsS -H "Authorization: token $TOKEN" \
+                  "$CI_SERVER_INTERNAL/api/v1/repos/$REPO/commits/$SHA/statuses?limit=50" \
+                  | jq -c --arg c "$ctx" '[.[] | select(.context == $c)] | sort_by(.id) | last // empty')" || s=""
+            state="$(printf '%s' "$s" | jq -r '.status // .state // empty')"
+            case "$state" in
+              success) echo "GitHub: success"; exit 0 ;;
+              failure|error) echo "GitHub: $state -- $(jq -r '.target_url' <<<"$s")"; exit 1 ;;
+            esac
+            sleep 20
+          done
+
+  # GitHub makes the Release and publishes it only once its files are
+  # attached; this waits for GitHub's success and announces then. The action
+  # makes one topic per tag, so announce.yml firing for the same Release is a
+  # no-op.
+  announce:
+    needs: [github]
+    if: ${{ startsWith(github.ref, 'refs/tags/v') && needs.github.result == 'success' }}
+    runs-on: light
+    steps:
+      - uses: coffey-labs/actions/discourse-release@baedbb0e89336e49dd5105a22f8ea4f712b453ad
+        with:
+          api-key: ${{ secrets.DISCOURSE_RELEASE_KEY }}
+          discord-webhook: ${{ secrets.DISCORD_RELEASE_WEBHOOK }}
+          tag: ${{ github.ref_name }}

@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -8,16 +9,16 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use inbuxa_migrate::logging::Logger;
+use inbuxa_migrate::sync::CommonConfig;
+use inbuxa_migrate::sync::import_maildir::{MaildirImportConfig, run};
 use rusqlite::Connection;
 use tempfile::TempDir;
-use vandelay::logging::Logger;
-use vandelay::sync::CommonConfig;
-use vandelay::sync::import_maildir::{MaildirImportConfig, run};
 
 fn tmp_archive(tag: &str) -> PathBuf {
     let mut p = std::env::temp_dir();
     p.push(format!(
-        "vandelay-mock-maildir-{tag}-{}-{}.sqlite",
+        "inbuxa-migrate-mock-maildir-{tag}-{}-{}.sqlite",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -530,7 +531,7 @@ fn rejects_path_without_cur_subdir() {
     fs::create_dir_all(td.path().join("new")).unwrap();
     let archive = tmp_archive("not-a-maildir");
     let err = run(common(&archive), base_cfg(td.path())).expect_err("should refuse");
-    assert!(matches!(err, vandelay::error::Error::Usage(_)));
+    assert!(matches!(err, inbuxa_migrate::error::Error::Usage(_)));
     let _ = fs::remove_file(&archive);
 }
 
@@ -544,7 +545,7 @@ fn rejects_dovecot_layout_fs_tree() {
     let archive = tmp_archive("layout-fs");
     let err = run(common(&archive), base_cfg(td.path())).expect_err("should refuse");
     match err {
-        vandelay::error::Error::Usage(msg) => {
+        inbuxa_migrate::error::Error::Usage(msg) => {
             assert!(msg.contains("Maildir++"), "msg was: {msg}");
         }
         other => panic!("expected Usage error, got {other:?}"),
@@ -558,7 +559,7 @@ fn rejects_nonexistent_path() {
     let mut cfg = base_cfg(Path::new("/definitely/not/a/real/maildir"));
     cfg.maildir = PathBuf::from("/definitely/not/a/real/maildir");
     let err = run(common(&archive), cfg).expect_err("should refuse");
-    assert!(matches!(err, vandelay::error::Error::Usage(_)));
+    assert!(matches!(err, inbuxa_migrate::error::Error::Usage(_)));
     let _ = fs::remove_file(&archive);
 }
 
@@ -572,7 +573,7 @@ fn source_change_protection_refuses_second_path() {
     let archive = tmp_archive("source-change");
     run(common(&archive), base_cfg(td_a.path())).expect("first import");
     let err = run(common(&archive), base_cfg(td_b.path())).expect_err("second import refused");
-    assert!(matches!(err, vandelay::error::Error::SourceChange(_)));
+    assert!(matches!(err, inbuxa_migrate::error::Error::SourceChange(_)));
     let _ = fs::remove_file(&archive);
 }
 
@@ -601,7 +602,7 @@ fn folder_and_include_are_mutually_exclusive() {
     cfg.include = vec![regex::Regex::new("^Sent$").unwrap()];
     let err = run(common(&archive), cfg).expect_err("mutex");
     match err {
-        vandelay::error::Error::Usage(msg) => {
+        inbuxa_migrate::error::Error::Usage(msg) => {
             assert!(
                 msg.contains("--folder") && msg.contains("--include"),
                 "msg was: {msg}"
@@ -621,7 +622,7 @@ fn folder_and_exclude_are_mutually_exclusive() {
     cfg.folder = vec!["INBOX".to_owned()];
     cfg.exclude = vec![regex::Regex::new("^Trash$").unwrap()];
     let err = run(common(&archive), cfg).expect_err("mutex");
-    assert!(matches!(err, vandelay::error::Error::Usage(_)));
+    assert!(matches!(err, inbuxa_migrate::error::Error::Usage(_)));
     let _ = fs::remove_file(&archive);
 }
 

@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -11,6 +12,7 @@ use serde_json::Value;
 use crate::error::Error;
 use crate::jmap::error::JmapError;
 use crate::jmap::http::HttpClient;
+use crate::jmap::request::{URN_INBUXA_REGISTRY, URN_STALWART_REGISTRY};
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -139,7 +141,7 @@ impl std::fmt::Display for OriginMismatch {
         }
         write!(
             f,
-            " on {} (connected to {}); vandelay must use the advertised URL. \
+            " on {} (connected to {}); inbuxa-migrate must use the advertised URL. \
              If this is wrong, fix the server's advertised HTTP URL setting.",
             self.session_origin, self.connect_origin
         )
@@ -233,6 +235,14 @@ impl Session {
             .map_err(|e| Error::Connection(format!("session core capability is malformed: {e}")))
     }
 
+    /// The capability to use for registry (`x:`) calls on this server:
+    /// inbuxa's name when advertised, else Stalwart's, else none.
+    pub fn registry_urn(&self) -> Option<&'static str> {
+        [URN_INBUXA_REGISTRY, URN_STALWART_REGISTRY]
+            .into_iter()
+            .find(|urn| self.capabilities.contains_key(*urn))
+    }
+
     pub fn account(&self, account_id: &str) -> Option<&Account> {
         self.accounts.get(account_id)
     }
@@ -313,6 +323,39 @@ mod tests {
                 }
             }
         }"#
+    }
+
+    fn session_with(extra_caps: &[&str]) -> Session {
+        let mut v: serde_json::Value = serde_json::from_str(raw_session()).unwrap();
+        for urn in extra_caps {
+            v["capabilities"][*urn] = serde_json::json!({});
+        }
+        serde_json::from_value(v).unwrap()
+    }
+
+    #[test]
+    fn registry_urn_prefers_inbuxa() {
+        assert_eq!(
+            session_with(&[URN_INBUXA_REGISTRY]).registry_urn(),
+            Some(URN_INBUXA_REGISTRY)
+        );
+        assert_eq!(
+            session_with(&[URN_STALWART_REGISTRY, URN_INBUXA_REGISTRY]).registry_urn(),
+            Some(URN_INBUXA_REGISTRY)
+        );
+    }
+
+    #[test]
+    fn registry_urn_falls_back_to_stalwart() {
+        assert_eq!(
+            session_with(&[URN_STALWART_REGISTRY]).registry_urn(),
+            Some(URN_STALWART_REGISTRY)
+        );
+    }
+
+    #[test]
+    fn registry_urn_is_none_without_either() {
+        assert_eq!(session_with(&[]).registry_urn(), None);
     }
 
     #[test]

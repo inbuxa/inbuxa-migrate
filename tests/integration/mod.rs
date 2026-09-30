@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -22,7 +23,7 @@ pub mod webdav;
 
 pub use error::{ContainerError, ContainerResult};
 
-pub const OWNER_LABEL: &str = "art.stalw.vandelay.itest";
+pub const OWNER_LABEL: &str = "art.stalw.inbuxa-migrate.itest";
 
 use std::sync::Once;
 

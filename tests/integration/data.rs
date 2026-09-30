@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -89,15 +90,15 @@ fn synth_messages(n: usize) -> Vec<MboxMessage> {
     let mut out = Vec::with_capacity(n);
     for i in 0..n {
         let body = format!(
-            "From: sender{i}@vandelay.test\r\n\
-             To: user@vandelay.test\r\n\
+            "From: sender{i}@inbuxa-migrate.test\r\n\
+             To: user@inbuxa-migrate.test\r\n\
              Subject: Synthetic test message {i}\r\n\
-             Message-ID: <synth-{i}@vandelay.test>\r\n\
+             Message-ID: <synth-{i}@inbuxa-migrate.test>\r\n\
              Date: Wed, 01 Jan 2025 12:00:00 +0000\r\n\
              MIME-Version: 1.0\r\n\
              Content-Type: text/plain; charset=utf-8\r\n\
              \r\n\
-             This is synthetic seed message #{i} for vandelay container tests.\r\n",
+             This is synthetic seed message #{i} for inbuxa-migrate container tests.\r\n",
         );
         out.push(MboxMessage {
             raw: body.into_bytes(),
@@ -135,10 +136,10 @@ fn vcard_v3_basic(i: usize) -> String {
     format!(
         "BEGIN:VCARD\r\n\
          VERSION:3.0\r\n\
-         UID:vandelay-card-basic-{i}\r\n\
+         UID:inbuxa-migrate-card-basic-{i}\r\n\
          FN:Basic Contact {i}\r\n\
          N:Contact{i};Basic;;;\r\n\
-         EMAIL;TYPE=INTERNET:basic-{i}@vandelay.test\r\n\
+         EMAIL;TYPE=INTERNET:basic-{i}@inbuxa-migrate.test\r\n\
          END:VCARD\r\n"
     )
 }
@@ -147,14 +148,14 @@ fn vcard_v3_full(i: usize) -> String {
     format!(
         "BEGIN:VCARD\r\n\
          VERSION:3.0\r\n\
-         UID:vandelay-card-full-{i}\r\n\
+         UID:inbuxa-migrate-card-full-{i}\r\n\
          FN:Full Contact {i}\r\n\
          N:Contact{i};Full;Middle;;\r\n\
-         EMAIL;TYPE=INTERNET;TYPE=WORK:full-{i}@vandelay.test\r\n\
+         EMAIL;TYPE=INTERNET;TYPE=WORK:full-{i}@inbuxa-migrate.test\r\n\
          TEL;TYPE=CELL:+15550010{i:03}\r\n\
-         ORG:Vandelay Test\r\n\
+         ORG:Inbuxa Test\r\n\
          TITLE:Senior Test Engineer\r\n\
-         URL:https://vandelay.test/{i}\r\n\
+         URL:https://inbuxa-migrate.test/{i}\r\n\
          NOTE:Synthetic full v3 contact #{i}\r\n\
          END:VCARD\r\n"
     )
@@ -164,11 +165,11 @@ fn vcard_v3_multi_email(i: usize) -> String {
     format!(
         "BEGIN:VCARD\r\n\
          VERSION:3.0\r\n\
-         UID:vandelay-card-multi-{i}\r\n\
+         UID:inbuxa-migrate-card-multi-{i}\r\n\
          FN:Multi Email {i}\r\n\
          N:Contact{i};MultiEmail;;;\r\n\
-         EMAIL;TYPE=INTERNET;TYPE=HOME:multi-{i}-home@vandelay.test\r\n\
-         EMAIL;TYPE=INTERNET;TYPE=WORK:multi-{i}-work@vandelay.test\r\n\
+         EMAIL;TYPE=INTERNET;TYPE=HOME:multi-{i}-home@inbuxa-migrate.test\r\n\
+         EMAIL;TYPE=INTERNET;TYPE=WORK:multi-{i}-work@inbuxa-migrate.test\r\n\
          END:VCARD\r\n"
     )
 }
@@ -177,12 +178,12 @@ fn vcard_v3_org_and_title(i: usize) -> String {
     format!(
         "BEGIN:VCARD\r\n\
          VERSION:3.0\r\n\
-         UID:vandelay-card-org-{i}\r\n\
+         UID:inbuxa-migrate-card-org-{i}\r\n\
          FN:Org Contact {i}\r\n\
          N:Contact{i};Org;;Dr.;PhD\r\n\
-         ORG:Vandelay Industries;Engineering;Test Group\r\n\
+         ORG:Inbuxa Industries;Engineering;Test Group\r\n\
          TITLE:Principal Researcher\r\n\
-         EMAIL;TYPE=INTERNET:org-{i}@vandelay.test\r\n\
+         EMAIL;TYPE=INTERNET:org-{i}@inbuxa-migrate.test\r\n\
          END:VCARD\r\n"
     )
 }
@@ -194,7 +195,7 @@ fn vcard_v4_basic(i: usize) -> String {
          UID:urn:uuid:00000000-0000-4000-a000-0000{i:08x}\r\n\
          FN:V4 Basic {i}\r\n\
          N:Contact{i};V4Basic;;;\r\n\
-         EMAIL:v4-basic-{i}@vandelay.test\r\n\
+         EMAIL:v4-basic-{i}@inbuxa-migrate.test\r\n\
          END:VCARD\r\n"
     )
 }
@@ -206,7 +207,7 @@ fn vcard_v4_with_address(i: usize) -> String {
          UID:urn:uuid:00000000-0000-4000-b000-0000{i:08x}\r\n\
          FN:V4 Address {i}\r\n\
          N:Contact{i};V4Address;;;\r\n\
-         EMAIL:v4-address-{i}@vandelay.test\r\n\
+         EMAIL:v4-address-{i}@inbuxa-migrate.test\r\n\
          ADR;TYPE=home:;;{i} Test Street;Springfield;OR;97477;US\r\n\
          END:VCARD\r\n"
     )
@@ -220,7 +221,7 @@ fn vcard_v4_nickname(i: usize) -> String {
          FN:V4 Nick {i}\r\n\
          N:Contact{i};V4Nick;;;\r\n\
          NICKNAME:Nicky{i}\r\n\
-         EMAIL:v4-nick-{i}@vandelay.test\r\n\
+         EMAIL:v4-nick-{i}@inbuxa-migrate.test\r\n\
          END:VCARD\r\n"
     )
 }
@@ -236,7 +237,7 @@ fn vcard_v4_birthday(i: usize) -> String {
          FN:V4 Birthday {i}\r\n\
          N:Contact{i};V4Birthday;;;\r\n\
          BDAY:{year:04}{month:02}{day:02}\r\n\
-         EMAIL:v4-bday-{i}@vandelay.test\r\n\
+         EMAIL:v4-bday-{i}@inbuxa-migrate.test\r\n\
          END:VCARD\r\n"
     )
 }
@@ -245,10 +246,10 @@ fn vcard_v3_apple_item_labels(i: usize) -> String {
     format!(
         "BEGIN:VCARD\r\n\
          VERSION:3.0\r\n\
-         UID:vandelay-card-ablabels-{i}\r\n\
+         UID:inbuxa-migrate-card-ablabels-{i}\r\n\
          FN:Apple Labels {i}\r\n\
          N:Contact{i};AppleLabels;;;\r\n\
-         EMAIL;TYPE=INTERNET:ablabels-{i}@vandelay.test\r\n\
+         EMAIL;TYPE=INTERNET:ablabels-{i}@inbuxa-migrate.test\r\n\
          ITEM1.X-ABLABEL:Name1\r\n\
          ITEM2.X-ABLABEL:Name2\r\n\
          ITEM1.X-ABDATE:20171111\r\n\
@@ -287,9 +288,9 @@ fn ical_simple_dt(i: usize) -> String {
     format!(
         "BEGIN:VCALENDAR\r\n\
          VERSION:2.0\r\n\
-         PRODID:-//vandelay//container-test//EN\r\n\
+         PRODID:-//inbuxa-migrate//container-test//EN\r\n\
          BEGIN:VEVENT\r\n\
-         UID:vandelay-simple-{i}@vandelay.test\r\n\
+         UID:inbuxa-migrate-simple-{i}@inbuxa-migrate.test\r\n\
          DTSTAMP:20250101T120000Z\r\n\
          DTSTART:2025{month:02}{day:02}T{hour:02}0000Z\r\n\
          DTEND:2025{month:02}{day:02}T{hour:02}3000Z\r\n\
@@ -307,9 +308,9 @@ fn ical_all_day(i: usize) -> String {
     format!(
         "BEGIN:VCALENDAR\r\n\
          VERSION:2.0\r\n\
-         PRODID:-//vandelay//container-test//EN\r\n\
+         PRODID:-//inbuxa-migrate//container-test//EN\r\n\
          BEGIN:VEVENT\r\n\
-         UID:vandelay-allday-{i}@vandelay.test\r\n\
+         UID:inbuxa-migrate-allday-{i}@inbuxa-migrate.test\r\n\
          DTSTAMP:20250101T120000Z\r\n\
          DTSTART;VALUE=DATE:2025{month:02}{day:02}\r\n\
          DTEND;VALUE=DATE:2025{month:02}{next_day:02}\r\n\
@@ -325,9 +326,9 @@ fn ical_multi_day_dt(i: usize) -> String {
     format!(
         "BEGIN:VCALENDAR\r\n\
          VERSION:2.0\r\n\
-         PRODID:-//vandelay//container-test//EN\r\n\
+         PRODID:-//inbuxa-migrate//container-test//EN\r\n\
          BEGIN:VEVENT\r\n\
-         UID:vandelay-multiday-{i}@vandelay.test\r\n\
+         UID:inbuxa-migrate-multiday-{i}@inbuxa-migrate.test\r\n\
          DTSTAMP:20250101T120000Z\r\n\
          DTSTART:2025{month:02}{day:02}T090000Z\r\n\
          DTEND:2025{month:02}{day:02}T170000Z\r\n\
@@ -344,16 +345,16 @@ fn ical_with_organizer_attendees(i: usize) -> String {
     format!(
         "BEGIN:VCALENDAR\r\n\
          VERSION:2.0\r\n\
-         PRODID:-//vandelay//container-test//EN\r\n\
+         PRODID:-//inbuxa-migrate//container-test//EN\r\n\
          BEGIN:VEVENT\r\n\
-         UID:vandelay-meeting-{i}@vandelay.test\r\n\
+         UID:inbuxa-migrate-meeting-{i}@inbuxa-migrate.test\r\n\
          DTSTAMP:20250101T120000Z\r\n\
          DTSTART:2025{month:02}{day:02}T140000Z\r\n\
          DTEND:2025{month:02}{day:02}T150000Z\r\n\
          SUMMARY:Sync meeting {i}\r\n\
-         ORGANIZER;CN=Organiser:mailto:organiser-{i}@vandelay.test\r\n\
-         ATTENDEE;CN=Alice;PARTSTAT=ACCEPTED:mailto:alice-{i}@vandelay.test\r\n\
-         ATTENDEE;CN=Bob;PARTSTAT=NEEDS-ACTION:mailto:bob-{i}@vandelay.test\r\n\
+         ORGANIZER;CN=Organiser:mailto:organiser-{i}@inbuxa-migrate.test\r\n\
+         ATTENDEE;CN=Alice;PARTSTAT=ACCEPTED:mailto:alice-{i}@inbuxa-migrate.test\r\n\
+         ATTENDEE;CN=Bob;PARTSTAT=NEEDS-ACTION:mailto:bob-{i}@inbuxa-migrate.test\r\n\
          END:VEVENT\r\n\
          END:VCALENDAR\r\n"
     )
@@ -365,15 +366,15 @@ fn ical_with_categories_location(i: usize) -> String {
     format!(
         "BEGIN:VCALENDAR\r\n\
          VERSION:2.0\r\n\
-         PRODID:-//vandelay//container-test//EN\r\n\
+         PRODID:-//inbuxa-migrate//container-test//EN\r\n\
          BEGIN:VEVENT\r\n\
-         UID:vandelay-cat-{i}@vandelay.test\r\n\
+         UID:inbuxa-migrate-cat-{i}@inbuxa-migrate.test\r\n\
          DTSTAMP:20250101T120000Z\r\n\
          DTSTART:2025{month:02}{day:02}T100000Z\r\n\
          DTEND:2025{month:02}{day:02}T110000Z\r\n\
          SUMMARY:Categorised event {i}\r\n\
          LOCATION:Test Lab\\, Room {i}\r\n\
-         CATEGORIES:VANDELAY,TEST,FIXTURE\r\n\
+         CATEGORIES:INBUXA,TEST,FIXTURE\r\n\
          END:VEVENT\r\n\
          END:VCALENDAR\r\n"
     )
@@ -385,9 +386,9 @@ fn ical_recurring_daily(i: usize) -> String {
     format!(
         "BEGIN:VCALENDAR\r\n\
          VERSION:2.0\r\n\
-         PRODID:-//vandelay//container-test//EN\r\n\
+         PRODID:-//inbuxa-migrate//container-test//EN\r\n\
          BEGIN:VEVENT\r\n\
-         UID:vandelay-daily-{i}@vandelay.test\r\n\
+         UID:inbuxa-migrate-daily-{i}@inbuxa-migrate.test\r\n\
          DTSTAMP:20250101T120000Z\r\n\
          DTSTART:2025{month:02}{day:02}T070000Z\r\n\
          DTEND:2025{month:02}{day:02}T073000Z\r\n\
@@ -405,9 +406,9 @@ fn ical_recurring_weekly_until(i: usize) -> String {
     format!(
         "BEGIN:VCALENDAR\r\n\
          VERSION:2.0\r\n\
-         PRODID:-//vandelay//container-test//EN\r\n\
+         PRODID:-//inbuxa-migrate//container-test//EN\r\n\
          BEGIN:VEVENT\r\n\
-         UID:vandelay-weekly-{i}@vandelay.test\r\n\
+         UID:inbuxa-migrate-weekly-{i}@inbuxa-migrate.test\r\n\
          DTSTAMP:20250101T120000Z\r\n\
          DTSTART:2025{month:02}{day:02}T160000Z\r\n\
          DTEND:2025{month:02}{day:02}T170000Z\r\n\
@@ -424,9 +425,9 @@ fn ical_with_alarm(i: usize) -> String {
     format!(
         "BEGIN:VCALENDAR\r\n\
          VERSION:2.0\r\n\
-         PRODID:-//vandelay//container-test//EN\r\n\
+         PRODID:-//inbuxa-migrate//container-test//EN\r\n\
          BEGIN:VEVENT\r\n\
-         UID:vandelay-alarm-{i}@vandelay.test\r\n\
+         UID:inbuxa-migrate-alarm-{i}@inbuxa-migrate.test\r\n\
          DTSTAMP:20250101T120000Z\r\n\
          DTSTART:2025{month:02}{day:02}T080000Z\r\n\
          DTEND:2025{month:02}{day:02}T083000Z\r\n\
@@ -445,9 +446,9 @@ pub fn malformed_ical(name: &str) -> RawFixture {
     let body = format!(
         "BEGIN:VCALENDAR\r\n\
          VERSION:2.0\r\n\
-         PRODID:-//vandelay//broken//EN\r\n\
+         PRODID:-//inbuxa-migrate//broken//EN\r\n\
          BEGIN:VEVENT\r\n\
-         UID:broken-{name}@vandelay.test\r\n\
+         UID:broken-{name}@inbuxa-migrate.test\r\n\
          DTSTAMP:20250101T120000Z\r\n\
          DTSTART:NOT-A-DATE\r\n\
          RRULE:FREQ=BOGUS;INTERVAL=oops\r\n\

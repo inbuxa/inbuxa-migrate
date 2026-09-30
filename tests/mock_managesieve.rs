@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -12,10 +13,10 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::thread;
 use std::time::Duration;
 
+use inbuxa_migrate::logging::Logger;
+use inbuxa_migrate::sync::CommonConfig;
+use inbuxa_migrate::sync::import_managesieve::{ManageSieveAuth, ManageSieveImportConfig, run};
 use rusqlite::Connection;
-use vandelay::logging::Logger;
-use vandelay::sync::CommonConfig;
-use vandelay::sync::import_managesieve::{ManageSieveAuth, ManageSieveImportConfig, run};
 
 type Script = Box<dyn FnOnce(&mut MockConn) -> std::io::Result<()> + Send + 'static>;
 
@@ -117,7 +118,7 @@ fn tempfile(label: &str) -> PathBuf {
     let counter = COUNTER.fetch_add(1, Ordering::SeqCst);
     let mut p = std::env::temp_dir();
     p.push(format!(
-        "vandelay_mock_managesieve_{label}_{counter}.sqlite"
+        "inbuxa_migrate_mock_managesieve_{label}_{counter}.sqlite"
     ));
     if p.exists() {
         let _ = std::fs::remove_file(&p);
@@ -133,7 +134,7 @@ fn count(conn: &Connection, table: &str) -> i64 {
 fn run_basic(
     server: &MockSieveServer,
     archive: &Path,
-) -> Result<vandelay::sync::Summary, vandelay::error::Error> {
+) -> Result<inbuxa_migrate::sync::Summary, inbuxa_migrate::error::Error> {
     let common = CommonConfig {
         archive: archive.to_path_buf(),
         threads: 1,
@@ -256,7 +257,7 @@ fn auth_no_translates_to_connection_error() {
     let archive = tempfile("auth_fail");
     let err = run_basic(&server, &archive).unwrap_err();
     match err {
-        vandelay::error::Error::Connection(msg) => assert!(
+        inbuxa_migrate::error::Error::Connection(msg) => assert!(
             msg.contains("auth failed") || msg.contains("LOGIN"),
             "got {msg}"
         ),
@@ -274,7 +275,7 @@ fn server_lacking_plain_login_for_basic_is_refused() {
     });
     let archive = tempfile("no_basic_mech");
     let err = run_basic(&server, &archive).unwrap_err();
-    assert!(matches!(err, vandelay::error::Error::Connection(_)));
+    assert!(matches!(err, inbuxa_migrate::error::Error::Connection(_)));
     let _ = std::fs::remove_file(&archive);
 }
 
@@ -423,7 +424,7 @@ fn referral_aborts_run_with_connection_error() {
     let archive = tempfile("referral");
     let err = run_basic(&server, &archive).unwrap_err();
     match err {
-        vandelay::error::Error::Connection(msg) => assert!(msg.contains("referral"), "{msg}"),
+        inbuxa_migrate::error::Error::Connection(msg) => assert!(msg.contains("referral"), "{msg}"),
         other => panic!("expected Connection, got {other:?}"),
     }
     let _ = std::fs::remove_file(&archive);
@@ -438,7 +439,7 @@ fn seed_then_run(seed: Script, second: Script) -> (MockSieveServer, PathBuf) {
 fn run_against(
     server: &MockSieveServer,
     archive: &Path,
-) -> Result<vandelay::sync::Summary, vandelay::error::Error> {
+) -> Result<inbuxa_migrate::sync::Summary, inbuxa_migrate::error::Error> {
     run_basic(server, archive)
 }
 
@@ -935,7 +936,7 @@ fn plain_then_login_both_refused_aborts_run_with_combined_message() {
     let archive = tempfile("plain_and_login_refused");
     let err = run_basic(&server, &archive).unwrap_err();
     match err {
-        vandelay::error::Error::Connection(msg) => {
+        inbuxa_migrate::error::Error::Connection(msg) => {
             assert!(
                 msg.contains("LOGIN") && msg.contains("PLAIN"),
                 "expected combined LOGIN/PLAIN error text, got {msg}"

@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -7,10 +8,10 @@
 mod integration;
 mod seeder;
 
+use inbuxa_migrate::jmap::account::{self, AccountSelector};
+use inbuxa_migrate::jmap::http::{Auth, HttpClient, RetryPolicy};
+use inbuxa_migrate::jmap::session::Session;
 use integration::stalwart::shared as shared_stalwart;
-use vandelay::jmap::account::{self, AccountSelector};
-use vandelay::jmap::http::{Auth, HttpClient, RetryPolicy};
-use vandelay::jmap::session::Session;
 
 fn admin_client() -> HttpClient {
     HttpClient::new(
