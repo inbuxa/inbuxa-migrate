@@ -192,9 +192,10 @@ inbuxa-migrate export \
 
 Writes `ARCHIVE` into an account on a JMAP server, usually inbuxa. It keeps no
 state of its own: every run matches the archive against the target afresh.
-By default it only adds and updates -- items that match are updated, the
-rest are created, and anything already on the target that the archive does
-not cover is left alone.
+By default it only adds: what the archive holds and the target lacks is
+created, and anything already on the target is left as it is -- an item that
+matches is not updated yet, so a change made at the source after the first
+export does not reach the target on a second one.
 
 `--prune` also deletes what is on the target and not in the archive. It asks
 first; `--yes` answers for it, for scripts. Export speaks JMAP only.
