@@ -22,6 +22,7 @@ use inbuxa_migrate::exchange_ews::xml::{
     get_item_body, sync_folder_items_body,
 };
 use inbuxa_migrate::jmap::http::{Auth, RetryPolicy};
+use inbuxa_migrate::net::CertOverride;
 use mockito::Matcher;
 
 const TXT_XML: &str = "text/xml; charset=utf-8";
@@ -33,7 +34,7 @@ fn client(retries: u32) -> EwsClient {
             token: "t".to_owned(),
         },
         RetryPolicy::new(retries),
-        false,
+        CertOverride::none(),
     )
 }
 
@@ -63,7 +64,7 @@ fn autodiscover_v2_returns_global_endpoint() {
     let _ = server;
     let url = "https://outlook.office365.com/EWS/Exchange.asmx";
     assert!(inbuxa_migrate::exchange_ews::autodiscover::is_fully_qualified_ews_url(url));
-    let r = discover(Some(url), None, None, false).unwrap();
+    let r = discover(Some(url), None, None, &CertOverride::none()).unwrap();
     assert_eq!(r.source, DiscoverySource::SuppliedUrl);
     assert_eq!(r.ews_url, url);
 }

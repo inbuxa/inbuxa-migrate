@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -170,6 +171,7 @@ fn extract_account_id(principal: &Value, name: &str) -> Result<String, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::CertOverride;
 
     fn session_with(name: &str, id: &str) -> Session {
         let raw = serde_json::json!({
@@ -186,7 +188,7 @@ mod tests {
         HttpClient::new(
             crate::jmap::http::Auth::Bearer { token: "t".into() },
             crate::jmap::http::RetryPolicy::new(0),
-            false,
+            CertOverride::none(),
         )
     }
 

@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -16,6 +17,7 @@ pub mod inspect;
 pub mod jmap;
 pub mod logging;
 pub mod managesieve;
+pub mod net;
 pub mod secret;
 pub mod sync;
 pub mod types;

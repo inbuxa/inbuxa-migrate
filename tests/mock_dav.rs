@@ -13,6 +13,7 @@ use inbuxa_migrate::dav::parse::{parse_multistatus, strip_ascii_control_chars};
 use inbuxa_migrate::dav::xml;
 use inbuxa_migrate::jmap::error::JmapError;
 use inbuxa_migrate::jmap::http::{Auth, RetryPolicy};
+use inbuxa_migrate::net::CertOverride;
 
 fn client(retries: u32) -> DavClient {
     DavClient::new(
@@ -21,7 +22,7 @@ fn client(retries: u32) -> DavClient {
             password: "p".into(),
         },
         RetryPolicy::new(retries),
-        false,
+        CertOverride::none(),
     )
 }
 

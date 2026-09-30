@@ -11,6 +11,7 @@ mod seeder;
 use inbuxa_migrate::jmap::account::{self, AccountSelector};
 use inbuxa_migrate::jmap::http::{Auth, HttpClient, RetryPolicy};
 use inbuxa_migrate::jmap::session::Session;
+use inbuxa_migrate::net::CertOverride;
 use integration::stalwart::shared as shared_stalwart;
 
 fn admin_client() -> HttpClient {
@@ -20,7 +21,7 @@ fn admin_client() -> HttpClient {
             password: seeder::ADMIN_PASSWORD.into(),
         },
         RetryPolicy::new(5),
-        true,
+        CertOverride::for_url(true, shared_stalwart().base_url()),
     )
 }
 

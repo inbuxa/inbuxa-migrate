@@ -20,6 +20,7 @@ use crate::exchange_graph::oauth::{
 use crate::exchange_graph::types::{EventBodyFormat, MailboxKind, Surfaces, synthetic_account_id};
 use crate::jmap::http::RetryPolicy;
 use crate::logging::LEVEL_DEFAULT;
+use crate::net::CertOverride;
 use crate::sync::{CommonConfig, Summary, TypeCounts};
 
 #[derive(Debug, Clone)]
@@ -68,11 +69,11 @@ pub fn run(common: CommonConfig, config: GraphImportConfig) -> Result<Summary, E
     let logger = common.logger;
     let mut conn = db::init::open(&common.archive)?;
 
-    let acquired = acquire_with_flow(&config.auth, common.allow_invalid_certs)?;
+    let acquired = acquire_with_flow(&config.auth)?;
     let client = GraphClient::new(
         acquired.access_token.clone(),
         RetryPolicy::new(common.max_retries),
-        common.allow_invalid_certs,
+        CertOverride::for_url(common.allow_invalid_certs, &config.api_base),
     );
     client.set_logger(logger);
 
@@ -121,13 +122,7 @@ pub fn run(common: CommonConfig, config: GraphImportConfig) -> Result<Summary, E
         &principal.user_principal_name,
     )?;
 
-    let _refresher = spawn_token_refresher(
-        &client,
-        &config.auth,
-        &acquired,
-        common.allow_invalid_certs,
-        logger,
-    );
+    let _refresher = spawn_token_refresher(&client, &config.auth, &acquired, logger);
 
     let mut summary = Summary::default();
     let mut mailbox_counts = TypeCounts::default();
@@ -282,7 +277,7 @@ pub fn enumerate_mail_folders(
     Ok(all)
 }
 
-fn acquire_with_flow(auth: &GraphAuth, allow_invalid_certs: bool) -> Result<AcquiredToken, Error> {
+fn acquire_with_flow(auth: &GraphAuth) -> Result<AcquiredToken, Error> {
     let flow = match auth {
         GraphAuth::PreAcquired { token } => OAuthFlow::PreAcquired {
             token: token.clone(),
@@ -295,7 +290,7 @@ fn acquire_with_flow(auth: &GraphAuth, allow_invalid_certs: bool) -> Result<Acqu
             client_id: client_id.clone(),
         },
     };
-    acquire(&flow, allow_invalid_certs).map_err(Error::from)
+    acquire(&flow).map_err(Error::from)
 }
 
 fn resolve_endpoints(config: &GraphImportConfig, client: &GraphClient) -> Result<Endpoints, Error> {
@@ -379,7 +374,6 @@ fn spawn_token_refresher(
     client: &GraphClient,
     auth: &GraphAuth,
     initial: &AcquiredToken,
-    allow_invalid_certs: bool,
     logger: crate::logging::Logger,
 ) -> Option<TokenRefresher> {
     let (authority, client_id) = match auth {
@@ -416,12 +410,7 @@ fn spawn_token_refresher(
                         break;
                     }
                 }
-                match refresh_access_token(
-                    &authority,
-                    &client_id,
-                    &refresh_token,
-                    allow_invalid_certs,
-                ) {
+                match refresh_access_token(&authority, &client_id, &refresh_token) {
                     Ok(tok) => {
                         client.set_bearer(tok.access_token.clone());
                         if let Some(new_refresh) = tok.refresh_token {

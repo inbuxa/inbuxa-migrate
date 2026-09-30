@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -9,10 +10,10 @@ use quick_xml::events::Event;
 use serde_json::Value;
 use ureq::Agent;
 use ureq::config::Config;
-use ureq::tls::{RootCerts, TlsConfig};
 
 use crate::exchange_ews::error::EwsError;
 use crate::exchange_ews::parse::entity_to_char;
+use crate::net::{CertOverride, tls, with_timeouts};
 
 const V2_HOST: &str = "https://outlook.office365.com";
 const POX_REQ_NS: &str =
@@ -48,7 +49,7 @@ pub fn discover(
     supplied_url: Option<&str>,
     email: Option<&str>,
     auth_header: Option<&str>,
-    allow_invalid_certs: bool,
+    certs: &CertOverride,
 ) -> Result<DiscoveryResult, EwsError> {
     if let Some(url) = supplied_url
         && is_fully_qualified_ews_url(url)
@@ -63,8 +64,17 @@ pub fn discover(
             "either a fully-qualified --url or --mailbox is required".to_owned(),
         ));
     };
-    let agent = build_agent(allow_invalid_certs);
-    if let Ok(url) = autodiscover_v2(&agent, email) {
+    // Autodiscover v2 is Microsoft's own service and is always verified; a v1
+    // candidate gets the relaxed agent only if `--allow-invalid-certs` covers it.
+    let strict = build_agent(false);
+    let lax = certs.is_active().then(|| build_agent(true));
+    let pick = |url: &str| -> &Agent {
+        match &lax {
+            Some(agent) if certs.allows(url) => agent,
+            _ => &strict,
+        }
+    };
+    if let Ok(url) = autodiscover_v2(&strict, email) {
         return Ok(DiscoveryResult {
             ews_url: url,
             source: DiscoverySource::V2,
@@ -82,7 +92,7 @@ pub fn discover(
         let candidates = pox_candidates(domain);
         for candidate in &candidates {
             tried.push(candidate.clone());
-            match autodiscover_v1(&agent, candidate, &current_email, auth_header) {
+            match autodiscover_v1(pick(candidate), candidate, &current_email, auth_header) {
                 Ok(PoxOutcome::EwsUrl(url)) => {
                     return Ok(DiscoveryResult {
                         ews_url: url,
@@ -104,7 +114,7 @@ pub fn discover(
                     url_redirects += 1;
                     tried.push(url.clone());
                     if let Ok(PoxOutcome::EwsUrl(u)) =
-                        autodiscover_v1(&agent, &url, &current_email, auth_header)
+                        autodiscover_v1(pick(&url), &url, &current_email, auth_header)
                     {
                         return Ok(DiscoveryResult {
                             ews_url: u,
@@ -130,19 +140,13 @@ pub fn discover(
     )))
 }
 
-fn build_agent(allow_invalid_certs: bool) -> Agent {
-    let config: Config = Config::builder()
-        .http_status_as_error(false)
-        .tls_config(
-            TlsConfig::builder()
-                .unversioned_rustls_crypto_provider(std::sync::Arc::new(
-                    rustls::crypto::aws_lc_rs::default_provider(),
-                ))
-                .root_certs(RootCerts::PlatformVerifier)
-                .disable_verification(allow_invalid_certs)
-                .build(),
-        )
-        .build();
+fn build_agent(accept_invalid: bool) -> Agent {
+    let config: Config = with_timeouts!(
+        Config::builder()
+            .http_status_as_error(false)
+            .tls_config(tls(accept_invalid))
+    )
+    .build();
     config.new_agent()
 }
 

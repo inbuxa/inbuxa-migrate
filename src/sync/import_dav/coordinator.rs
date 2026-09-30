@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -18,6 +19,7 @@ use crate::sync::{CommonConfig, RunOutcome, Summary, TypeCounts};
 use super::collections;
 use super::items;
 use super::tree;
+use crate::net::CertOverride;
 
 #[derive(Debug, Clone, Copy)]
 pub enum DavKindArg {
@@ -105,7 +107,7 @@ fn run_into(
     let client = DavClient::new(
         config.auth.to_jmap_auth(),
         RetryPolicy::new(common.max_retries),
-        common.allow_invalid_certs,
+        CertOverride::for_url(common.allow_invalid_certs, &config.url),
     );
     client.set_logger(logger);
 

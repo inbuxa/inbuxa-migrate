@@ -14,7 +14,6 @@ use ureq::Agent;
 use ureq::Body;
 use ureq::config::{Config, RedirectAuthHeaders};
 use ureq::http::{Method, Request, Response};
-use ureq::tls::{RootCerts, TlsConfig};
 
 use crate::dav::parse::{ControlStrippingReader, DavResponse, parse_multistatus};
 use crate::dav::retry::{DavOutcome, classify};
@@ -22,6 +21,7 @@ use crate::jmap::error::JmapError;
 use crate::jmap::http::{Auth, RetryPolicy, retry_after_header};
 use crate::jmap::retry::{self, RateLimitState};
 use crate::logging::{HttpCall, LEVEL_BODIES, LEVEL_DEFAULT, LEVEL_PROGRESS, Logger};
+use crate::net::{CertOverride, tls, with_timeouts};
 
 const MAX_BODY: u64 = 512 * 1024 * 1024;
 const LONG_RETRY_THRESHOLD: Duration = Duration::from_secs(10);
@@ -48,6 +48,8 @@ pub struct MultiStatus {
 
 struct Inner {
     agent: Agent,
+    lax_agent: Option<Agent>,
+    certs: CertOverride,
     auth: Auth,
     retry: RetryPolicy,
     rate_limit: RateLimitState,
@@ -57,31 +59,42 @@ struct Inner {
     user_agent: String,
 }
 
+impl Inner {
+    /// The agent for `url`: the one that accepts invalid certificates only for
+    /// a host `--allow-invalid-certs` covers, and the verifying one otherwise.
+    fn agent_for(&self, url: &str) -> &Agent {
+        match &self.lax_agent {
+            Some(lax) if self.certs.allows(url) => lax,
+            _ => &self.agent,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct DavClient {
     inner: Arc<Inner>,
 }
 
 impl DavClient {
-    pub fn new(auth: Auth, retry: RetryPolicy, allow_invalid_certs: bool) -> Self {
-        let config: Config = Config::builder()
-            .http_status_as_error(false)
-            .allow_non_standard_methods(true)
-            .max_redirects(0)
-            .redirect_auth_headers(RedirectAuthHeaders::SameHost)
-            .tls_config(
-                TlsConfig::builder()
-                    .unversioned_rustls_crypto_provider(std::sync::Arc::new(
-                        rustls::crypto::aws_lc_rs::default_provider(),
-                    ))
-                    .root_certs(RootCerts::PlatformVerifier)
-                    .disable_verification(allow_invalid_certs)
-                    .build(),
+    pub fn new(auth: Auth, retry: RetryPolicy, certs: CertOverride) -> Self {
+        let build = |accept_invalid: bool| -> Agent {
+            let config: Config = with_timeouts!(
+                Config::builder()
+                    .http_status_as_error(false)
+                    .allow_non_standard_methods(true)
+                    .max_redirects(0)
+                    .redirect_auth_headers(RedirectAuthHeaders::SameHost)
+                    .tls_config(tls(accept_invalid))
             )
             .build();
+            config.new_agent()
+        };
+        let lax_agent = certs.is_active().then(|| build(true));
         DavClient {
             inner: Arc::new(Inner {
-                agent: config.new_agent(),
+                agent: build(false),
+                lax_agent,
+                certs,
                 auth,
                 retry,
                 rate_limit: RateLimitState::new(),
@@ -822,7 +835,7 @@ impl DavClient {
         let request = builder
             .body(payload)
             .map_err(|e| ureq::Error::Other(Box::new(std::io::Error::other(e))))?;
-        self.inner.agent.run(request)
+        self.inner.agent_for(req.url).run(request)
     }
 }
 
@@ -941,6 +954,25 @@ fn truncate(body: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::CertOverride;
+
+    #[test]
+    fn every_timeout_is_a_retryable_transport_error() {
+        for t in [
+            ureq::Timeout::Connect,
+            ureq::Timeout::SendRequest,
+            ureq::Timeout::SendBody,
+            ureq::Timeout::RecvResponse,
+            ureq::Timeout::RecvBody,
+        ] {
+            let err = map_ureq_error(ureq::Error::Timeout(t));
+            assert!(matches!(err, JmapError::Transport(_)), "{t:?} -> {err:?}");
+            assert!(
+                matches!(transport_disposition(&err), retry::Disposition::Retryable),
+                "{t:?} must be retried"
+            );
+        }
+    }
 
     #[test]
     fn client_constructs_cleanly() {
@@ -950,7 +982,7 @@ mod tests {
                 password: "p".into(),
             },
             RetryPolicy::new(3),
-            false,
+            CertOverride::none(),
         );
         assert_eq!(c.retries_observed(), 0);
         assert_eq!(c.retry_after_sleeps(), 0);
@@ -963,7 +995,7 @@ mod tests {
                 token: "abc".into(),
             },
             RetryPolicy::new(0),
-            false,
+            CertOverride::none(),
         );
         let logger = c.logger();
         assert_eq!(logger.level(), LEVEL_DEFAULT);

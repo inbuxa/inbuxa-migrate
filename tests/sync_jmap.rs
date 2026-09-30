@@ -16,6 +16,7 @@ use inbuxa_migrate::jmap::http::{Auth, HttpClient, RetryPolicy};
 use inbuxa_migrate::jmap::request::Request;
 use inbuxa_migrate::jmap::session::Session;
 use inbuxa_migrate::logging::Logger;
+use inbuxa_migrate::net::CertOverride;
 use inbuxa_migrate::sync::{self, CommonConfig, ConnectConfig, ExportConfig, ImportConfig};
 use integration::stalwart::shared as shared_stalwart;
 use rusqlite::Connection;
@@ -785,7 +786,11 @@ fn export_inlines_contact_and_event_blobs_instead_of_blob_ids() {
         assert_eq!(counts.failed, 0, "{name} had no failures: {counts:?}");
     }
 
-    let client = HttpClient::new(basic("test6"), RetryPolicy::new(5), true);
+    let client = HttpClient::new(
+        basic("test6"),
+        RetryPolicy::new(5),
+        CertOverride::for_url(true, base_url()),
+    );
     let session = Session::discover(&client, base_url()).expect("discover target session");
     let api = session.api_url.clone();
 
@@ -1047,7 +1052,11 @@ fn live_burst_exceeds_concurrent_requests_and_recovers() {
     let fx = seeder::provision(base_url()).expect("provision");
     let acc = fx.account("test1").expect("test1");
 
-    let client = HttpClient::new(basic("test1"), RetryPolicy::new(20), true);
+    let client = HttpClient::new(
+        basic("test1"),
+        RetryPolicy::new(20),
+        CertOverride::for_url(true, base_url()),
+    );
     let session = Session::discover(&client, base_url()).expect("discover session");
     let server_limits = session.core_limits().expect("core limits");
 
@@ -1148,7 +1157,7 @@ impl JmapSettingsGuard {
                 password: seeder::ADMIN_PASSWORD.to_owned(),
             },
             RetryPolicy::new(5),
-            true,
+            CertOverride::for_url(true, base_url()),
         );
         let session = Session::discover(&admin, base_url()).expect("admin discover");
         let admin_account = session
@@ -1269,7 +1278,11 @@ fn live_blob_quota_429_triggers_retry_after_then_succeeds() {
     );
     let _ttl_guard = JmapSettingsGuard::override_settings(updates);
 
-    let client = HttpClient::new(basic("test1"), RetryPolicy::new(20), true);
+    let client = HttpClient::new(
+        basic("test1"),
+        RetryPolicy::new(20),
+        CertOverride::for_url(true, base_url()),
+    );
     let session = Session::discover(&client, base_url()).expect("discover session");
     let limits = session.core_limits().expect("core limits");
     client.set_limits(&limits);
@@ -1346,7 +1359,11 @@ fn import_delta_propagates_email_keyword_change_via_changes() {
         .expect("an unflagged email exists in the archive")
     };
 
-    let client = HttpClient::new(basic("test1"), RetryPolicy::new(5), true);
+    let client = HttpClient::new(
+        basic("test1"),
+        RetryPolicy::new(5),
+        CertOverride::for_url(true, base_url()),
+    );
     let session = Session::discover(&client, base_url()).expect("session discovered");
     let account = account::resolve(
         &AccountSelector::Id(acc.account_id.clone()),

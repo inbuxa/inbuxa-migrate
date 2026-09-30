@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -10,9 +11,9 @@ use std::time::{Duration, Instant};
 use encodify::base64::{Base64, Padding, URL_SAFE};
 use serde_json::Value;
 use ureq::config::Config;
-use ureq::tls::{RootCerts, TlsConfig};
 
 use crate::exchange_graph::error::GraphError;
+use crate::net::{tls, with_timeouts};
 
 pub const SCOPES: &str =
     "offline_access User.Read Mail.Read MailboxSettings.Read Calendars.Read Contacts.Read";
@@ -78,29 +79,23 @@ pub struct AcquiredToken {
     pub name: Option<String>,
 }
 
-fn build_agent(allow_invalid_certs: bool) -> ureq::Agent {
-    let config: Config = Config::builder()
-        .http_status_as_error(false)
-        .tls_config(
-            TlsConfig::builder()
-                .unversioned_rustls_crypto_provider(std::sync::Arc::new(
-                    rustls::crypto::aws_lc_rs::default_provider(),
-                ))
-                .root_certs(RootCerts::PlatformVerifier)
-                .disable_verification(allow_invalid_certs)
-                .build(),
-        )
-        .build();
+fn build_agent() -> ureq::Agent {
+    let config: Config = with_timeouts!(
+        Config::builder()
+            .http_status_as_error(false)
+            .tls_config(tls(false))
+    )
+    .build();
     config.new_agent()
 }
 
-pub fn acquire(flow: &OAuthFlow, allow_invalid_certs: bool) -> Result<AcquiredToken, GraphError> {
+pub fn acquire(flow: &OAuthFlow) -> Result<AcquiredToken, GraphError> {
     match flow {
         OAuthFlow::PreAcquired { token } => Ok(token_from_string(token.clone())),
         OAuthFlow::DeviceCode {
             authority,
             client_id,
-        } => device_code_flow(authority, client_id, allow_invalid_certs),
+        } => device_code_flow(authority, client_id),
     }
 }
 
@@ -213,12 +208,8 @@ pub fn parse_token_response(status: u16, json: &Value) -> TokenResponse {
     }
 }
 
-fn device_code_flow(
-    authority: &str,
-    client_id: &str,
-    allow_invalid_certs: bool,
-) -> Result<AcquiredToken, GraphError> {
-    let agent = build_agent(allow_invalid_certs);
+fn device_code_flow(authority: &str, client_id: &str) -> Result<AcquiredToken, GraphError> {
+    let agent = build_agent();
     let body = form_encode(&[("client_id", client_id), ("scope", SCOPES)]);
     let endpoint = device_code_endpoint(authority);
     let mut resp = agent
@@ -294,9 +285,8 @@ pub fn refresh_access_token(
     authority: &str,
     client_id: &str,
     refresh_token: &str,
-    allow_invalid_certs: bool,
 ) -> Result<AcquiredToken, GraphError> {
-    let agent = build_agent(allow_invalid_certs);
+    let agent = build_agent();
     let body = form_encode(&[
         ("client_id", client_id),
         ("grant_type", "refresh_token"),
