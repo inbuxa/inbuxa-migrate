@@ -1,6 +1,26 @@
 # Change Log
 
-All notable changes to this project will be documented in this file. This project adheres to [Semantic Versioning](http://semver.org/).
+All notable changes to this project are recorded here. Versions are dates:
+release `v2026.9.30` is version `2026.9.30`.
+
+## [Unreleased] -- 2026.9.30
+
+### Changed
+- Renamed to inbuxa-migrate: the binary, the crate, and the credential
+  variables, now `INBUXA_MIGRATE_PASSWORD`, `INBUXA_MIGRATE_TOKEN`,
+  `INBUXA_MIGRATE_EWS_CLIENT_SECRET` and `INBUXA_MIGRATE_GRAPH_TOKEN`. The old
+  names are not read. Archives written by Vandelay are not read either.
+- Registry calls (`x:Account`, `x:Domain` and the other `x:` types) use the
+  capability the server advertises: `urn:inbuxa:jmap:registry` on inbuxa,
+  `urn:stalwart:jmap` on a Stalwart source. A server that advertises neither
+  gets a clear error instead of a request it never offered to accept.
+- Released as Linux archives for amd64 and arm64 on the Gitea release page,
+  with `SHA256SUMS`. The npm, Homebrew, shell and PowerShell installers and
+  the MSI are gone.
+
+---
+
+# Earlier releases (upstream Vandelay)
 
 ## [1.0.11] - 2026-09-28
 
