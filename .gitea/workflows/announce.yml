@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
+# SPDX-License-Identifier: Apache-2.0 OR MIT
+#
+# Announce each published release on the community forum, in this project's
+# Announcements category (coffey-labs/actions discourse-release; the repo ->
+# category map is its release-map.json). Safe to re-run: one topic per tag.
+name: announce
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  announce:
+    runs-on: light
+    steps:
+      - uses: coffey-labs/actions/discourse-release@baedbb0e89336e49dd5105a22f8ea4f712b453ad
+        with:
+          api-key: ${{ secrets.DISCOURSE_RELEASE_KEY }}
+          discord-webhook: ${{ secrets.DISCORD_RELEASE_WEBHOOK }}
