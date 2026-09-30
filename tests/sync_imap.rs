@@ -71,6 +71,7 @@ fn imap_basic_config(localpart: &str) -> ImapImportConfig {
         automap: true,
         include_deleted: false,
         fetch_batch: 256,
+        fetch_batch_bytes: inbuxa_migrate::sync::batch::DEFAULT_BATCH_BYTES,
         imap_connections: 4,
         allow_source_change: false,
     }

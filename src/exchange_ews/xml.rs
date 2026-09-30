@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -83,7 +84,12 @@ pub fn find_item_body(
     let mut out = String::with_capacity(512);
     out.push_str("<m:FindItem Traversal=\"");
     out.push_str(traversal.as_str());
-    out.push_str("\"><m:ItemShape><t:BaseShape>IdOnly</t:BaseShape></m:ItemShape>");
+    // item:Size lets GetItem batches be split by bytes as well as by count.
+    out.push_str(
+        "\"><m:ItemShape><t:BaseShape>IdOnly</t:BaseShape>\
+         <t:AdditionalProperties><t:FieldURI FieldURI=\"item:Size\"/></t:AdditionalProperties>\
+         </m:ItemShape>",
+    );
     out.push_str("<m:IndexedPageItemView MaxEntriesReturned=\"");
     out.push_str(&page_size.to_string());
     out.push_str("\" Offset=\"");
@@ -288,6 +294,15 @@ mod tests {
             Traversal::Deep,
         );
         assert!(body.contains("<t:DistinguishedFolderId Id=\"archiveroot\"/>"));
+    }
+
+    #[test]
+    fn find_item_asks_for_item_size() {
+        let folder = FolderId::new("FID", "FCK");
+        let body = find_item_body(FolderRef::Concrete(&folder), Traversal::Shallow, 0, 50);
+        assert!(body.contains(
+            "<t:BaseShape>IdOnly</t:BaseShape><t:AdditionalProperties><t:FieldURI FieldURI=\"item:Size\"/></t:AdditionalProperties></m:ItemShape>"
+        ));
     }
 
     #[test]

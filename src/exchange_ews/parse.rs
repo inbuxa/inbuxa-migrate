@@ -503,6 +503,8 @@ pub struct FindItemResponse {
 pub struct ItemEntry {
     pub element: String,
     pub id: ItemId,
+    /// `item:Size` in bytes, when the server returned it.
+    pub size: Option<u64>,
 }
 
 pub fn parse_find_item_response(body: &[u8]) -> Result<FindItemResponse, EwsError> {
@@ -511,6 +513,7 @@ pub fn parse_find_item_response(body: &[u8]) -> Result<FindItemResponse, EwsErro
     let mut buf = Vec::new();
     let mut out = FindItemResponse::default();
     let mut in_root = false;
+    let mut reading_size = false;
     loop {
         buf.clear();
         let (ns, ev) = xml.read_resolved_event_into(&mut buf)?;
@@ -531,7 +534,13 @@ pub fn parse_find_item_response(body: &[u8]) -> Result<FindItemResponse, EwsErro
                         out.items.push(ItemEntry {
                             element: local.clone(),
                             id: ItemId::default(),
+                            size: None,
                         });
+                    } else if local.eq_ignore_ascii_case("Size")
+                        && matches!(ev, Event::Start(_))
+                        && !out.items.is_empty()
+                    {
+                        reading_size = true;
                     } else if local.eq_ignore_ascii_case("ItemId")
                         && let Some(last) = out.items.last_mut()
                     {
@@ -539,10 +548,18 @@ pub fn parse_find_item_response(body: &[u8]) -> Result<FindItemResponse, EwsErro
                     }
                 }
             }
+            Event::Text(ref t) if reading_size => {
+                if let Some(last) = out.items.last_mut() {
+                    let text: &str = t;
+                    last.size = text.trim().parse().ok();
+                }
+            }
             Event::End(e) => {
                 let local = e.local_name().as_ref().to_owned();
                 if local.eq_ignore_ascii_case("RootFolder") {
                     in_root = false;
+                } else if local.eq_ignore_ascii_case("Size") {
+                    reading_size = false;
                 }
             }
             Event::Eof => break,

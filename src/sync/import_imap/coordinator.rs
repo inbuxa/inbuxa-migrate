@@ -50,6 +50,7 @@ pub(super) struct RunOpts {
     /// `WorkerPool::cancel_before`.
     generation: u64,
     fetch_batch: usize,
+    fetch_batch_bytes: u64,
     include_deleted: bool,
     logger: Logger,
 }
@@ -199,6 +200,8 @@ pub struct ImapImportConfig {
     pub automap: bool,
     pub include_deleted: bool,
     pub fetch_batch: usize,
+    /// Byte cap for one fetch chunk, by RFC822.SIZE; see `sync::batch`.
+    pub fetch_batch_bytes: u64,
     pub imap_connections: usize,
     pub allow_source_change: bool,
 }
@@ -404,6 +407,7 @@ fn run_into(
         source_id,
         generation: 0,
         fetch_batch: config.fetch_batch.max(1),
+        fetch_batch_bytes: config.fetch_batch_bytes.max(1),
         include_deleted: config.include_deleted,
         logger,
     };
@@ -706,6 +710,7 @@ fn reconcile_folder(
         source_id,
         generation,
         fetch_batch,
+        fetch_batch_bytes: _,
         include_deleted: _,
         logger,
     } = opts;
@@ -811,7 +816,13 @@ fn reconcile_folder(
                     folder.name
                 ))
             })?;
-        let batches: Vec<&[u32]> = chunks(&diff.new, fetch_batch);
+        let sizes = fetch_sizes(client, control_ctx, &folder.name, &diff.new, logger);
+        let batches: Vec<&[u32]> = crate::sync::batch::by_count_and_bytes(
+            &diff.new,
+            |uid| sizes.get(uid).copied().unwrap_or(0),
+            fetch_batch,
+            opts.fetch_batch_bytes,
+        );
         let n_batches = batches.len();
         for batch in &batches {
             pool.submit(FetchJob {
@@ -890,6 +901,47 @@ fn reconcile_folder(
         .unwrap_or_else(|_| String::from("1970-01-01T00:00:00Z"));
     db::imap_state::upsert(conn, source_id, &folder.name, uidvalidity, uidnext, &now)?;
     Ok(())
+}
+
+/// RFC822.SIZE for each of `uids`, fetched on the control connection in
+/// large metadata-only chunks, so the body fetch can be split by bytes.
+/// Best effort: a server that won't answer just leaves the chunks sized by
+/// count.
+fn fetch_sizes(
+    client: &mut ImapClient,
+    ctx: &ControlCtx,
+    folder: &str,
+    uids: &[u32],
+    logger: Logger,
+) -> HashMap<u32, u64> {
+    const SIZE_CHUNK: usize = 1000;
+    let mut sizes = HashMap::with_capacity(uids.len());
+    for chunk in chunks(uids, SIZE_CHUNK) {
+        let set = command::format_uid_set(chunk, true);
+        let cmd = command::uid_fetch(&set, &["UID", "RFC822.SIZE"]);
+        match call_with_retry(client, ctx, |c| c.run_collect(&cmd)) {
+            Ok(resp) => {
+                for u in &resp.untagged {
+                    if let Some(attrs) = fetch::extract(u)
+                        && let (Some(uid), Some(size)) = (attrs.uid, attrs.size)
+                    {
+                        sizes.insert(uid, size);
+                    }
+                }
+            }
+            Err(e) => {
+                log_at(
+                    logger,
+                    LEVEL_DEFAULT,
+                    &format!(
+                        "folder {folder:?}: message sizes unavailable ({e}); fetching in chunks by count only"
+                    ),
+                );
+                break;
+            }
+        }
+    }
+    sizes
 }
 
 fn wipe_folder_emails(
@@ -1026,6 +1078,7 @@ fn insert_single_message(
         source_id,
         generation: _,
         fetch_batch: _,
+        fetch_batch_bytes: _,
         include_deleted,
         logger,
     } = opts;
@@ -1104,6 +1157,7 @@ fn refresh_present_flags(
         source_id,
         generation: _,
         fetch_batch,
+        fetch_batch_bytes: _,
         include_deleted,
         logger: _,
     } = opts;

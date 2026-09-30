@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -95,42 +96,43 @@ fn reconcile_one_folder(
         to_fetch.push(id.clone());
     }
     if !to_fetch.is_empty() {
-        let failed_items = for_each_fetched_item(ctx, ItemShape::Message, &to_fetch, |msg| {
-            if !msg.success {
-                if matches!(
-                    msg.response_code,
-                    crate::exchange_ews::types::ResponseCode::ItemNotFound
-                ) {
-                    counts.skipped += 1;
-                } else {
-                    counts.failed += 1;
-                    ctx.logger.warn(&format!(
-                        "GetItem (message) error: {} {}",
-                        msg.response_code, msg.message_text
-                    ));
+        let failed_items =
+            for_each_fetched_item(ctx, ItemShape::Message, &to_fetch, &outcome.sizes, |msg| {
+                if !msg.success {
+                    if matches!(
+                        msg.response_code,
+                        crate::exchange_ews::types::ResponseCode::ItemNotFound
+                    ) {
+                        counts.skipped += 1;
+                    } else {
+                        counts.failed += 1;
+                        ctx.logger.warn(&format!(
+                            "GetItem (message) error: {} {}",
+                            msg.response_code, msg.message_text
+                        ));
+                    }
+                    return Ok(());
                 }
-                return Ok(());
-            }
-            let parsed = parse_message_item(&msg.inner_xml).map_err(Error::from)?;
-            if parsed.id.id.is_empty() {
-                counts.failed += 1;
-                return Ok(());
-            }
-            let existing = plan
-                .present_changed
-                .iter()
-                .find(|(id, _)| id.id == parsed.id.id)
-                .map(|(_, local)| *local);
-            apply_message(
-                conn,
-                ctx,
-                &parsed,
-                local_folder_id,
-                &folder.id,
-                existing,
-                counts,
-            )
-        })?;
+                let parsed = parse_message_item(&msg.inner_xml).map_err(Error::from)?;
+                if parsed.id.id.is_empty() {
+                    counts.failed += 1;
+                    return Ok(());
+                }
+                let existing = plan
+                    .present_changed
+                    .iter()
+                    .find(|(id, _)| id.id == parsed.id.id)
+                    .map(|(_, local)| *local);
+                apply_message(
+                    conn,
+                    ctx,
+                    &parsed,
+                    local_folder_id,
+                    &folder.id,
+                    existing,
+                    counts,
+                )
+            })?;
         counts.failed += failed_items;
     }
     delete_vanished(

@@ -864,6 +864,7 @@ fn for_each_fetched_item_streams_every_id_across_windows() {
         url: &url,
         source_id: 1,
         batch_size: 1,
+        batch_bytes: inbuxa_migrate::sync::batch::DEFAULT_BATCH_BYTES,
         attachment_batch: 1,
         connections: 2,
         use_syncfolderitems: false,
@@ -873,16 +874,84 @@ fn for_each_fetched_item_streams_every_id_across_windows() {
     let ids: Vec<ItemId> = (0..5).map(|i| ItemId::new(format!("I{i}"), "K")).collect();
 
     let mut delivered = 0usize;
-    let failed = for_each_fetched_item(&ctx, ItemShape::Message, &ids, |msg| {
-        assert!(msg.success);
-        delivered += 1;
-        Ok(())
-    })
-    .expect("streaming fetch should succeed");
+    let failed =
+        for_each_fetched_item(&ctx, ItemShape::Message, &ids, &Default::default(), |msg| {
+            assert!(msg.success);
+            delivered += 1;
+            Ok(())
+        })
+        .expect("streaming fetch should succeed");
 
     assert_eq!(delivered, 5, "every id must be delivered exactly once");
     assert_eq!(failed, 0);
     _m.assert();
+}
+
+#[test]
+fn getitem_batches_are_split_by_bytes_when_sizes_are_known() {
+    use inbuxa_migrate::logging::Logger;
+    use inbuxa_migrate::sync::import_exchange_ews::items::{ItemRunCtx, for_each_fetched_item};
+    use std::collections::HashMap;
+
+    let mut server = mockito::Server::new();
+    let url = format!("{}/EWS/Exchange.asmx", server.url());
+    let one_message = envelope(&format!(
+        "<m:GetItemResponse{NS}><m:ResponseMessages><m:GetItemResponseMessage ResponseClass=\"Success\">\
+         <m:ResponseCode>NoError</m:ResponseCode><m:Items><t:Message><t:ItemId Id=\"X\" ChangeKey=\"K\"/></t:Message></m:Items>\
+         </m:GetItemResponseMessage></m:ResponseMessages></m:GetItemResponse>"
+    ));
+    // Ten items fit one batch by count, but at 20 bytes each and a 30-byte
+    // cap every item goes alone: four GetItem calls, not one.
+    let m = server
+        .mock("POST", "/EWS/Exchange.asmx")
+        .with_status(200)
+        .with_header("content-type", TXT_XML)
+        .with_body(&one_message)
+        .expect(4)
+        .create();
+    let c = client(0);
+    let ctx = ItemRunCtx {
+        client: &c,
+        url: &url,
+        source_id: 1,
+        batch_size: 10,
+        batch_bytes: 30,
+        attachment_batch: 1,
+        connections: 2,
+        use_syncfolderitems: false,
+        sync_batch: 512,
+        logger: Logger::new(0),
+    };
+    let ids: Vec<ItemId> = (0..4).map(|i| ItemId::new(format!("I{i}"), "K")).collect();
+    let sizes: HashMap<String, u64> = ids.iter().map(|id| (id.id.clone(), 20)).collect();
+    let mut delivered = 0usize;
+    for_each_fetched_item(&ctx, ItemShape::Message, &ids, &sizes, |_| {
+        delivered += 1;
+        Ok(())
+    })
+    .expect("fetch");
+    assert_eq!(delivered, 4);
+    m.assert();
+}
+
+#[test]
+fn find_item_reports_each_items_size() {
+    use inbuxa_migrate::exchange_ews::parse::parse_find_item_response;
+    let body = envelope(&format!(
+        "<m:FindItemResponse{NS}><m:ResponseMessages><m:FindItemResponseMessage ResponseClass=\"Success\">\
+         <m:ResponseCode>NoError</m:ResponseCode>\
+         <m:RootFolder TotalItemsInView=\"2\" IncludesLastItemInRange=\"true\"><t:Items>\
+         <t:Message><t:ItemId Id=\"A\" ChangeKey=\"K\"/><t:Size>1234</t:Size></t:Message>\
+         <t:Message><t:ItemId Id=\"B\" ChangeKey=\"K\"/></t:Message>\
+         </t:Items></m:RootFolder></m:FindItemResponseMessage></m:ResponseMessages></m:FindItemResponse>"
+    ));
+    let r = parse_find_item_response(body.as_bytes()).unwrap();
+    assert_eq!(r.items.len(), 2);
+    assert_eq!(
+        (r.items[0].id.id.as_str(), r.items[0].size),
+        ("A", Some(1234))
+    );
+    assert_eq!((r.items[1].id.id.as_str(), r.items[1].size), ("B", None));
 }
 
 #[test]
