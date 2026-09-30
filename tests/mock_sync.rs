@@ -645,16 +645,14 @@ fn export_email_blob_not_found_reuploads_and_retries() {
             [],
         )
         .unwrap();
-        let raw = b"From: a@x\r\nSubject: dup\r\nMessage-ID: <dup-1@h>\r\n\r\nbody";
+        let raw = b"From: a@x\r\nSubject: stale\r\nMessage-ID: <stale-1@h>\r\n\r\nbody";
         let blob = db::blobs::intern_blob(&conn, raw).unwrap();
-        for _ in 0..2 {
-            conn.execute(
-                "INSERT INTO emails (blob_id,received_at,mailbox_ids,keywords)
-                 VALUES (?1,'2020-01-01T00:00:00Z','[1]','[]')",
-                rusqlite::params![blob],
-            )
-            .unwrap();
-        }
+        conn.execute(
+            "INSERT INTO emails (blob_id,received_at,mailbox_ids,keywords)
+             VALUES (?1,'2020-01-01T00:00:00Z','[1]','[]')",
+            rusqlite::params![blob],
+        )
+        .unwrap();
     }
 
     let _root = server.mock("GET", "/").with_status(404).create();
@@ -716,43 +714,30 @@ fn export_email_blob_not_found_reuploads_and_retries() {
         .expect(1)
         .create();
 
-    let imp_e1 = server
+    let imp_stale = server
         .mock("POST", api)
         .match_body(Matcher::AllOf(vec![
             Matcher::Regex("Email/import".into()),
             Matcher::Regex("e1".into()),
-        ]))
-        .with_body(
-            json!({"methodResponses":[["Email/import",{"accountId":"w",
-                "created":{"e1":{"id":"x1","blobId":"UP1","threadId":"t","size":10}}},"i"]]})
-            .to_string(),
-        )
-        .expect(1)
-        .create();
-    let imp_e2_stale = server
-        .mock("POST", api)
-        .match_body(Matcher::AllOf(vec![
-            Matcher::Regex("Email/import".into()),
-            Matcher::Regex("e2".into()),
             Matcher::Regex("UP1".into()),
         ]))
         .with_body(
             json!({"methodResponses":[["Email/import",{"accountId":"w",
-                "notCreated":{"e2":{"type":"blobNotFound"}}},"i"]]})
+                "notCreated":{"e1":{"type":"blobNotFound"}}},"i"]]})
             .to_string(),
         )
         .expect(1)
         .create();
-    let imp_e2_fresh = server
+    let imp_fresh = server
         .mock("POST", api)
         .match_body(Matcher::AllOf(vec![
             Matcher::Regex("Email/import".into()),
-            Matcher::Regex("e2".into()),
+            Matcher::Regex("e1".into()),
             Matcher::Regex("UP2".into()),
         ]))
         .with_body(
             json!({"methodResponses":[["Email/import",{"accountId":"w",
-                "created":{"e2":{"id":"x2","blobId":"UP2","threadId":"t","size":10}}},"i"]]})
+                "created":{"e1":{"id":"x1","blobId":"UP2","threadId":"t","size":10}}},"i"]]})
             .to_string(),
         )
         .expect(1)
@@ -789,16 +774,18 @@ fn export_email_blob_not_found_reuploads_and_retries() {
         .find(|(t, _)| *t == "Email")
         .map(|(_, c)| c.clone())
         .expect("email counts");
-    assert_eq!(email.created, 2, "both emails end up created");
+    assert_eq!(
+        email.created, 1,
+        "the stale blob is re-uploaded and the email created"
+    );
     assert_eq!(email.failed, 0, "blobNotFound self-heals, not a failure");
     assert_eq!(email.skipped, 0);
     assert!(!summary.any_failed());
 
     up1.assert();
     up2.assert();
-    imp_e1.assert();
-    imp_e2_stale.assert();
-    imp_e2_fresh.assert();
+    imp_stale.assert();
+    imp_fresh.assert();
     let _ = std::fs::remove_file(&archive);
 }
 
@@ -4457,5 +4444,260 @@ fn export_email_fatal_method_error_is_not_retried() {
         "a permanent method error must not consume retries"
     );
 
+    let _ = std::fs::remove_file(&archive);
+}
+
+/// Archive with an Inbox (1) and an Archive folder (2), and a target whose
+/// Mailbox/get returns both as T1 and T2, so no folder is created.
+fn two_folder_archive_and_target(
+    server: &mut mockito::Server,
+    archive: &Path,
+) -> Vec<mockito::Mock> {
+    let conn = db::init::open(archive).unwrap();
+    conn.execute(
+        "INSERT INTO mailboxes (id,name,parent_id,role) VALUES
+         (1,'Inbox',NULL,'inbox'), (2,'Archive',NULL,'archive')",
+        [],
+    )
+    .unwrap();
+    let base = server.url();
+    let api = "/jmap/api";
+    vec![
+        server.mock("GET", "/").with_status(404).create(),
+        server
+            .mock("GET", "/.well-known/jmap")
+            .with_body(session_body_full(&base))
+            .expect_at_least(1)
+            .create(),
+        anchor_terminator(server, api, "Mailbox"),
+        anchor_terminator(server, api, "Email"),
+        server
+            .mock("POST", api)
+            .match_body(Matcher::Regex("Mailbox/query".into()))
+            .with_body(
+                json!({"methodResponses":[["Mailbox/query",
+                    {"accountId":"w","ids":["T1","T2"]},"q"]]})
+                .to_string(),
+            )
+            .expect_at_least(1)
+            .create(),
+        server
+            .mock("POST", api)
+            .match_body(Matcher::Regex("Mailbox/get".into()))
+            .with_body(
+                json!({"methodResponses":[["Mailbox/get",{"accountId":"w","list":[
+                    {"id":"T1","name":"Inbox","role":"inbox","parentId":null,"myRights":{"mayDelete":true}},
+                    {"id":"T2","name":"Archive","role":"archive","parentId":null,"myRights":{"mayDelete":true}}
+                ],"notFound":[]},"g"]]})
+                .to_string(),
+            )
+            .expect_at_least(1)
+            .create(),
+    ]
+}
+
+fn insert_email_copy(archive: &Path, raw: &[u8], mailbox: i64) {
+    let conn = db::init::open(archive).unwrap();
+    let blob = db::blobs::intern_blob(&conn, raw).unwrap();
+    let mm = inbuxa_migrate::sync::keys::index_to_json(
+        &inbuxa_migrate::sync::emailmeta::email_index_from_blob(raw),
+    );
+    conn.execute(
+        "INSERT INTO emails (blob_id,received_at,mailbox_ids,keywords,message_match)
+         VALUES (?1,'2020-01-01T00:00:00Z',?2,'[]',?3)",
+        rusqlite::params![blob, format!("[{mailbox}]"), mm],
+    )
+    .unwrap();
+}
+
+const ONE_MESSAGE: &[u8] = b"From: a@x\r\nSubject: both\r\nMessage-ID: <both@h>\r\n\r\nbody";
+
+#[test]
+fn export_message_in_two_folders_lands_once_in_both() {
+    let mut server = mockito::Server::new();
+    let base = server.url();
+    let api = "/jmap/api";
+    let archive = tmp();
+    let _setup = two_folder_archive_and_target(&mut server, &archive);
+    insert_email_copy(&archive, ONE_MESSAGE, 1);
+    insert_email_copy(&archive, ONE_MESSAGE, 2);
+
+    let _eq = server
+        .mock("POST", api)
+        .match_body(Matcher::Regex("Email/query".into()))
+        .with_body(
+            json!({"methodResponses":[["Email/query",{"accountId":"w","ids":[]},"q"]]}).to_string(),
+        )
+        .expect(1)
+        .create();
+    let upload = server
+        .mock("POST", Matcher::Regex("/jmap/upload/".into()))
+        .with_body(json!({"blobId":"BUP"}).to_string())
+        .expect(1)
+        .create();
+    let import = server
+        .mock("POST", api)
+        .match_body(Matcher::AllOf(vec![
+            Matcher::Regex("Email/import".into()),
+            Matcher::Regex("\"T1\":true".into()),
+            Matcher::Regex("\"T2\":true".into()),
+        ]))
+        .with_body(
+            json!({"methodResponses":[["Email/import",{"accountId":"w",
+                "created":{"e1":{"id":"Y1","blobId":"BUP","threadId":"t","size":10}}},"i"]]})
+            .to_string(),
+        )
+        .expect(1)
+        .create();
+
+    let summary = sync::export::run(
+        common(&archive),
+        export_cfg_objects(&base, vec![ObjectType::Mailbox, ObjectType::Email]),
+    )
+    .expect("export");
+    let email = email_counts(&summary);
+    assert_eq!(email.created, 1, "one email, not one per folder");
+    assert_eq!(email.failed, 0);
+    upload.assert();
+    import.assert();
+    let _ = std::fs::remove_file(&archive);
+}
+
+#[test]
+fn export_resumed_adds_the_folders_a_matched_message_is_missing() {
+    let mut server = mockito::Server::new();
+    let base = server.url();
+    let api = "/jmap/api";
+    let archive = tmp();
+    let _setup = two_folder_archive_and_target(&mut server, &archive);
+    insert_email_copy(&archive, ONE_MESSAGE, 1);
+    insert_email_copy(&archive, ONE_MESSAGE, 2);
+
+    let _eq = server
+        .mock("POST", api)
+        .match_body(Matcher::Regex("Email/query".into()))
+        .with_body(
+            json!({"methodResponses":[["Email/query",{"accountId":"w","ids":["X1"]},"q"]]})
+                .to_string(),
+        )
+        .expect(1)
+        .create();
+    let _eg = server
+        .mock("POST", api)
+        .match_body(Matcher::Regex("Email/get".into()))
+        .with_body(
+            json!({"methodResponses":[["Email/get",{"accountId":"w","list":[
+                {"id":"X1","messageId":["both@h"],"size":ONE_MESSAGE.len(),"mailboxIds":{"T1":true}}
+            ],"notFound":[]},"g"]]})
+            .to_string(),
+        )
+        .expect(1)
+        .create();
+    let no_upload = server
+        .mock("POST", Matcher::Regex("/jmap/upload/".into()))
+        .expect(0)
+        .create();
+    let no_import = server
+        .mock("POST", api)
+        .match_body(Matcher::Regex("Email/import".into()))
+        .expect(0)
+        .create();
+    let set = server
+        .mock("POST", api)
+        .match_body(Matcher::AllOf(vec![
+            Matcher::Regex("Email/set".into()),
+            Matcher::Regex("\"mailboxIds/T2\":true".into()),
+        ]))
+        .with_body(
+            json!({"methodResponses":[["Email/set",{"accountId":"w","updated":{"X1":null}},"s"]]})
+                .to_string(),
+        )
+        .expect(1)
+        .create();
+
+    let summary = sync::export::run(
+        common(&archive),
+        export_cfg_objects(&base, vec![ObjectType::Mailbox, ObjectType::Email]),
+    )
+    .expect("export");
+    let email = email_counts(&summary);
+    assert_eq!(email.updated, 1, "the Archive membership is added");
+    assert_eq!(email.created, 0);
+    assert_eq!(email.failed, 0);
+    set.assert();
+    no_upload.assert();
+    no_import.assert();
+    let _ = std::fs::remove_file(&archive);
+}
+
+#[test]
+fn export_different_messages_sharing_a_message_id_are_not_merged() {
+    let mut server = mockito::Server::new();
+    let base = server.url();
+    let api = "/jmap/api";
+    let archive = tmp();
+    let _setup = two_folder_archive_and_target(&mut server, &archive);
+    let first: &[u8] = b"From: a@x\r\nSubject: one\r\nMessage-ID: <same@h>\r\n\r\nfirst body";
+    let second: &[u8] =
+        b"From: a@x\r\nSubject: one\r\nMessage-ID: <same@h>\r\n\r\na different, longer second body";
+    insert_email_copy(&archive, first, 1);
+    insert_email_copy(&archive, second, 1);
+
+    let _eq = server
+        .mock("POST", api)
+        .match_body(Matcher::Regex("Email/query".into()))
+        .with_body(
+            json!({"methodResponses":[["Email/query",{"accountId":"w","ids":["X1"]},"q"]]})
+                .to_string(),
+        )
+        .expect(1)
+        .create();
+    let _eg = server
+        .mock("POST", api)
+        .match_body(Matcher::Regex("Email/get".into()))
+        .with_body(
+            json!({"methodResponses":[["Email/get",{"accountId":"w","list":[
+                {"id":"X1","messageId":["same@h"],"size":second.len(),"mailboxIds":{"T1":true}}
+            ],"notFound":[]},"g"]]})
+            .to_string(),
+        )
+        .expect(1)
+        .create();
+    let upload = server
+        .mock("POST", Matcher::Regex("/jmap/upload/".into()))
+        .with_body(json!({"blobId":"BUP"}).to_string())
+        .expect(1)
+        .create();
+    let import = server
+        .mock("POST", api)
+        .match_body(Matcher::Regex("Email/import".into()))
+        .with_body(
+            json!({"methodResponses":[["Email/import",{"accountId":"w",
+                "created":{"e1":{"id":"Y1","blobId":"BUP","threadId":"t","size":10}}},"i"]]})
+            .to_string(),
+        )
+        .expect(1)
+        .create();
+    let no_set = server
+        .mock("POST", api)
+        .match_body(Matcher::Regex("Email/set".into()))
+        .expect(0)
+        .create();
+
+    let summary = sync::export::run(
+        common(&archive),
+        export_cfg_objects(&base, vec![ObjectType::Mailbox, ObjectType::Email]),
+    )
+    .expect("export");
+    let email = email_counts(&summary);
+    assert_eq!(
+        email.created, 1,
+        "the first message is not on the target yet"
+    );
+    assert_eq!(email.skipped, 1, "the second is, matched by size");
+    assert_eq!(email.failed, 0);
+    upload.assert();
+    import.assert();
+    no_set.assert();
     let _ = std::fs::remove_file(&archive);
 }

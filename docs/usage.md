@@ -196,6 +196,12 @@ By default it only adds and updates -- items that match are updated, the
 rest are created, and anything already on the target that the archive does
 not cover is left alone.
 
+Email is matched by Message-ID, or without one by sender, subject, date and
+recipients; where several messages share one, size decides. A message the
+source kept in several folders -- IMAP and Maildir copies, Gmail labels -- is
+written once, in all of them, and a later run adds any folder it is still
+missing on the target.
+
 `--prune` also deletes what is on the target and not in the archive. It asks
 first; `--yes` answers for it, for scripts. Export speaks JMAP only.
 
