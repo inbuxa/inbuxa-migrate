@@ -31,6 +31,7 @@ fn run() -> i32 {
         Err(err) => return fail(&err),
     };
 
+    let mut quiet_report = false;
     let (outcome, logger) = match action {
         Action::Import(common, config) => {
             let logger = common.logger;
@@ -75,6 +76,8 @@ fn run() -> i32 {
         }
         Action::Export(common, config) => {
             let logger = common.logger;
+            // A dry run prints its own plan; the counts below would repeat it.
+            quiet_report = common.dry_run;
             (
                 RunOutcome::from_result(sync::export::run(common, config)),
                 logger,
@@ -88,7 +91,9 @@ fn run() -> i32 {
         }
     };
 
-    report(&outcome.summary);
+    if !quiet_report {
+        report(&outcome.summary);
+    }
     match outcome.error {
         Some(err) => fail(&err),
         None => {

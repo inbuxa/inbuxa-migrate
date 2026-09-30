@@ -14,6 +14,7 @@ use super::sieve_names;
 use super::{Maps, Net, Plan, Uploader};
 use crate::error::Error;
 use crate::jmap::blobxfer;
+use crate::jmap::error::JmapError;
 use crate::jmap::request::{Request, check_method_error};
 use crate::logging::{LEVEL_DEFAULT, Logger};
 use crate::sync::import_jmap::mapping::BlobBytes;
@@ -72,6 +73,7 @@ pub fn reconcile(
         .map(|(_, n, _, _)| n.clone().unwrap_or_default());
 
     let mut updates: Vec<(String, Value)> = Vec::new();
+    let mut validator = Validator::default();
 
     for (local, name, is_active, blob_local) in &locals {
         let matched = name.as_ref().and_then(|n| target_by_name.get(n)).cloned();
@@ -90,6 +92,7 @@ pub fn reconcile(
             };
             match content_differs(net, &ours, target_blob.get(&id)) {
                 Ok(false) => counts.skipped += 1,
+                Ok(true) if !validator.accepts(net, label, &ours, counts, logger) => {}
                 Ok(true) => {
                     let blob = match &rewritten {
                         Some((bytes, renamed)) => {
@@ -116,6 +119,15 @@ pub fn reconcile(
             id
         } else {
             let cid = format!("c{local}");
+            if net.dry_run {
+                let ours = match &rewritten {
+                    Some((bytes, _)) => bytes.clone(),
+                    None => uploader.bytes(*blob_local).map_err(Error::from)?,
+                };
+                if !validator.accepts(net, label, &ours, counts, logger) {
+                    continue;
+                }
+            }
             if let Some((_, renamed)) = &rewritten {
                 log_renames(label, renamed, logger);
             }
@@ -215,6 +227,100 @@ pub fn reconcile(
         prune_candidates,
         active_sieve_target: active_target,
     })
+}
+
+/// Checks, in a dry run, that the target would accept each script about to
+/// be written. A script too large to upload, or one `SieveScript/validate`
+/// rejects, is counted as a failure and listed in the plan. A real run
+/// checks nothing here: the target's own answer to the write is the check.
+#[derive(Default)]
+struct Validator {
+    unsupported: bool,
+}
+
+impl Validator {
+    /// Whether the script may be written. Always true outside a dry run.
+    fn accepts(
+        &mut self,
+        net: &Net,
+        label: &str,
+        bytes: &[u8],
+        counts: &mut TypeCounts,
+        logger: &Logger,
+    ) -> bool {
+        if !net.dry_run || self.unsupported {
+            return true;
+        }
+        let why = match net.check_upload_size(bytes.len() as u64) {
+            Err(JmapError::SingleObjectTooLarge(m)) => Some(m),
+            Err(e) => Some(e.to_string()),
+            Ok(()) => match validate(net, bytes) {
+                Ok(why) => why,
+                Err(e) if is_unknown_method(&e) => {
+                    logger.warn("the target cannot validate Sieve scripts; they are not checked");
+                    self.unsupported = true;
+                    None
+                }
+                Err(e) => {
+                    logger.warn(&format!("SieveScript {label}: not validated: {e}"));
+                    None
+                }
+            },
+        };
+        match why {
+            None => true,
+            Some(why) => {
+                logger.warn(&format!(
+                    "SieveScript {label}: the target would reject it: {why}"
+                ));
+                net.would_fail(format!(
+                    "SieveScript \"{label}\": the target would reject it: {why}"
+                ));
+                counts.failed += 1;
+                false
+            }
+        }
+    }
+}
+
+/// Asks the target whether it would accept `bytes` as a Sieve script: `None`
+/// if it would, or its reason. The script goes up as a blob, which the
+/// server keeps only for a while; nothing is created in the account.
+fn validate(net: &Net, bytes: &[u8]) -> Result<Option<String>, JmapError> {
+    let blob = blobxfer::upload_bytes(
+        &net.client,
+        &net.session,
+        &net.account,
+        "application/sieve",
+        bytes,
+    )?;
+    let mut req = Request::new();
+    req.call(
+        "SieveScript/validate",
+        json!({ "accountId": net.account, "blobId": blob.0 }),
+        "v",
+    );
+    let resp = req.send(&net.client, &net.api)?;
+    let mr = resp.by_call_id("v")?;
+    check_method_error(mr)?;
+    Ok(match mr.args.get("error") {
+        None | Some(Value::Null) => None,
+        Some(err) => Some(
+            err.get("description")
+                .and_then(Value::as_str)
+                .or_else(|| err.get("type").and_then(Value::as_str))
+                .unwrap_or("rejected")
+                .to_owned(),
+        ),
+    })
+}
+
+fn is_unknown_method(e: &JmapError) -> bool {
+    match e {
+        JmapError::UnknownMethod => true,
+        JmapError::Method { error_type, .. } => error_type == "unknownMethod",
+        _ => false,
+    }
 }
 
 /// The target's `sieveExtensions`, from its Sieve account capability.

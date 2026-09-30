@@ -109,6 +109,7 @@ pub fn reconcile(
             Err(e) if e.aborts_run() => return Err(e),
             Err(e) => {
                 logger.warn(&format!("{} skipped: {e}", describe(ty, *local, uid)));
+                net.would_fail(format!("{}: {e}", describe(ty, *local, uid)));
                 counts.failed += 1;
                 continue;
             }

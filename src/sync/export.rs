@@ -91,8 +91,9 @@ impl<'a> Uploader<'a> {
             return Ok(id.clone());
         }
         let id = if self.net.dry_run {
-            let _exists = db::blobs::blob_bytes(self.conn, local_id)?
+            let len = db::blobs::blob_len(self.conn, local_id)?
                 .ok_or_else(|| JmapError::malformed(format!("blob local id {local_id} missing")))?;
+            self.net.check_upload_size(len)?;
             JmapId(format!("dryrun-blob-{local_id}"))
         } else {
             let bytes = db::blobs::blob_bytes(self.conn, local_id)?
@@ -123,6 +124,7 @@ impl<'a> Uploader<'a> {
             return Ok(id.clone());
         }
         let id = if self.net.dry_run {
+            self.net.check_upload_size(bytes.len() as u64)?;
             JmapId(format!("dryrun-blob-{local_id}"))
         } else {
             blobxfer::upload_bytes(
@@ -293,6 +295,35 @@ struct Net {
     /// Blobs uploaded at once: the server's `maxConcurrentUpload`, and no
     /// more than `--threads`.
     upload_workers: usize,
+    /// In a dry run, what would fail and why, for the plan.
+    would_fail: std::sync::Arc<Mutex<Vec<String>>>,
+}
+
+impl Net {
+    /// In a dry run, a blob of `len` bytes that the target would refuse:
+    /// over its `maxSizeUpload`.
+    fn check_upload_size(&self, len: u64) -> Result<(), JmapError> {
+        let cap = self.limits.max_size_upload;
+        if cap > 0 && len > cap {
+            return Err(JmapError::SingleObjectTooLarge(format!(
+                "{} is larger than the target accepts ({} maxSizeUpload)",
+                crate::inspect::format_bytes(len),
+                crate::inspect::format_bytes(cap)
+            )));
+        }
+        Ok(())
+    }
+
+    /// Notes, in a dry run, that `what` would fail and why. A real run
+    /// reports failures as they happen and keeps no list.
+    fn would_fail(&self, what: impl Into<String>) {
+        if self.dry_run {
+            self.would_fail
+                .lock()
+                .expect("would-fail list")
+                .push(what.into());
+        }
+    }
 }
 
 fn has_rows(conn: &Connection, ty: ObjectType) -> bool {
@@ -320,6 +351,7 @@ pub fn run(common: CommonConfig, config: ExportConfig) -> Result<Summary, Error>
         upload_workers: (connected.limits.max_concurrent_upload as usize)
             .min(ctx.common.threads)
             .max(1),
+        would_fail: Default::default(),
     };
 
     let work = work_list(&ctx.conn, &config, &connected, &logger);
@@ -386,8 +418,9 @@ pub fn run(common: CommonConfig, config: ExportConfig) -> Result<Summary, Error>
     }
 
     if ctx.dry_run() {
-        print_dry_run(&dry_rows, config.prune);
-        return Ok(Summary::default());
+        let would_fail = net.would_fail.lock().expect("would-fail list").clone();
+        print_plan(&summary, &dry_rows, &would_fail, config.prune);
+        return Ok(summary);
     }
     summary.retries_observed = ctx.client.retries_observed();
     summary.retry_after_sleeps = ctx.client.retry_after_sleeps();
@@ -593,21 +626,69 @@ fn sample(ids: &[String]) -> String {
     ids[..n].join(", ")
 }
 
-fn print_dry_run(rows: &[(&'static str, u64, u64, u64)], prune: bool) {
-    if prune {
-        println!(
-            "{:<22} {:>10} {:>10} {:>12}",
-            "TYPE", "CREATE", "MATCHED", "WOULD-DESTROY"
-        );
-        for (ty, c, m, d) in rows {
-            println!("{ty:<22} {c:>10} {m:>10} {d:>12}");
+/// The dry run's report, in plain words: per type, what would be created,
+/// updated, left as it is and would fail; then why each failure would happen.
+fn print_plan(
+    summary: &Summary,
+    dry_rows: &[(&'static str, u64, u64, u64)],
+    would_fail: &[String],
+    prune: bool,
+) {
+    print!("{}", plan_text(summary, dry_rows, would_fail, prune));
+}
+
+fn plan_text(
+    summary: &Summary,
+    dry_rows: &[(&'static str, u64, u64, u64)],
+    would_fail: &[String],
+    prune: bool,
+) -> String {
+    use crate::sync::progress::thousands;
+    let mut out = String::from("Dry run: nothing was written to the target. The plan:\n");
+    for (ty, c) in &summary.per_type {
+        let mut parts: Vec<String> = Vec::new();
+        if c.created > 0 {
+            parts.push(format!("{} to create", thousands(c.created)));
         }
-    } else {
-        println!("{:<22} {:>10} {:>10}", "TYPE", "CREATE", "MATCHED");
-        for (ty, c, m, _) in rows {
-            println!("{ty:<22} {c:>10} {m:>10}");
+        if c.updated > 0 {
+            parts.push(format!("{} to update", thousands(c.updated)));
+        }
+        if c.skipped > 0 {
+            parts.push(format!("{} unchanged", thousands(c.skipped)));
+        }
+        if c.failed > 0 {
+            parts.push(format!("{} would fail", thousands(c.failed)));
+        }
+        if prune {
+            let gone = dry_rows
+                .iter()
+                .find(|(t, ..)| t == ty)
+                .map(|(.., d)| *d)
+                .unwrap_or(0);
+            if gone > 0 {
+                parts.push(format!("{} to delete (--prune)", thousands(gone)));
+            }
+        }
+        if parts.is_empty() {
+            parts.push("nothing to do".to_owned());
+        }
+        out.push_str(&format!("  {ty:<20} {}\n", parts.join(", ")));
+    }
+    let failed: u64 = summary.per_type.iter().map(|(_, c)| c.failed).sum();
+    if failed > 0 {
+        out.push_str("Would fail:\n");
+        for line in would_fail {
+            out.push_str(&format!("  {line}\n"));
+        }
+        let unexplained = failed.saturating_sub(would_fail.len() as u64);
+        if unexplained > 0 {
+            out.push_str(&format!(
+                "  {} more; the warnings above say why\n",
+                thousands(unexplained)
+            ));
         }
     }
+    out
 }
 
 mod tree;
@@ -668,7 +749,7 @@ mod common {
         creates: Vec<(String, Value)>,
     ) -> Result<crate::jmap::request::SetOutcome, JmapError> {
         if net.dry_run {
-            return Ok(synthesize_dry_run_outcome(ty, &creates));
+            return Ok(synthesize_dry_run_outcome(net, ty, &creates));
         }
         let mut map = Map::new();
         for (cid, obj) in creates {
@@ -767,12 +848,35 @@ mod common {
         create_batch(net, ty, vec![(cid.to_owned(), wire)]).map_err(Error::from)
     }
 
+    /// Room left in a request for everything but the object itself: the
+    /// envelope, the method name and the arguments around it.
+    const REQUEST_OVERHEAD: u64 = 512;
+
+    /// What a dry run predicts for `creates`: each one created, except an
+    /// object too big to fit in one request under the target's
+    /// `maxSizeRequest`, which a real run could not send either.
     fn synthesize_dry_run_outcome(
+        net: &Net,
         ty: ObjectType,
         creates: &[(String, Value)],
     ) -> crate::jmap::request::SetOutcome {
         let mut outcome = crate::jmap::request::SetOutcome::default();
-        for (cid, _) in creates {
+        let cap = net.limits.max_size_request;
+        for (cid, obj) in creates {
+            let size = serde_json::to_vec(obj).map(|v| v.len() as u64).unwrap_or(0);
+            if cap > 0 && size + REQUEST_OVERHEAD > cap {
+                let why = format!(
+                    "{} is larger than one request to the target may be ({} maxSizeRequest)",
+                    crate::inspect::format_bytes(size),
+                    crate::inspect::format_bytes(cap)
+                );
+                net.would_fail(format!("{} {cid}: {why}", ty.jmap_name()));
+                outcome.not_created.push((
+                    cid.clone(),
+                    serde_json::json!({ "type": "tooLarge", "description": why }),
+                ));
+                continue;
+            }
             let synthetic = serde_json::json!({
                 "id": format!("dryrun-{}-{cid}", ty.jmap_name())
             });
@@ -825,5 +929,76 @@ mod pool_tests {
         assert_eq!(out, vec![8]);
         let out: Vec<i32> = run_bounded(&[], 4, || (), |_, j: &i32| *j);
         assert!(out.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod plan_tests {
+    use super::plan_text;
+    use crate::sync::{Summary, TypeCounts};
+
+    fn summary(rows: &[(&'static str, u64, u64, u64, u64)]) -> Summary {
+        Summary {
+            per_type: rows
+                .iter()
+                .map(|(t, created, updated, skipped, failed)| {
+                    (
+                        *t,
+                        TypeCounts {
+                            created: *created,
+                            updated: *updated,
+                            skipped: *skipped,
+                            failed: *failed,
+                            ..Default::default()
+                        },
+                    )
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn the_plan_reads_in_plain_words_and_says_why_things_would_fail() {
+        let s = summary(&[
+            ("Mailbox", 0, 0, 12, 0),
+            ("Email", 1200, 40, 5000, 2),
+            ("SieveScript", 0, 0, 0, 0),
+        ]);
+        let text = plan_text(
+            &s,
+            &[],
+            &["Email e7 (message-id <a@b>): 61 MB is larger than the target accepts".to_owned()],
+            false,
+        );
+        assert!(
+            text.starts_with("Dry run: nothing was written to the target."),
+            "{text}"
+        );
+        assert!(text.contains("Mailbox              12 unchanged"), "{text}");
+        assert!(
+            text.contains(
+                "Email                1,200 to create, 40 to update, 5,000 unchanged, 2 would fail"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("SieveScript          nothing to do"),
+            "{text}"
+        );
+        assert!(text.contains("Would fail:\n  Email e7"), "{text}");
+        assert!(
+            text.contains("1 more; the warnings above say why"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn prune_counts_appear_only_with_prune() {
+        let s = summary(&[("ContactCard", 0, 0, 3, 0)]);
+        let rows = [("ContactCard", 0, 3, 4)];
+        assert!(plan_text(&s, &rows, &[], true).contains("3 unchanged, 4 to delete (--prune)"));
+        assert!(!plan_text(&s, &rows, &[], false).contains("delete"));
+        assert!(!plan_text(&s, &rows, &[], false).contains("Would fail"));
     }
 }

@@ -246,6 +246,25 @@ failed.
 `--prune` also deletes what is on the target and not in the archive. It asks
 first; `--yes` answers for it, for scripts. Export speaks JMAP only.
 
+With `--dry-run`, export reads the target and writes nothing to the account.
+It prints the plan in plain words: for each type, how much would be
+created, updated, left unchanged or deleted, and what would fail. It
+catches in advance the failures a real run would hit:
+
+- a message larger than the target's `maxSizeUpload`;
+- a contact, event or other object too large for one request under its
+  `maxSizeRequest`, as happens when a photo is carried inline;
+- a Sieve script the target would reject. Each script that would be written
+  is checked with `SieveScript/validate`, after any `vnd.stalwart.*` names
+  are renamed, so what is checked is what would be uploaded. The check needs
+  the script as a blob, so the dry run uploads Sieve scripts, and only them;
+  a blob that nothing uses is discarded by the server. A target without
+  `SieveScript/validate` gets one warning, and its scripts are not checked.
+
+The plan lists each predicted failure and its reason. When anything would
+fail, the dry run exits 5, as the real run would, so a script can stop
+before it starts.
+
 ## Inspect
 
 ```
