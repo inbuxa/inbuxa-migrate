@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -140,7 +141,7 @@ pub struct InsertContext<'a> {
 }
 
 pub fn insert_new(
-    tx: &rusqlite::Transaction<'_>,
+    tx: &Connection,
     ctx: InsertContext<'_>,
     entry: &DiskEntry,
 ) -> Result<Option<i64>, InsertError> {
@@ -268,6 +269,10 @@ pub fn delete_vanished(
 
 const PROGRESS_TICK: u64 = 1000;
 
+/// New messages are committed in groups of this many rather than once per
+/// folder, so an interrupted import of a large folder keeps what it wrote.
+const COMMIT_EVERY: u64 = 500;
+
 pub fn apply_folder(
     conn: &mut Connection,
     ctx: InsertContext<'_>,
@@ -277,15 +282,23 @@ pub fn apply_folder(
 ) -> Result<(), crate::error::Error> {
     let stored_keywords =
         load_present_keywords(conn, ctx.source_id, ctx.folder).unwrap_or_default();
-    let tx = conn.transaction()?;
+    let mut tx = conn.transaction()?;
     let total_new = diff.new.len() as u64;
     let mut inserted: u64 = 0;
     for entry in &diff.new {
-        match insert_new(&tx, ctx, entry) {
+        // Each message in its own savepoint: one that fails part-way leaves
+        // nothing behind, not an email row without its id mapping.
+        let sp = tx.savepoint()?;
+        match insert_new(&sp, ctx, entry) {
             Ok(Some(_)) => {
+                sp.commit()?;
                 counts.created += 1;
                 counts.fetched += 1;
                 inserted += 1;
+                if inserted.is_multiple_of(COMMIT_EVERY) {
+                    tx.commit()?;
+                    tx = conn.transaction()?;
+                }
                 if inserted.is_multiple_of(PROGRESS_TICK)
                     && logger.enabled(crate::logging::LEVEL_PROGRESS)
                 {
@@ -296,9 +309,11 @@ pub fn apply_folder(
                 }
             }
             Ok(None) => {
+                sp.commit()?;
                 counts.skipped += 1;
             }
             Err(e) => {
+                drop(sp);
                 logger.warn(&format!(
                     "maildir {folder:?}/{name}: {e}",
                     folder = ctx.folder,
@@ -421,6 +436,43 @@ mod tests {
         for sub in ["cur", "new", "tmp"] {
             fs::create_dir_all(folder_path.join(sub)).unwrap();
         }
+    }
+
+    #[test]
+    fn a_message_that_cannot_be_read_is_recorded_and_the_rest_are_imported() {
+        let td = tempfile::tempdir().unwrap();
+        ensure_folder_skel(td.path());
+        write_maildir_message(td.path(), "cur", "1.M0.host:2,S", b"Subject: a\r\n\r\na");
+        let gone = write_maildir_message(td.path(), "cur", "2.M0.host:2,S", b"Subject: b\r\n\r\nb");
+        write_maildir_message(td.path(), "cur", "3.M0.host:2,S", b"Subject: c\r\n\r\nc");
+        let listing = list_folder(td.path()).unwrap();
+        // Gone between the listing and the read, as a file being moved is.
+        fs::remove_file(gone).unwrap();
+        let (mut c, sid) = fresh_archive();
+        let d = diff(listing.entries, &HashMap::new());
+        let ctx = InsertContext {
+            source_id: sid,
+            folder: "INBOX",
+            mailbox_local: 1,
+            include_deleted: false,
+        };
+        let mut counts = TypeCounts::default();
+        apply_folder(
+            &mut c,
+            ctx,
+            d,
+            &mut counts,
+            crate::logging::Logger::from_flags(false, 0),
+        )
+        .unwrap();
+        assert_eq!((counts.created, counts.failed), (2, 1));
+        let emails: i64 = c
+            .query_row("SELECT COUNT(*) FROM emails", [], |r| r.get(0))
+            .unwrap();
+        let mapped: i64 = c
+            .query_row("SELECT COUNT(*) FROM sync_id_maildir", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!((emails, mapped), (2, 2), "no email row without its mapping");
     }
 
     #[test]

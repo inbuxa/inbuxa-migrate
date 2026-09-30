@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -45,6 +46,9 @@ const EMAIL_TYPE: &str = "email";
 #[derive(Clone, Copy)]
 pub(super) struct RunOpts {
     source_id: i64,
+    /// The folder generation this folder's fetch jobs carry; see
+    /// `WorkerPool::cancel_before`.
+    generation: u64,
     fetch_batch: usize,
     include_deleted: bool,
     logger: Logger,
@@ -398,6 +402,7 @@ fn run_into(
 
     let opts = RunOpts {
         source_id,
+        generation: 0,
         fetch_batch: config.fetch_batch.max(1),
         include_deleted: config.include_deleted,
         logger,
@@ -422,13 +427,17 @@ fn run_into(
         if i > 0 {
             let _ = control_run_collect(&mut client, &control_ctx, "NOOP");
         }
+        // Each folder gets a new generation; anything still queued or in
+        // flight for an earlier folder is skipped or dropped from here on.
+        let generation = i as u64 + 1;
+        pool.cancel_before(generation);
         match reconcile_folder(
             &mut conn,
             &mut client,
             &control_ctx,
             &pool,
             folder,
-            opts,
+            RunOpts { generation, ..opts },
             &mut email_counts,
         ) {
             Ok(()) => {}
@@ -695,6 +704,7 @@ fn reconcile_folder(
 ) -> Result<(), Error> {
     let RunOpts {
         source_id,
+        generation,
         fetch_batch,
         include_deleted: _,
         logger,
@@ -805,6 +815,7 @@ fn reconcile_folder(
         let n_batches = batches.len();
         for batch in &batches {
             pool.submit(FetchJob {
+                generation,
                 folder: folder.name.clone(),
                 wire_name: folder.wire_name.clone(),
                 uidvalidity,
@@ -813,12 +824,16 @@ fn reconcile_folder(
         }
         let keepalive_interval = std::time::Duration::from_secs(45);
         let mut chunks_done: usize = 0;
-        let tx = conn.transaction()?;
         let target = FetchTarget {
             folder: folder.name.as_str(),
             uidvalidity,
             mailbox_local,
         };
+        // Committed after every chunk, not once per folder: each message is
+        // written whole (see `insert_recording_failure`), so what is
+        // committed is always consistent, a crash keeps it, and the next run
+        // fetches only the UIDs that are still missing.
+        let mut tx = conn.transaction()?;
         while chunks_done < n_batches {
             let event = loop {
                 match pool.recv_timeout(keepalive_interval) {
@@ -831,15 +846,15 @@ fn reconcile_folder(
                     }
                 }
             };
-            match event {
-                FetchEvent::Item { attrs, .. } => {
-                    insert_single_message(&tx, &target, &attrs, opts, counts)?;
+            match route_event(event, generation) {
+                Routed::Stale => {}
+                Routed::Item(attrs) => {
+                    insert_recording_failure(&mut tx, &target, &attrs, opts, counts)?;
                 }
-                FetchEvent::ChunkDone {
+                Routed::ChunkDone {
                     folder: chunk_folder,
-                    outcome,
                     uids_requested,
-                    ..
+                    outcome,
                 } => {
                     chunks_done += 1;
                     if let Err(e) = outcome {
@@ -850,6 +865,8 @@ fn reconcile_folder(
                         );
                         counts.failed += uids_requested.len() as u64;
                     }
+                    tx.commit()?;
+                    tx = conn.transaction()?;
                 }
             }
         }
@@ -920,6 +937,78 @@ fn delete_vanished_emails(
     Ok(())
 }
 
+pub(super) enum Routed {
+    /// From an earlier folder generation: dropped, never filed here.
+    Stale,
+    Item(fetch::FetchAttrs),
+    ChunkDone {
+        folder: String,
+        uids_requested: Vec<u32>,
+        outcome: Result<(), ImapError>,
+    },
+}
+
+pub(super) fn route_event(event: FetchEvent, generation: u64) -> Routed {
+    match event {
+        FetchEvent::Item {
+            generation: g,
+            attrs,
+            ..
+        } if g == generation => Routed::Item(attrs),
+        FetchEvent::ChunkDone {
+            generation: g,
+            folder,
+            uids_requested,
+            outcome,
+            ..
+        } if g == generation => Routed::ChunkDone {
+            folder,
+            uids_requested,
+            outcome,
+        },
+        _ => Routed::Stale,
+    }
+}
+
+/// Writes one message inside its own savepoint. A message that cannot be
+/// imported -- an INTERNALDATE that will not parse, say -- is rolled back
+/// on its own, logged with its folder and UID, counted as failed, and the
+/// folder carries on; it stays out of the UID map, so the next run tries
+/// it again. Archive and I/O errors still stop the run.
+fn insert_recording_failure(
+    tx: &mut rusqlite::Transaction<'_>,
+    target: &FetchTarget<'_>,
+    attrs: &fetch::FetchAttrs,
+    opts: RunOpts,
+    counts: &mut TypeCounts,
+) -> Result<(), Error> {
+    let sp = tx.savepoint()?;
+    match insert_single_message(&sp, target, attrs, opts, counts) {
+        Ok(()) => {
+            sp.commit()?;
+            Ok(())
+        }
+        Err(e) if e.aborts_run() => Err(e),
+        Err(e) => {
+            drop(sp);
+            log_at(
+                opts.logger,
+                LEVEL_DEFAULT,
+                &format!(
+                    "folder {:?} uid {}: not imported: {e}",
+                    target.folder,
+                    attrs
+                        .uid
+                        .map(|u| u.to_string())
+                        .unwrap_or_else(|| "?".to_owned())
+                ),
+            );
+            counts.failed += 1;
+            Ok(())
+        }
+    }
+}
+
 pub(super) struct FetchTarget<'a> {
     pub folder: &'a str,
     pub uidvalidity: u32,
@@ -927,7 +1016,7 @@ pub(super) struct FetchTarget<'a> {
 }
 
 fn insert_single_message(
-    tx: &rusqlite::Transaction<'_>,
+    tx: &Connection,
     target: &FetchTarget<'_>,
     attrs: &fetch::FetchAttrs,
     opts: RunOpts,
@@ -935,6 +1024,7 @@ fn insert_single_message(
 ) -> Result<(), Error> {
     let RunOpts {
         source_id,
+        generation: _,
         fetch_batch: _,
         include_deleted,
         logger,
@@ -1012,6 +1102,7 @@ fn refresh_present_flags(
 ) -> Result<u64, Error> {
     let RunOpts {
         source_id,
+        generation: _,
         fetch_batch,
         include_deleted,
         logger: _,
@@ -1236,6 +1327,36 @@ fn dry_run_summary(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn item(generation: u64, uid: u32) -> FetchEvent {
+        FetchEvent::Item {
+            generation,
+            folder: "F".to_owned(),
+            uidvalidity: 1,
+            attrs: fetch::FetchAttrs {
+                uid: Some(uid),
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn events_from_another_generation_are_dropped() {
+        assert!(matches!(route_event(item(1, 5), 2), Routed::Stale));
+        assert!(matches!(route_event(item(3, 5), 2), Routed::Stale));
+        match route_event(item(2, 5), 2) {
+            Routed::Item(attrs) => assert_eq!(attrs.uid, Some(5)),
+            _ => panic!("current-generation item was not routed"),
+        }
+        let stale_done = FetchEvent::ChunkDone {
+            generation: 1,
+            folder: "Old".to_owned(),
+            uidvalidity: 1,
+            uids_requested: vec![5],
+            outcome: Ok(()),
+        };
+        assert!(matches!(route_event(stale_done, 2), Routed::Stale));
+    }
 
     #[test]
     fn parse_endpoint_imaps_defaults_to_993() {

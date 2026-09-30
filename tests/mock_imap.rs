@@ -2005,3 +2005,133 @@ fn assert_name_selected_as_listed(listed: &'static str, stored: &str, archive_na
     );
     let _ = std::fs::remove_file(&archive);
 }
+
+fn write_fetch_message_dated(
+    conn: &mut MockConn,
+    seq: u32,
+    uid: u32,
+    internaldate: &str,
+    body: &[u8],
+) -> std::io::Result<()> {
+    let header = format!(
+        "* {seq} FETCH (UID {uid} FLAGS (\\Seen) INTERNALDATE \"{internaldate}\" RFC822.SIZE {} BODY[] {{{}}}\r\n",
+        body.len(),
+        body.len()
+    );
+    conn.write_raw(header.as_bytes())?;
+    conn.write_raw(body)?;
+    conn.write_raw(b")\r\n")
+}
+
+const BODY_A: &[u8] = b"From: a@b\r\nMessage-ID: <a@h>\r\nSubject: a\r\n\r\none";
+const BODY_B: &[u8] = b"From: a@b\r\nMessage-ID: <b@h>\r\nSubject: b\r\n\r\ntwo";
+const BODY_C: &[u8] = b"From: a@b\r\nMessage-ID: <c@h>\r\nSubject: c\r\n\r\nthree";
+
+fn email_counts(summary: &inbuxa_migrate::sync::Summary) -> inbuxa_migrate::sync::TypeCounts {
+    summary
+        .per_type
+        .iter()
+        .find(|(k, _)| *k == "email")
+        .map(|(_, c)| c.clone())
+        .expect("email counts")
+}
+
+#[test]
+fn a_message_that_will_not_import_is_recorded_and_the_folder_carries_on() {
+    let worker: Script = Box::new(|conn: &mut MockConn| -> std::io::Result<()> {
+        auth_preamble(conn, "IMAP4rev2 LITERAL+ AUTH=PLAIN")?;
+        let (tag, _) = conn.read_command()?;
+        write_select(conn, &tag, 12345, 4, 3)?;
+        let (tag, cmd) = conn.read_command()?;
+        assert!(cmd.starts_with("UID FETCH"), "got {cmd}");
+        write_fetch_message_dated(conn, 1, 1, "12-May-2025 10:00:00 +0000", BODY_A)?;
+        // No such month: this one cannot be imported.
+        write_fetch_message_dated(conn, 2, 2, "12-Mai-2025 10:00:00 +0000", BODY_B)?;
+        // Lower case is only untidy, and is imported.
+        write_fetch_message_dated(conn, 3, 3, "12-may-2025 10:00:00 +0000", BODY_C)?;
+        conn.write_line(&format!("{tag} OK"))?;
+        drain_until_close(conn);
+        Ok(())
+    });
+    let server = MockImap::start_scripts(vec![
+        control_script_one_folder(12345, 4, &[1, 2, 3]),
+        worker,
+    ]);
+    let archive = tempfile("bad-message");
+    let summary = run_import(&server, "alice", archive.clone(), |_| {}).expect("import");
+    let email = email_counts(&summary);
+    assert_eq!(email.created, 2, "summary={summary:?}");
+    assert_eq!(email.failed, 1, "summary={summary:?}");
+    let conn = Connection::open(&archive).unwrap();
+    db::init::apply_schema(&conn).unwrap();
+    assert_eq!(count(&conn, "emails"), 2);
+    let uids: Vec<i64> = conn
+        .prepare("SELECT uid FROM sync_id_imap WHERE type_name = 'email' ORDER BY uid")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        uids,
+        vec![1, 3],
+        "the failed message must stay out of the UID map"
+    );
+}
+
+#[test]
+fn a_failed_chunk_keeps_the_ones_before_it_and_a_rerun_fetches_only_what_is_missing() {
+    // The archive is opened with an exclusive lock, so the commit after each
+    // chunk cannot be watched from outside while a run is going; what can be
+    // checked is its effect. First run, one UID per chunk: chunk 1 arrives,
+    // chunk 2 fails the way a dying server would.
+    let archive = tempfile("chunk-commit");
+    let worker_1: Script = Box::new(|conn: &mut MockConn| -> std::io::Result<()> {
+        auth_preamble(conn, "IMAP4rev2 LITERAL+ AUTH=PLAIN")?;
+        let (tag, _) = conn.read_command()?;
+        write_select(conn, &tag, 777, 3, 2)?;
+        let (tag, cmd) = conn.read_command()?;
+        assert!(cmd.starts_with("UID FETCH 1 "), "got {cmd}");
+        write_fetch_message(conn, 1, 1, BODY_A)?;
+        conn.write_line(&format!("{tag} OK"))?;
+        let (tag, cmd) = conn.read_command()?;
+        assert!(cmd.starts_with("UID FETCH 2 "), "got {cmd}");
+        conn.write_line(&format!("{tag} NO [SERVERBUG] gone"))?;
+        drain_until_close(conn);
+        Ok(())
+    });
+    // Second run: only UID 2 is missing, so only UID 2 may be fetched.
+    let worker_2: Script = Box::new(|conn: &mut MockConn| -> std::io::Result<()> {
+        auth_preamble(conn, "IMAP4rev2 LITERAL+ AUTH=PLAIN")?;
+        let (tag, _) = conn.read_command()?;
+        write_select(conn, &tag, 777, 3, 2)?;
+        let (tag, cmd) = conn.read_command()?;
+        assert!(
+            cmd.starts_with("UID FETCH 2 "),
+            "rerun refetched more than UID 2: {cmd}"
+        );
+        write_fetch_message(conn, 2, 2, BODY_B)?;
+        conn.write_line(&format!("{tag} OK"))?;
+        drain_until_close(conn);
+        Ok(())
+    });
+    let server = MockImap::start_scripts(vec![
+        control_script_one_folder(777, 3, &[1, 2]),
+        worker_1,
+        control_script_one_folder(777, 3, &[1, 2]),
+        worker_2,
+    ]);
+
+    let first =
+        run_import(&server, "alice", archive.clone(), |c| c.fetch_batch = 1).expect("first run");
+    let e1 = email_counts(&first);
+    assert_eq!((e1.created, e1.failed), (1, 1), "first={first:?}");
+
+    let second =
+        run_import(&server, "alice", archive.clone(), |c| c.fetch_batch = 1).expect("second run");
+    let e2 = email_counts(&second);
+    assert_eq!((e2.created, e2.failed), (1, 0), "second={second:?}");
+    let conn = Connection::open(&archive).unwrap();
+    db::init::apply_schema(&conn).unwrap();
+    assert_eq!(count(&conn, "emails"), 2);
+}

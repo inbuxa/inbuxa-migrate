@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -58,20 +59,22 @@ pub fn imap_internaldate_to_rfc3339(s: &str) -> Result<String, Error> {
     Ok(out)
 }
 
+// RFC 3501 spells the month "Jan", but servers are not all that careful,
+// and a date is not worth losing a message over: match any case.
 fn month_to_num(s: &str) -> Result<u32, Error> {
-    let m = match s {
-        "Jan" => 1,
-        "Feb" => 2,
-        "Mar" => 3,
-        "Apr" => 4,
-        "May" => 5,
-        "Jun" => 6,
-        "Jul" => 7,
-        "Aug" => 8,
-        "Sep" => 9,
-        "Oct" => 10,
-        "Nov" => 11,
-        "Dec" => 12,
+    let m = match s.to_ascii_lowercase().as_str() {
+        "jan" => 1,
+        "feb" => 2,
+        "mar" => 3,
+        "apr" => 4,
+        "may" => 5,
+        "jun" => 6,
+        "jul" => 7,
+        "aug" => 8,
+        "sep" => 9,
+        "oct" => 10,
+        "nov" => 11,
+        "dec" => 12,
         other => return Err(Error::Partial(format!("INTERNALDATE month {other:?}"))),
     };
     Ok(m)
@@ -98,6 +101,22 @@ fn parse_zone(s: &str) -> Result<(char, u32, u32), Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn month_matches_any_case() {
+        for d in [
+            "12-May-2025 10:00:00 +0000",
+            "12-may-2025 10:00:00 +0000",
+            "12-MAY-2025 10:00:00 +0000",
+        ] {
+            assert_eq!(
+                imap_internaldate_to_rfc3339(d).unwrap(),
+                "2025-05-12T10:00:00Z",
+                "{d}"
+            );
+        }
+        assert!(imap_internaldate_to_rfc3339("12-Mai-2025 10:00:00 +0000").is_err());
+    }
 
     #[test]
     fn utc_zone_becomes_z() {
