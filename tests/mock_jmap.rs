@@ -17,6 +17,7 @@ use inbuxa_migrate::jmap::session::{Limits, Session};
 use inbuxa_migrate::jmap::wire::JmapId;
 use inbuxa_migrate::jmap::wire::identity::Identity;
 use inbuxa_migrate::jmap::wire::mailbox::Mailbox;
+use inbuxa_migrate::net::CertOverride;
 use serde_json::json;
 
 fn client(retries: u32) -> HttpClient {
@@ -26,7 +27,7 @@ fn client(retries: u32) -> HttpClient {
             password: "p".into(),
         },
         RetryPolicy::new(retries),
-        false,
+        CertOverride::none(),
     )
 }
 

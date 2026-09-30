@@ -20,6 +20,7 @@ use crate::sync::{CommonConfig, Summary, TypeCounts};
 
 use super::folders::{self, plan_folders};
 use super::{calendar, contacts, messages};
+use crate::net::CertOverride;
 
 #[derive(Debug, Clone)]
 pub enum EwsAuth {
@@ -45,8 +46,8 @@ pub fn run(common: CommonConfig, config: EwsImportConfig) -> Result<Summary, Err
     let logger = common.logger;
     let mut conn = db::init::open(&common.archive)?;
 
-    let (auth, acquired) = resolve_auth(&config.auth, common.allow_invalid_certs)?;
-    let discovery = run_autodiscover(&config, &acquired, common.allow_invalid_certs)?;
+    let (auth, acquired) = resolve_auth(&config.auth)?;
+    let (discovery, certs) = run_autodiscover(&config, &acquired, common.allow_invalid_certs)?;
     if logger.enabled(LEVEL_PROGRESS) {
         eprintln!(
             "EWS discovery: url={} source={:?}",
@@ -77,7 +78,7 @@ pub fn run(common: CommonConfig, config: EwsImportConfig) -> Result<Summary, Err
     let client = EwsClient::new(
         auth,
         RetryPolicy::new(common.max_retries),
-        common.allow_invalid_certs,
+        certs.narrowed_to(&discovery.ews_url),
     );
     client.set_logger(logger);
     if matches!(config.mailbox_kind, MailboxKind::PublicFolders) {
@@ -88,13 +89,7 @@ pub fn run(common: CommonConfig, config: EwsImportConfig) -> Result<Summary, Err
     if let EwsAuth::OAuth(OAuthFlow::ClientCredentials { .. }) = &config.auth {
         client.set_impersonation(Some(mailbox.clone()));
     }
-    spawn_token_refresher(
-        &client,
-        &config.auth,
-        &acquired,
-        common.allow_invalid_certs,
-        logger,
-    );
+    spawn_token_refresher(&client, &config.auth, &acquired, logger);
 
     let username = match &config.auth {
         EwsAuth::Basic { user, .. } => user.clone(),
@@ -211,10 +206,7 @@ fn run_dry(
     Ok(summary)
 }
 
-fn resolve_auth(
-    auth: &EwsAuth,
-    allow_invalid_certs: bool,
-) -> Result<(Auth, Option<AcquiredToken>), Error> {
+fn resolve_auth(auth: &EwsAuth) -> Result<(Auth, Option<AcquiredToken>), Error> {
     match auth {
         EwsAuth::Basic { user, password } => Ok((
             Auth::Basic {
@@ -224,12 +216,9 @@ fn resolve_auth(
             None,
         )),
         EwsAuth::Bearer { token } => {
-            let acq = acquire(
-                &OAuthFlow::PreAcquired {
-                    token: token.clone(),
-                },
-                allow_invalid_certs,
-            )
+            let acq = acquire(&OAuthFlow::PreAcquired {
+                token: token.clone(),
+            })
             .map_err(Error::from)?;
             Ok((
                 Auth::Bearer {
@@ -239,7 +228,7 @@ fn resolve_auth(
             ))
         }
         EwsAuth::OAuth(flow) => {
-            let acq = acquire(flow, allow_invalid_certs).map_err(Error::from)?;
+            let acq = acquire(flow).map_err(Error::from)?;
             Ok((
                 Auth::Bearer {
                     token: acq.access_token.clone(),
@@ -254,19 +243,36 @@ fn run_autodiscover(
     config: &EwsImportConfig,
     acquired: &Option<AcquiredToken>,
     allow_invalid_certs: bool,
-) -> Result<DiscoveryResult, Error> {
+) -> Result<(DiscoveryResult, CertOverride), Error> {
     let email = config
         .mailbox
         .clone()
         .or_else(|| acquired.as_ref().and_then(|a| a.upn.clone()));
-    let result = discover(
-        config.url.as_deref(),
-        email.as_deref(),
-        None,
-        allow_invalid_certs,
-    )
-    .map_err(Error::from)?;
-    Ok(result)
+    let certs =
+        autodiscover_cert_override(config.url.as_deref(), email.as_deref(), allow_invalid_certs);
+    let result =
+        discover(config.url.as_deref(), email.as_deref(), None, &certs).map_err(Error::from)?;
+    Ok((result, certs))
+}
+
+/// Where `--allow-invalid-certs` applies for an EWS import: the host of
+/// `--url` when one is given, and otherwise the mailbox's own domain, which is
+/// where on-premises Autodiscover looks. Microsoft's hosts are never covered.
+fn autodiscover_cert_override(
+    url: Option<&str>,
+    email: Option<&str>,
+    enabled: bool,
+) -> CertOverride {
+    match (
+        url,
+        email
+            .and_then(|e| e.rsplit_once('@'))
+            .map(|(_, domain)| domain),
+    ) {
+        (Some(url), _) => CertOverride::for_url(enabled, url),
+        (None, Some(domain)) => CertOverride::for_domain(enabled, domain),
+        (None, None) => CertOverride::none(),
+    }
 }
 
 fn resolve_mailbox(
@@ -370,7 +376,6 @@ fn spawn_token_refresher(
     client: &EwsClient,
     auth: &EwsAuth,
     initial: &Option<AcquiredToken>,
-    allow_invalid_certs: bool,
     logger: crate::logging::Logger,
 ) {
     let flow = match auth {
@@ -402,14 +407,9 @@ fn spawn_token_refresher(
                 let result = if let (Some(rt), OAuthFlow::DeviceCode { tenant, client_id }) =
                     (refresh_token.as_deref(), &flow)
                 {
-                    crate::exchange_ews::oauth::refresh_with_token(
-                        tenant,
-                        client_id,
-                        rt,
-                        allow_invalid_certs,
-                    )
+                    crate::exchange_ews::oauth::refresh_with_token(tenant, client_id, rt)
                 } else {
-                    crate::exchange_ews::oauth::acquire(&flow, allow_invalid_certs)
+                    crate::exchange_ews::oauth::acquire(&flow)
                 };
                 match result {
                     Ok(tok) => {
@@ -450,6 +450,26 @@ fn run_gc(conn: &Connection) -> Result<(), Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cert_override_follows_url_then_mailbox_domain() {
+        let by_url = autodiscover_cert_override(
+            Some("https://mail.corp.example/EWS/Exchange.asmx"),
+            Some("alice@corp.example"),
+            true,
+        );
+        assert!(by_url.allows("https://mail.corp.example/EWS/Exchange.asmx"));
+        assert!(!by_url.allows("https://autodiscover.corp.example/"));
+
+        let by_domain = autodiscover_cert_override(None, Some("alice@Corp.Example"), true);
+        assert!(
+            by_domain.allows("https://autodiscover.corp.example/autodiscover/autodiscover.xml")
+        );
+        assert!(!by_domain.allows("https://outlook.office365.com/EWS/Exchange.asmx"));
+
+        assert!(!autodiscover_cert_override(None, Some("alice@corp.example"), false).is_active());
+        assert!(!autodiscover_cert_override(None, None, true).is_active());
+    }
 
     #[test]
     fn synthetic_account_id_uses_smtp_for_primary() {

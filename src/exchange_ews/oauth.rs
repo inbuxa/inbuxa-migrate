@@ -47,7 +47,7 @@ pub enum OAuthFlow {
     },
 }
 
-pub fn acquire(flow: &OAuthFlow, allow_invalid_certs: bool) -> Result<AcquiredToken, EwsError> {
+pub fn acquire(flow: &OAuthFlow) -> Result<AcquiredToken, EwsError> {
     match flow {
         OAuthFlow::PreAcquired { token } => {
             let claims = decode_jwt_claims(token).unwrap_or_default();
@@ -64,10 +64,8 @@ pub fn acquire(flow: &OAuthFlow, allow_invalid_certs: bool) -> Result<AcquiredTo
             tenant,
             client_id,
             client_secret,
-        } => client_credentials(tenant, client_id, client_secret, allow_invalid_certs),
-        OAuthFlow::DeviceCode { tenant, client_id } => {
-            device_code_flow(tenant, client_id, allow_invalid_certs)
-        }
+        } => client_credentials(tenant, client_id, client_secret),
+        OAuthFlow::DeviceCode { tenant, client_id } => device_code_flow(tenant, client_id),
     }
 }
 
@@ -105,11 +103,11 @@ fn device_code_endpoint(tenant: &str) -> String {
     format!("https://login.microsoftonline.com/{tenant}/oauth2/v2.0/devicecode")
 }
 
-fn build_agent(allow_invalid_certs: bool) -> ureq::Agent {
+fn build_agent() -> ureq::Agent {
     let config: Config = with_timeouts!(
         Config::builder()
             .http_status_as_error(false)
-            .tls_config(tls(allow_invalid_certs))
+            .tls_config(tls(false))
     )
     .build();
     config.new_agent()
@@ -119,9 +117,8 @@ fn client_credentials(
     tenant: &str,
     client_id: &str,
     client_secret: &str,
-    allow_invalid_certs: bool,
 ) -> Result<AcquiredToken, EwsError> {
-    let agent = build_agent(allow_invalid_certs);
+    let agent = build_agent();
     let body = form_encode(&[
         ("client_id", client_id),
         ("client_secret", client_secret),
@@ -137,12 +134,8 @@ fn client_credentials(
     parse_token_response(resp)
 }
 
-fn device_code_flow(
-    tenant: &str,
-    client_id: &str,
-    allow_invalid_certs: bool,
-) -> Result<AcquiredToken, EwsError> {
-    let agent = build_agent(allow_invalid_certs);
+fn device_code_flow(tenant: &str, client_id: &str) -> Result<AcquiredToken, EwsError> {
+    let agent = build_agent();
     let body = form_encode(&[("client_id", client_id), ("scope", SCOPE_DELEGATED)]);
     let endpoint = device_code_endpoint(tenant);
     let mut resp = agent
@@ -274,9 +267,8 @@ pub fn refresh_with_token(
     tenant: &str,
     client_id: &str,
     refresh_token: &str,
-    allow_invalid_certs: bool,
 ) -> Result<AcquiredToken, EwsError> {
-    let agent = build_agent(allow_invalid_certs);
+    let agent = build_agent();
     let body = form_encode(&[
         ("client_id", client_id),
         ("grant_type", "refresh_token"),
@@ -361,12 +353,9 @@ mod tests {
     #[test]
     fn pre_acquired_flow_decodes_claims() {
         let token = make_jwt("t-2", "bob@x", 9999999999);
-        let acq = acquire(
-            &OAuthFlow::PreAcquired {
-                token: token.clone(),
-            },
-            false,
-        )
+        let acq = acquire(&OAuthFlow::PreAcquired {
+            token: token.clone(),
+        })
         .unwrap();
         assert_eq!(acq.access_token, token);
         assert_eq!(acq.tenant_id.as_deref(), Some("t-2"));

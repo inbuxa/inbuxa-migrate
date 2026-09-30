@@ -786,6 +786,7 @@ fn decode_set(mr: &MethodCall) -> SetOutcome {
 
 #[cfg(test)]
 mod tests {
+    use crate::net::CertOverride;
     use std::cell::Cell;
 
     use super::*;
@@ -798,7 +799,7 @@ mod tests {
                 token: "t".to_owned(),
             },
             RetryPolicy::new(max_retries),
-            false,
+            CertOverride::none(),
         )
     }
 

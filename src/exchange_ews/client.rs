@@ -21,13 +21,15 @@ use crate::exchange_ews::types::ServerVersion;
 use crate::jmap::http::{Auth, RetryPolicy, retry_after_header};
 use crate::jmap::retry::{self, Disposition, RateLimitState};
 use crate::logging::{HttpCall, LEVEL_BODIES, LEVEL_DEFAULT, LEVEL_PROGRESS, Logger};
-use crate::net::{tls, with_timeouts};
+use crate::net::{CertOverride, tls, with_timeouts};
 
 const MAX_BODY: u64 = 2 * 1024 * 1024 * 1024;
 const LONG_RETRY_THRESHOLD: Duration = Duration::from_secs(10);
 
 struct Inner {
     agent: Agent,
+    lax_agent: Option<Agent>,
+    certs: CertOverride,
     auth: Mutex<Auth>,
     impersonated_smtp: Mutex<Option<String>>,
     anchor_mailbox: Mutex<Option<String>>,
@@ -42,6 +44,17 @@ struct Inner {
     user_agent: String,
 }
 
+impl Inner {
+    /// The agent for `url`: the one that accepts invalid certificates only for
+    /// a host `--allow-invalid-certs` covers, and the verifying one otherwise.
+    fn agent_for(&self, url: &str) -> &Agent {
+        match &self.lax_agent {
+            Some(lax) if self.certs.allows(url) => lax,
+            _ => &self.agent,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct EwsClient {
     inner: Arc<Inner>,
@@ -54,17 +67,23 @@ pub struct SoapResponse {
 }
 
 impl EwsClient {
-    pub fn new(auth: Auth, retry: RetryPolicy, allow_invalid_certs: bool) -> EwsClient {
-        let config: Config = with_timeouts!(
-            Config::builder()
-                .http_status_as_error(false)
-                .redirect_auth_headers(RedirectAuthHeaders::SameHost)
-                .tls_config(tls(allow_invalid_certs))
-        )
-        .build();
+    pub fn new(auth: Auth, retry: RetryPolicy, certs: CertOverride) -> EwsClient {
+        let build = |accept_invalid: bool| -> Agent {
+            let config: Config = with_timeouts!(
+                Config::builder()
+                    .http_status_as_error(false)
+                    .redirect_auth_headers(RedirectAuthHeaders::SameHost)
+                    .tls_config(tls(accept_invalid))
+            )
+            .build();
+            config.new_agent()
+        };
+        let lax_agent = certs.is_active().then(|| build(true));
         EwsClient {
             inner: Arc::new(Inner {
-                agent: config.new_agent(),
+                agent: build(false),
+                lax_agent,
+                certs,
                 auth: Mutex::new(auth),
                 impersonated_smtp: Mutex::new(None),
                 anchor_mailbox: Mutex::new(None),
@@ -402,7 +421,7 @@ impl EwsClient {
     fn one_attempt(&self, url: &str, body: &str, action: &str) -> AttemptOutcome {
         let mut req = self
             .inner
-            .agent
+            .agent_for(url)
             .post(url)
             .header("Authorization", self.auth_header())
             .header("Content-Type", "text/xml; charset=utf-8")
@@ -529,6 +548,7 @@ fn truncate(body: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::CertOverride;
 
     #[test]
     fn every_timeout_is_a_transport_error_and_so_retried() {
@@ -550,7 +570,7 @@ mod tests {
         let c = EwsClient::new(
             Auth::Bearer { token: "t".into() },
             RetryPolicy::new(3),
-            false,
+            CertOverride::none(),
         );
         assert_eq!(c.server_version(), ServerVersion::Exchange2013Sp1);
         assert_eq!(c.retries_observed(), 0);
@@ -562,7 +582,7 @@ mod tests {
         let c = EwsClient::new(
             Auth::Bearer { token: "t".into() },
             RetryPolicy::new(0),
-            false,
+            CertOverride::none(),
         );
         c.set_server_version(ServerVersion::Exchange2019);
         assert_eq!(c.server_version(), ServerVersion::Exchange2019);
@@ -573,7 +593,7 @@ mod tests {
         let c = EwsClient::new(
             Auth::Bearer { token: "t".into() },
             RetryPolicy::new(0),
-            false,
+            CertOverride::none(),
         );
         c.set_anchor_mailbox(Some("alice@x".to_owned()));
         assert_eq!(c.anchor_header().as_deref(), Some("alice@x"));

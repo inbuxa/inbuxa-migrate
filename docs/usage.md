@@ -26,7 +26,26 @@ policy, TLS handling -- besides its own. The ones that matter most:
 | `-v`, `-vv`, `-vvv` | Increase log verbosity. |
 | `-q, --quiet` | Warnings and errors only. |
 | `--max-retries <N>` | Max retries per request on transient failures (default 5). |
-| `--allow-invalid-certs` | Accept self-signed / invalid TLS certs. |
+| `--allow-invalid-certs` | Accept a self-signed or otherwise invalid certificate from the server named by `--url` (see below). |
+
+### Invalid certificates
+
+`--allow-invalid-certs` is for a server with a self-signed certificate, and
+it applies to that server only: the host in `--url`, whether that is the
+source of an import or the target of an export. For an Exchange import with
+no `--url`, it covers the mailbox's own domain and the hosts under it, which
+is where on-premises Autodiscover looks, and then only the EWS endpoint
+Autodiscover finds.
+
+Every other host is verified as usual, including a host the server
+redirects to or names for its API, uploads or downloads. The Microsoft and
+Google sign-in and cloud endpoints are always verified, with or without the
+flag: a certificate that fails there is an attack or a broken network, never
+a server to trust.
+
+Connections time out rather than wait forever: 30 seconds to connect, 5
+minutes for the server's first byte, and 30 minutes to read a whole
+response. A timed-out request is retried like any other transient failure.
 
 Secrets come from the `INBUXA_MIGRATE_*` environment variables or a prompt;
 see [Credentials](../README.md#credentials). The command line takes them too,

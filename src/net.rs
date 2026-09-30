@@ -4,7 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
 
-//! Settings every HTTP agent shares: timeouts and TLS.
+//! Settings every HTTP agent shares: timeouts, TLS, and which hosts, if any,
+//! may present a certificate that does not verify.
 
 use std::time::Duration;
 
@@ -72,9 +73,193 @@ pub fn tls(accept_invalid: bool) -> TlsConfig {
         .build()
 }
 
+/// Hosts that are always verified, whatever `--allow-invalid-certs` says:
+/// the Microsoft and Google sign-in and cloud endpoints. A certificate that
+/// fails there is an attack or a broken network, never a self-signed server
+/// the user meant to trust. Matched as a suffix on a label boundary.
+const ALWAYS_VERIFY: &[&str] = &[
+    "microsoftonline.com",
+    "microsoftonline.us",
+    "microsoft.com",
+    "microsoft.us",
+    "office365.com",
+    "office.com",
+    "outlook.com",
+    "chinacloudapi.cn",
+    "partner.outlook.cn",
+    "google.com",
+    "googleapis.com",
+    "gmail.com",
+];
+
+/// Where `--allow-invalid-certs` applies: the host the user named, or, for
+/// Exchange Autodiscover without a `--url`, the mailbox's own domain and its
+/// subdomains. Everything else, including any host a server redirects or
+/// points to, is verified as usual.
+#[derive(Debug, Clone, Default)]
+pub struct CertOverride {
+    hosts: Vec<String>,
+    domains: Vec<String>,
+}
+
+impl CertOverride {
+    /// Verify everything.
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    /// When `enabled`, accept invalid certificates from the host of `url`.
+    pub fn for_url(enabled: bool, url: &str) -> Self {
+        match (enabled, host_of(url)) {
+            (true, Some(host)) if !always_verified(&host) => CertOverride {
+                hosts: vec![host],
+                domains: Vec::new(),
+            },
+            _ => Self::none(),
+        }
+    }
+
+    /// When `enabled`, accept invalid certificates from `domain` and every
+    /// host under it.
+    pub fn for_domain(enabled: bool, domain: &str) -> Self {
+        let domain = domain.trim_end_matches('.').to_ascii_lowercase();
+        if enabled && !domain.is_empty() && !always_verified(&domain) {
+            CertOverride {
+                hosts: Vec::new(),
+                domains: vec![domain],
+            }
+        } else {
+            Self::none()
+        }
+    }
+
+    /// The same override, narrowed to the host of `url`, if `url` is one this
+    /// override already covers. Used once Autodiscover has found the real
+    /// endpoint.
+    pub fn narrowed_to(&self, url: &str) -> Self {
+        match host_of(url) {
+            Some(host) if self.allows_host(&host) => CertOverride {
+                hosts: vec![host],
+                domains: Vec::new(),
+            },
+            _ => Self::none(),
+        }
+    }
+
+    /// Whether this override covers anything at all.
+    pub fn is_active(&self) -> bool {
+        !self.hosts.is_empty() || !self.domains.is_empty()
+    }
+
+    /// Whether a certificate that does not verify is accepted for `url`.
+    pub fn allows(&self, url: &str) -> bool {
+        host_of(url).is_some_and(|host| self.allows_host(&host))
+    }
+
+    fn allows_host(&self, host: &str) -> bool {
+        if always_verified(host) {
+            return false;
+        }
+        self.hosts.iter().any(|h| h == host)
+            || self
+                .domains
+                .iter()
+                .any(|d| host == d || host.ends_with(&format!(".{d}")))
+    }
+}
+
+fn host_of(url: &str) -> Option<String> {
+    let parsed = url::Url::parse(url).ok()?;
+    let host = parsed
+        .host_str()?
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    Some(
+        host.trim_start_matches('[')
+            .trim_end_matches(']')
+            .to_owned(),
+    )
+}
+
+fn always_verified(host: &str) -> bool {
+    ALWAYS_VERIFY
+        .iter()
+        .any(|d| host == *d || host.ends_with(&format!(".{d}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disabled_flag_covers_nothing() {
+        let o = CertOverride::for_url(false, "https://mail.example.test/jmap");
+        assert!(!o.is_active());
+        assert!(!o.allows("https://mail.example.test/jmap"));
+    }
+
+    #[test]
+    fn covers_only_the_named_host() {
+        let o = CertOverride::for_url(true, "https://Mail.Example.test:8443/.well-known/jmap");
+        assert!(o.is_active());
+        assert!(o.allows("https://mail.example.test/api"));
+        assert!(o.allows("https://MAIL.example.test:9000/upload"));
+        assert!(!o.allows("https://files.example.test/download"));
+        assert!(!o.allows("https://example.test/"));
+        assert!(!o.allows("https://mail.example.test.evil.test/"));
+    }
+
+    #[test]
+    fn sign_in_and_cloud_hosts_are_always_verified() {
+        for url in [
+            "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+            "https://graph.microsoft.com/v1.0/me",
+            "https://outlook.office365.com/EWS/Exchange.asmx",
+            "https://autodiscover-s.outlook.com/autodiscover/autodiscover.xml",
+            "https://oauth2.googleapis.com/token",
+            "https://accounts.google.com/o/oauth2/device/code",
+        ] {
+            let o = CertOverride::for_url(true, url);
+            assert!(!o.is_active(), "{url}");
+            assert!(!o.allows(url), "{url}");
+        }
+    }
+
+    #[test]
+    fn a_domain_covers_its_subdomains_but_not_look_alikes() {
+        let o = CertOverride::for_domain(true, "Corp.Example.");
+        assert!(o.allows("https://autodiscover.corp.example/autodiscover/autodiscover.xml"));
+        assert!(o.allows("https://corp.example/autodiscover/autodiscover.xml"));
+        assert!(!o.allows("https://notcorp.example/"));
+        assert!(!o.allows("https://corp.example.evil.test/"));
+    }
+
+    #[test]
+    fn a_domain_override_never_reaches_microsoft() {
+        let o = CertOverride::for_domain(true, "office365.com");
+        assert!(!o.is_active());
+        let corp = CertOverride::for_domain(true, "corp.example");
+        assert!(!corp.allows("https://outlook.office365.com/EWS/Exchange.asmx"));
+    }
+
+    #[test]
+    fn narrowing_keeps_only_a_covered_endpoint() {
+        let o = CertOverride::for_domain(true, "corp.example");
+        let inside = o.narrowed_to("https://mail.corp.example/EWS/Exchange.asmx");
+        assert!(inside.allows("https://mail.corp.example/EWS/Exchange.asmx"));
+        assert!(!inside.allows("https://autodiscover.corp.example/"));
+        let outside = o.narrowed_to("https://outlook.office365.com/EWS/Exchange.asmx");
+        assert!(!outside.is_active());
+    }
+
+    #[test]
+    fn ip_literals_are_matched() {
+        let o = CertOverride::for_url(true, "https://[::1]:8443/jmap");
+        assert!(o.allows("https://[::1]:9000/other"));
+        let v4 = CertOverride::for_url(true, "https://192.0.2.10/jmap");
+        assert!(v4.allows("https://192.0.2.10:8443/"));
+        assert!(!v4.allows("https://192.0.2.11/"));
+    }
 
     #[test]
     fn send_budget_grows_with_size() {

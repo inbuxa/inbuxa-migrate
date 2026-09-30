@@ -20,7 +20,7 @@ use crate::exchange_graph::retry::{HttpClass, classify_http_status, is_throttled
 use crate::jmap::http::{RetryPolicy, cross_host, retry_after_header};
 use crate::jmap::retry::{self, RateLimitState};
 use crate::logging::{HttpCall, LEVEL_BODIES, LEVEL_DEFAULT, LEVEL_PROGRESS, Logger};
-use crate::net::{tls, with_timeouts};
+use crate::net::{CertOverride, tls, with_timeouts};
 
 const MAX_BODY: u64 = 256 * 1024 * 1024;
 const LONG_RETRY_THRESHOLD: Duration = Duration::from_secs(10);
@@ -63,6 +63,8 @@ impl GraphResponse {
 
 struct Inner {
     agent: Agent,
+    lax_agent: Option<Agent>,
+    certs: CertOverride,
     bearer: Mutex<String>,
     retry: RetryPolicy,
     rate_limit: RateLimitState,
@@ -71,6 +73,17 @@ struct Inner {
     retry_after_sleeps: AtomicU64,
     requests_total: AtomicU64,
     user_agent: String,
+}
+
+impl Inner {
+    /// The agent for `url`: the one that accepts invalid certificates only for
+    /// a host `--allow-invalid-certs` covers, and the verifying one otherwise.
+    fn agent_for(&self, url: &str) -> &Agent {
+        match &self.lax_agent {
+            Some(lax) if self.certs.allows(url) => lax,
+            _ => &self.agent,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -89,17 +102,23 @@ enum Attempt {
 }
 
 impl GraphClient {
-    pub fn new(bearer: String, retry: RetryPolicy, allow_invalid_certs: bool) -> GraphClient {
-        let config: Config = with_timeouts!(
-            Config::builder()
-                .http_status_as_error(false)
-                .redirect_auth_headers(RedirectAuthHeaders::SameHost)
-                .tls_config(tls(allow_invalid_certs))
-        )
-        .build();
+    pub fn new(bearer: String, retry: RetryPolicy, certs: CertOverride) -> GraphClient {
+        let build = |accept_invalid: bool| -> Agent {
+            let config: Config = with_timeouts!(
+                Config::builder()
+                    .http_status_as_error(false)
+                    .redirect_auth_headers(RedirectAuthHeaders::SameHost)
+                    .tls_config(tls(accept_invalid))
+            )
+            .build();
+            config.new_agent()
+        };
+        let lax_agent = certs.is_active().then(|| build(true));
         GraphClient {
             inner: Arc::new(Inner {
-                agent: config.new_agent(),
+                agent: build(false),
+                lax_agent,
+                certs,
                 bearer: Mutex::new(bearer),
                 retry,
                 rate_limit: RateLimitState::new(),
@@ -304,7 +323,7 @@ impl GraphClient {
         extra_prefer: &[&str],
     ) -> Attempt {
         let mut req = match method {
-            "GET" => self.inner.agent.get(url),
+            "GET" => self.inner.agent_for(url).get(url),
             other => {
                 return Attempt::Transport(GraphError::Connect(format!(
                     "unsupported method {other} (graph importer is read-only)"
@@ -468,6 +487,7 @@ fn format_retry_wait(d: Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::CertOverride;
 
     #[test]
     fn every_timeout_is_a_transport_error_and_so_retried() {
@@ -486,7 +506,11 @@ mod tests {
 
     #[test]
     fn defaults_construct() {
-        let c = GraphClient::new("token".to_owned(), RetryPolicy::new(3), false);
+        let c = GraphClient::new(
+            "token".to_owned(),
+            RetryPolicy::new(3),
+            CertOverride::none(),
+        );
         assert_eq!(c.retries_observed(), 0);
         assert_eq!(c.retry_after_sleeps(), 0);
         assert_eq!(c.requests_observed(), 0);
@@ -495,7 +519,7 @@ mod tests {
 
     #[test]
     fn bearer_can_be_swapped_at_runtime() {
-        let c = GraphClient::new("old".to_owned(), RetryPolicy::new(0), false);
+        let c = GraphClient::new("old".to_owned(), RetryPolicy::new(0), CertOverride::none());
         c.set_bearer("new".to_owned());
         assert_eq!(c.auth_header(), "Bearer new");
     }

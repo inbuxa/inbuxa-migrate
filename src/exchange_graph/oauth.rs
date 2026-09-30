@@ -79,23 +79,23 @@ pub struct AcquiredToken {
     pub name: Option<String>,
 }
 
-fn build_agent(allow_invalid_certs: bool) -> ureq::Agent {
+fn build_agent() -> ureq::Agent {
     let config: Config = with_timeouts!(
         Config::builder()
             .http_status_as_error(false)
-            .tls_config(tls(allow_invalid_certs))
+            .tls_config(tls(false))
     )
     .build();
     config.new_agent()
 }
 
-pub fn acquire(flow: &OAuthFlow, allow_invalid_certs: bool) -> Result<AcquiredToken, GraphError> {
+pub fn acquire(flow: &OAuthFlow) -> Result<AcquiredToken, GraphError> {
     match flow {
         OAuthFlow::PreAcquired { token } => Ok(token_from_string(token.clone())),
         OAuthFlow::DeviceCode {
             authority,
             client_id,
-        } => device_code_flow(authority, client_id, allow_invalid_certs),
+        } => device_code_flow(authority, client_id),
     }
 }
 
@@ -208,12 +208,8 @@ pub fn parse_token_response(status: u16, json: &Value) -> TokenResponse {
     }
 }
 
-fn device_code_flow(
-    authority: &str,
-    client_id: &str,
-    allow_invalid_certs: bool,
-) -> Result<AcquiredToken, GraphError> {
-    let agent = build_agent(allow_invalid_certs);
+fn device_code_flow(authority: &str, client_id: &str) -> Result<AcquiredToken, GraphError> {
+    let agent = build_agent();
     let body = form_encode(&[("client_id", client_id), ("scope", SCOPES)]);
     let endpoint = device_code_endpoint(authority);
     let mut resp = agent
@@ -289,9 +285,8 @@ pub fn refresh_access_token(
     authority: &str,
     client_id: &str,
     refresh_token: &str,
-    allow_invalid_certs: bool,
 ) -> Result<AcquiredToken, GraphError> {
-    let agent = build_agent(allow_invalid_certs);
+    let agent = build_agent();
     let body = form_encode(&[
         ("client_id", client_id),
         ("grant_type", "refresh_token"),

@@ -122,7 +122,10 @@ struct GlobalArgs {
     )]
     max_retries: u32,
 
-    #[arg(long, help = "Accept self-signed / invalid TLS certificates")]
+    #[arg(
+        long,
+        help = "Accept an invalid TLS certificate from the --url host only; sign-in endpoints are always verified"
+    )]
     allow_invalid_certs: bool,
 }
 

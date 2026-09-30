@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -41,6 +42,7 @@ pub(crate) fn table_name(ty: ObjectType) -> &'static str {
 use crate::jmap::account::AccountSelector;
 use crate::jmap::http::{Auth, HttpClient, RetryPolicy};
 use crate::logging::Logger;
+use crate::net::CertOverride;
 use crate::types::ObjectType;
 
 pub struct CommonConfig {
@@ -134,7 +136,7 @@ impl Context {
         let client = HttpClient::new(
             connect.auth.clone(),
             RetryPolicy::new(common.max_retries),
-            common.allow_invalid_certs,
+            CertOverride::for_url(common.allow_invalid_certs, &connect.url),
         );
         Ok(Context {
             conn,

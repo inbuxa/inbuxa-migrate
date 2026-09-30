@@ -21,7 +21,7 @@ use crate::jmap::inflight::{Permit, Semaphore};
 use crate::jmap::retry::{self, Disposition, RateLimitState};
 use crate::jmap::session::Limits;
 use crate::logging::{HttpCall, LEVEL_BODIES, LEVEL_DEFAULT, LEVEL_PROGRESS, Logger};
-use crate::net::{send_body_budget, tls, with_timeouts};
+use crate::net::{CertOverride, send_body_budget, tls, with_timeouts};
 
 const MAX_BODY: u64 = 512 * 1024 * 1024;
 
@@ -70,9 +70,10 @@ impl RetryPolicy {
 
 struct Inner {
     agent: Agent,
+    lax_agent: Option<Agent>,
+    certs: CertOverride,
     auth: Auth,
     retry: RetryPolicy,
-    allow_invalid_certs: bool,
     rate_limit: RateLimitState,
     log_level: AtomicU8,
     requests_gate: OnceLock<Semaphore>,
@@ -80,6 +81,17 @@ struct Inner {
     max_upload_bytes: AtomicU64,
     retries_total: AtomicU64,
     retry_after_sleeps: AtomicU64,
+}
+
+impl Inner {
+    /// The agent for `url`: the one that accepts invalid certificates only for
+    /// a host `--allow-invalid-certs` covers, and the verifying one otherwise.
+    fn agent_for(&self, url: &str) -> &Agent {
+        match &self.lax_agent {
+            Some(lax) if self.certs.allows(url) => lax,
+            _ => &self.agent,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -104,20 +116,25 @@ enum Attempt {
 }
 
 impl HttpClient {
-    pub fn new(auth: Auth, retry: RetryPolicy, allow_invalid_certs: bool) -> Self {
-        let config: Config = with_timeouts!(
-            Config::builder()
-                .http_status_as_error(false)
-                .redirect_auth_headers(RedirectAuthHeaders::SameHost)
-                .tls_config(tls(allow_invalid_certs))
-        )
-        .build();
+    pub fn new(auth: Auth, retry: RetryPolicy, certs: CertOverride) -> Self {
+        let build = |accept_invalid: bool| -> Agent {
+            let config: Config = with_timeouts!(
+                Config::builder()
+                    .http_status_as_error(false)
+                    .redirect_auth_headers(RedirectAuthHeaders::SameHost)
+                    .tls_config(tls(accept_invalid))
+            )
+            .build();
+            config.new_agent()
+        };
+        let lax_agent = certs.is_active().then(|| build(true));
         HttpClient {
             inner: Arc::new(Inner {
-                agent: config.new_agent(),
+                agent: build(false),
+                lax_agent,
+                certs,
                 auth,
                 retry,
-                allow_invalid_certs,
                 rate_limit: RateLimitState::new(),
                 log_level: AtomicU8::new(LEVEL_DEFAULT),
                 requests_gate: OnceLock::new(),
@@ -165,10 +182,6 @@ impl HttpClient {
 
     pub fn retry(&self) -> &RetryPolicy {
         &self.inner.retry
-    }
-
-    pub fn allow_invalid_certs(&self) -> bool {
-        self.inner.allow_invalid_certs
     }
 
     pub fn rate_limit(&self) -> &RateLimitState {
@@ -381,7 +394,7 @@ impl HttpClient {
         let result = if let Some(payload) = body {
             let mut req = self
                 .inner
-                .agent
+                .agent_for(url)
                 .post(url)
                 .header("Authorization", auth)
                 .header("Accept", "application/json");
@@ -396,7 +409,7 @@ impl HttpClient {
                 .send(payload)
         } else {
             self.inner
-                .agent
+                .agent_for(url)
                 .get(url)
                 .header("Authorization", auth)
                 .header("Accept", "application/json")
@@ -644,6 +657,48 @@ pub fn format_retry_wait(d: Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::CertOverride;
+
+    #[test]
+    fn invalid_certificates_are_accepted_only_for_the_named_host() {
+        let client = HttpClient::new(
+            Auth::Bearer {
+                token: "t".to_owned(),
+            },
+            RetryPolicy::new(0),
+            CertOverride::for_url(true, "https://mail.example.test/.well-known/jmap"),
+        );
+        let inner = &client.inner;
+        let lax = inner.lax_agent.as_ref().expect("a relaxed agent exists");
+        assert!(std::ptr::eq(
+            inner.agent_for("https://mail.example.test/api"),
+            lax
+        ));
+        assert!(std::ptr::eq(
+            inner.agent_for("https://files.example.test/upload"),
+            &inner.agent
+        ));
+        assert!(std::ptr::eq(
+            inner.agent_for("https://login.microsoftonline.com/common/oauth2/v2.0/token"),
+            &inner.agent
+        ));
+    }
+
+    #[test]
+    fn without_the_flag_there_is_no_relaxed_agent() {
+        let client = HttpClient::new(
+            Auth::Bearer {
+                token: "t".to_owned(),
+            },
+            RetryPolicy::new(0),
+            CertOverride::for_url(false, "https://mail.example.test/"),
+        );
+        assert!(client.inner.lax_agent.is_none());
+        assert!(std::ptr::eq(
+            client.inner.agent_for("https://mail.example.test/api"),
+            &client.inner.agent
+        ));
+    }
 
     #[test]
     fn every_timeout_is_a_retryable_transport_error() {
@@ -729,7 +784,7 @@ mod tests {
                 token: "t".to_owned(),
             },
             RetryPolicy::new(0),
-            false,
+            CertOverride::none(),
         );
         let body = br#"{"type":"urn:ietf:params:jmap:error:limit","limit":"someServerLimit"}"#;
         assert!(matches!(
@@ -745,7 +800,7 @@ mod tests {
                 token: "t".to_owned(),
             },
             RetryPolicy::new(0),
-            false,
+            CertOverride::none(),
         );
         let body = br#"{"type":"urn:ietf:params:jmap:error:limit","limit":"maxSizeRequest"}"#;
         assert!(matches!(
@@ -761,7 +816,7 @@ mod tests {
                 token: "t".to_owned(),
             },
             RetryPolicy::new(0),
-            false,
+            CertOverride::none(),
         );
         let body =
             br#"{"type":"urn:ietf:params:jmap:error:limit","limit":"maxConcurrentRequests"}"#;
@@ -790,7 +845,7 @@ mod tests {
                 token: "t".to_owned(),
             },
             RetryPolicy::new(0),
-            false,
+            CertOverride::none(),
         );
         client.set_limits(&limits_with(10, 4, 4));
         let err = client
@@ -814,7 +869,7 @@ mod tests {
                 token: "t".to_owned(),
             },
             RetryPolicy::new(0),
-            false,
+            CertOverride::none(),
         );
         client.set_limits(&limits_with(1024, 4, 4));
         let err = client
@@ -866,7 +921,7 @@ mod tests {
                 token: "t".to_owned(),
             },
             RetryPolicy::new(0),
-            false,
+            CertOverride::none(),
         );
         assert_eq!(client.retries_observed(), 0);
         assert_eq!(client.retry_after_sleeps(), 0);

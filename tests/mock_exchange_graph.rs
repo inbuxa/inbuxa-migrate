@@ -21,6 +21,7 @@ use inbuxa_migrate::exchange_graph::recurrence::convert_patterned_recurrence;
 use inbuxa_migrate::exchange_graph::retry::{HttpClass, classify_http_status};
 use inbuxa_migrate::exchange_graph::types::Surfaces;
 use inbuxa_migrate::jmap::http::RetryPolicy;
+use inbuxa_migrate::net::CertOverride;
 use mockito::{Matcher, Server};
 use serde_json::json;
 
@@ -28,7 +29,11 @@ static INIT: Once = Once::new();
 
 fn client_with_retries(retries: u32) -> GraphClient {
     INIT.call_once(|| {});
-    GraphClient::new("BEARER".to_owned(), RetryPolicy::new(retries), false)
+    GraphClient::new(
+        "BEARER".to_owned(),
+        RetryPolicy::new(retries),
+        CertOverride::none(),
+    )
 }
 
 fn url_message_collection(server_url: &str, folder: &str, top: usize) -> String {
@@ -1681,7 +1686,11 @@ fn graph_client_retries_after_401_when_bearer_is_swapped() {
         .expect(1)
         .create();
     let base = server.url();
-    let client = GraphClient::new("EXPIRED".to_owned(), RetryPolicy::new(0), false);
+    let client = GraphClient::new(
+        "EXPIRED".to_owned(),
+        RetryPolicy::new(0),
+        CertOverride::none(),
+    );
     let url = format!("{base}/me");
     let err = client.get(&url, Accept::Json).unwrap_err();
     assert!(matches!(err, GraphError::Auth(_)));
