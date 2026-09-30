@@ -279,6 +279,14 @@ struct ImapImportArgs {
 
     #[arg(
         long,
+        value_name = "MIB",
+        default_value_t = 32,
+        help = "Most message bytes per body FETCH chunk, in MiB (one larger message goes alone)"
+    )]
+    fetch_batch_mib: u64,
+
+    #[arg(
+        long,
         value_name = "N",
         help = "Parallel IMAP connections for body fetch (1..=8). Default: min(--threads, 8)"
     )]
@@ -804,6 +812,7 @@ fn resolve_imap_import(args: ImapImportArgs) -> Result<Action, Error> {
             automap: !args.noautomap,
             include_deleted: args.include_deleted,
             fetch_batch: args.fetch_batch,
+            fetch_batch_bytes: args.fetch_batch_mib.max(1).saturating_mul(1024 * 1024),
             imap_connections,
             allow_source_change: args.allow_source_change,
         },
@@ -975,6 +984,14 @@ pub struct ExchangeEwsImportArgs {
 
     #[arg(
         long,
+        value_name = "MIB",
+        default_value_t = 32,
+        help = "Most item bytes per GetItem batch, in MiB (one larger item goes alone)"
+    )]
+    ews_getitem_batch_mib: u64,
+
+    #[arg(
+        long,
         value_name = "N",
         default_value_t = 5,
         help = "AttachmentIds per GetAttachment batch"
@@ -1022,6 +1039,10 @@ fn resolve_exchange_ews_import(args: ExchangeEwsImportArgs) -> Result<Action, Er
         auth,
         ews_connections,
         getitem_batch: args.ews_getitem_batch.max(1),
+        getitem_batch_bytes: args
+            .ews_getitem_batch_mib
+            .max(1)
+            .saturating_mul(1024 * 1024),
         attachment_batch: args.ews_attachment_batch.max(1),
         use_syncfolderitems: !args.ews_no_syncfolderitems,
         allow_source_change: args.allow_source_change,

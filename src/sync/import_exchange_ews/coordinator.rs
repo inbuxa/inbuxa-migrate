@@ -37,6 +37,8 @@ pub struct EwsImportConfig {
     pub auth: EwsAuth,
     pub ews_connections: usize,
     pub getitem_batch: usize,
+    /// Byte cap for one GetItem batch; see `sync::batch`.
+    pub getitem_batch_bytes: u64,
     pub attachment_batch: usize,
     pub use_syncfolderitems: bool,
     pub allow_source_change: bool,
@@ -147,6 +149,7 @@ pub fn run(common: CommonConfig, config: EwsImportConfig) -> Result<Summary, Err
         url: &session_url,
         source_id,
         batch_size: config.getitem_batch.max(1),
+        batch_bytes: config.getitem_batch_bytes.max(1),
         attachment_batch: config.attachment_batch.max(1),
         connections: config.ews_connections.clamp(1, 8),
         use_syncfolderitems: config.use_syncfolderitems,

@@ -83,13 +83,21 @@ inbuxa-migrate import imap \
   [--include <REGEX>...] [--exclude <REGEX>...] [--exclude-special <ROLE>...] \
   [--folder <NAME>...] [--subscribed-only] [--noautomap] \
   [--include-deleted] [--allow-cleartext] [--compress] \
-  [--fetch-batch <N>] [--imap-connections <1..8>] \
+  [--fetch-batch <N>] [--fetch-batch-mib <MIB>] [--imap-connections <1..8>] \
   <ARCHIVE>
 ```
 
 Imports mail, and only mail, from any IMAP server. Folders are chosen with
 `--include` and `--exclude` patterns, or by exact name with `--folder`, but
 not both. `--exclude-special` drops folders by SPECIAL-USE role.
+
+Messages are fetched in chunks of at most `--fetch-batch` messages and
+`--fetch-batch-mib` MiB (32 by default), so a folder of large attachments is
+fetched a little at a time, like any other. A single message larger than the
+cap is fetched on its own. Each chunk is written to the archive as it
+arrives: an interrupted import keeps what it fetched, and the next run picks
+up from there. A message that can't be imported is reported with its folder
+and UID, and the rest of the folder carries on.
 
 ### CalDAV
 
@@ -170,7 +178,8 @@ inbuxa-migrate import exchange-ews \
   (--auth-basic <USER> [--auth-password <PASS>] \
    | --auth-bearer [TOKEN] [--ews-tenant <T> --ews-client-id <ID> \
                             (--ews-device-code | --ews-client-secret <SECRET>)]) \
-  [--ews-connections <1..8>] [--ews-getitem-batch <N>] [--ews-attachment-batch <N>] \
+  [--ews-connections <1..8>] [--ews-getitem-batch <N>] [--ews-getitem-batch-mib <MIB>] \
+  [--ews-attachment-batch <N>] \
   [--ews-no-syncfolderitems] \
   <ARCHIVE>
 ```
@@ -179,6 +188,12 @@ Imports a mailbox from an on-premises Exchange Server through EWS. Without
 `--url` it uses Autodiscover, and then needs `--mailbox`. It signs in with
 Basic, with a bearer token acquired beforehand, with OAuth's interactive
 device-code flow, or with app-only client credentials.
+
+Items are fetched in GetItem batches of at most `--ews-getitem-batch` items
+and `--ews-getitem-batch-mib` MiB (32 by default), `--ews-connections` at a
+time. The byte cap applies where Exchange reports each item's size, which it
+does on a full listing; items found through an incremental sync are batched
+by count.
 
 For Exchange Online, use `exchange-graph` instead. Microsoft is retiring EWS in Exchange Online: from October 1, 2026 it is blocked unless a tenant administrator sets `EwsEnabled` to `True` and adds the client id to `EwsAllowedAppIDs`, and on April 1, 2027 it is switched off for every tenant. On-premises Exchange Server is not affected.
 

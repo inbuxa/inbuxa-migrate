@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 
-use crossbeam_channel::{Receiver, Sender, unbounded};
+use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
 
 use crate::imap::client::{ConnectMode, ImapClient};
 use crate::imap::command;
@@ -75,7 +75,11 @@ impl WorkerPool {
     pub fn start(args: WorkerArgs, pool_size: usize) -> Result<WorkerPool, ImapError> {
         let size = pool_size.clamp(1, HARD_CAP);
         let (job_tx, job_rx) = unbounded::<FetchJob>();
-        let (event_tx, event_rx) = unbounded::<FetchEvent>();
+        // Jobs are only lists of UIDs, but each event carries a whole message:
+        // bounding the events stops fast workers from running ahead of the
+        // single archive writer, so memory holds at most a couple of messages
+        // per worker rather than whole folders.
+        let (event_tx, event_rx) = bounded::<FetchEvent>(size * 2);
         let mut handles = Vec::with_capacity(size);
         let args = Arc::new(args);
         let cancel_below = Arc::new(AtomicU64::new(0));

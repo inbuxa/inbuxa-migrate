@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 John Coffey <johnellis@linux.com>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -23,6 +24,8 @@ pub struct ItemRunCtx<'a> {
     pub url: &'a str,
     pub source_id: i64,
     pub batch_size: usize,
+    /// Byte cap for one GetItem batch, by `item:Size`; see `sync::batch`.
+    pub batch_bytes: u64,
     pub attachment_batch: usize,
     pub connections: usize,
     pub use_syncfolderitems: bool,
@@ -47,6 +50,9 @@ pub struct EnumeratedItem {
 pub struct EnumerationOutcome {
     pub items: Vec<EnumeratedItem>,
     pub mode: EnumerationMode,
+    /// `item:Size` by item id, where the listing gave it. FindItem does;
+    /// SyncFolderItems changes do not, and are batched by count.
+    pub sizes: HashMap<String, u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -70,9 +76,10 @@ pub fn enumerate_folder(
     {
         return Ok(outcome);
     }
-    enumerate_via_find_item(ctx, folder).map(|items| EnumerationOutcome {
+    enumerate_via_find_item(ctx, folder).map(|(items, sizes)| EnumerationOutcome {
         items,
         mode: EnumerationMode::Full,
+        sizes,
     })
 }
 
@@ -151,14 +158,16 @@ fn try_sync_folder_items(
             deletions,
             new_sync_state: sync_state,
         },
+        sizes: HashMap::new(),
     }))
 }
 
 fn enumerate_via_find_item(
     ctx: &ItemRunCtx<'_>,
     folder: &FolderId,
-) -> Result<Vec<EnumeratedItem>, EwsError> {
+) -> Result<(Vec<EnumeratedItem>, HashMap<String, u64>), EwsError> {
     let mut items: Vec<EnumeratedItem> = Vec::new();
+    let mut sizes: HashMap<String, u64> = HashMap::new();
     let mut offset: u32 = 0;
     let page_size: u32 = 500;
     loop {
@@ -172,6 +181,9 @@ fn enumerate_via_find_item(
         let parsed = parse_find_item_response(&resp.body)?;
         let returned = parsed.items.len() as u32;
         for entry in parsed.items {
+            if let Some(size) = entry.size {
+                sizes.insert(entry.id.id.clone(), size);
+            }
             items.push(EnumeratedItem {
                 element: entry.element,
                 id: entry.id,
@@ -188,7 +200,7 @@ fn enumerate_via_find_item(
             break;
         }
     }
-    Ok(items)
+    Ok((items, sizes))
 }
 
 #[derive(Debug, Clone)]
@@ -285,13 +297,22 @@ pub fn get_items(
     shape: ItemShape,
     ids: &[ItemId],
 ) -> Result<GetItemBatchOutcome, EwsError> {
-    let batch = ctx.batch_size.max(1);
+    let batches: Vec<&[ItemId]> = ids.chunks(ctx.batch_size.max(1)).collect();
+    get_item_batches(ctx, shape, &batches)
+}
+
+/// Runs one GetItem per batch, over up to `connections` connections.
+pub fn get_item_batches(
+    ctx: &ItemRunCtx<'_>,
+    shape: ItemShape,
+    batches: &[&[ItemId]],
+) -> Result<GetItemBatchOutcome, EwsError> {
     let workers = ctx.connections.clamp(1, 8);
     let version = ctx.client.server_version();
     let mut failed_items: u64 = 0;
-    if workers <= 1 || ids.len() <= batch {
+    if workers <= 1 || batches.len() <= 1 {
         let mut all = Vec::new();
-        for chunk in ids.chunks(batch) {
+        for chunk in batches.iter().copied() {
             let body = get_item_body(shape, chunk, version);
             match ctx.client.call(ctx.url, "GetItem", &body) {
                 Ok(resp) => match parse_response_messages(&resp.body, "GetItemResponseMessage") {
@@ -337,7 +358,7 @@ pub fn get_items(
             (n, result)
         });
     let mut submitted = 0usize;
-    for chunk in ids.chunks(batch) {
+    for chunk in batches {
         pool.submit(chunk.to_vec());
         submitted += 1;
     }
@@ -368,21 +389,31 @@ pub fn get_items(
     })
 }
 
+/// Fetches `ids` in GetItem batches of at most `batch_size` items and, where
+/// `sizes` knows them, at most `batch_bytes` bytes, and hands each message
+/// on as it is parsed. Batches are fetched `connections` at a time, so what
+/// is held at once is about `batch_bytes` per connection, however large the
+/// mail is.
 pub fn for_each_fetched_item<F>(
     ctx: &ItemRunCtx<'_>,
     shape: ItemShape,
     ids: &[ItemId],
+    sizes: &HashMap<String, u64>,
     mut on_message: F,
 ) -> Result<u64, Error>
 where
     F: FnMut(crate::exchange_ews::parse::ResponseMessage) -> Result<(), Error>,
 {
-    let batch = ctx.batch_size.max(1);
     let workers = ctx.connections.clamp(1, 8);
-    let window = batch.saturating_mul(workers).max(batch);
+    let batches = crate::sync::batch::by_count_and_bytes(
+        ids,
+        |id| sizes.get(&id.id).copied().unwrap_or(0),
+        ctx.batch_size,
+        ctx.batch_bytes,
+    );
     let mut failed_items = 0u64;
-    for win in ids.chunks(window) {
-        let outcome = get_items(ctx, shape, win).map_err(Error::from)?;
+    for win in batches.chunks(workers) {
+        let outcome = get_item_batches(ctx, shape, win).map_err(Error::from)?;
         failed_items = failed_items.saturating_add(outcome.failed_items);
         for msg in outcome.messages {
             on_message(msg)?;
@@ -444,6 +475,7 @@ mod tests {
                 element: "Message".to_owned(),
                 id: ItemId::new("A", "ck-2"),
             }],
+            sizes: HashMap::new(),
             mode: EnumerationMode::Delta {
                 deletions: vec!["Z".to_owned()],
                 new_sync_state: "STATE2".to_owned(),

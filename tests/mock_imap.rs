@@ -169,6 +169,7 @@ fn run_import(
         automap: true,
         include_deleted: false,
         fetch_batch: 256,
+        fetch_batch_bytes: inbuxa_migrate::sync::batch::DEFAULT_BATCH_BYTES,
         imap_connections: 1,
         allow_source_change: false,
     };
@@ -2134,4 +2135,89 @@ fn a_failed_chunk_keeps_the_ones_before_it_and_a_rerun_fetches_only_what_is_miss
     let conn = Connection::open(&archive).unwrap();
     db::init::apply_schema(&conn).unwrap();
     assert_eq!(count(&conn, "emails"), 2);
+}
+
+#[test]
+fn body_fetches_are_split_by_message_size() {
+    // Three 20-byte messages under a 30-byte cap: the control connection
+    // learns the sizes first, and each body is then fetched on its own.
+    let control: Script = Box::new(|conn: &mut MockConn| -> std::io::Result<()> {
+        auth_preamble(conn, "IMAP4rev2 LITERAL+ AUTH=PLAIN")?;
+        let (tag, _) = conn.read_command()?;
+        conn.write_line("* LIST () \"/\" \"INBOX\"")?;
+        conn.write_line(&format!("{tag} OK"))?;
+        let (tag, _) = conn.read_command()?;
+        conn.write_line(&format!("{tag} OK"))?;
+        let (tag, _) = conn.read_command()?;
+        write_select(conn, &tag, 555, 4, 3)?;
+        let (tag, _) = conn.read_command()?;
+        conn.write_line("* SEARCH 1 2 3")?;
+        conn.write_line(&format!("{tag} OK"))?;
+        let (tag, cmd) = conn.read_command()?;
+        assert_eq!(cmd, "UID FETCH 1:3 (UID RFC822.SIZE)");
+        for uid in 1..=3 {
+            conn.write_line(&format!("* {uid} FETCH (UID {uid} RFC822.SIZE 20)"))?;
+        }
+        conn.write_line(&format!("{tag} OK"))?;
+        drain_until_close(conn);
+        Ok(())
+    });
+    let fetches = std::sync::Arc::new(Mutex::new(Vec::<String>::new()));
+    let worker: Script = {
+        let fetches = fetches.clone();
+        Box::new(move |conn: &mut MockConn| -> std::io::Result<()> {
+            auth_preamble(conn, "IMAP4rev2 LITERAL+ AUTH=PLAIN")?;
+            let (tag, _) = conn.read_command()?;
+            write_select(conn, &tag, 555, 4, 3)?;
+            let bodies: [&[u8]; 3] = [BODY_A, BODY_B, BODY_C];
+            for _ in 0..3 {
+                let (tag, cmd) = conn.read_command()?;
+                let uid: u32 = cmd
+                    .strip_prefix("UID FETCH ")
+                    .and_then(|r| r.split(' ').next())
+                    .and_then(|n| n.parse().ok())
+                    .unwrap_or_else(|| panic!("expected a single-UID fetch, got {cmd}"));
+                fetches.lock().unwrap().push(cmd.clone());
+                write_fetch_message(conn, uid, uid, bodies[(uid - 1) as usize])?;
+                conn.write_line(&format!("{tag} OK"))?;
+            }
+            drain_until_close(conn);
+            Ok(())
+        })
+    };
+    let server = MockImap::start_scripts(vec![control, worker]);
+    let archive = tempfile("byte-chunks");
+    let summary =
+        run_import(&server, "alice", archive, |c| c.fetch_batch_bytes = 30).expect("import");
+    assert_eq!(email_counts(&summary).created, 3, "summary={summary:?}");
+    assert_eq!(
+        fetches.lock().unwrap().len(),
+        3,
+        "one body fetch per message"
+    );
+}
+
+#[test]
+fn a_chunk_larger_than_the_event_queue_completes() {
+    // One worker holds at most two events in flight; a ten-message chunk
+    // has to wait on the archive writer, not deadlock on it.
+    const UIDS: &[u32] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    let worker: Script = Box::new(|conn: &mut MockConn| -> std::io::Result<()> {
+        auth_preamble(conn, "IMAP4rev2 LITERAL+ AUTH=PLAIN")?;
+        let (tag, _) = conn.read_command()?;
+        write_select(conn, &tag, 999, 11, 10)?;
+        let (tag, cmd) = conn.read_command()?;
+        assert!(cmd.starts_with("UID FETCH 1:10 "), "got {cmd}");
+        for uid in UIDS {
+            let body = format!("From: a@b\r\nMessage-ID: <{uid}@h>\r\n\r\nbody {uid}");
+            write_fetch_message(conn, *uid, *uid, body.as_bytes())?;
+        }
+        conn.write_line(&format!("{tag} OK"))?;
+        drain_until_close(conn);
+        Ok(())
+    });
+    let server = MockImap::start_scripts(vec![control_script_one_folder(999, 11, UIDS), worker]);
+    let archive = tempfile("backpressure");
+    let summary = run_import(&server, "alice", archive, |_| {}).expect("import");
+    assert_eq!(email_counts(&summary).created, 10, "summary={summary:?}");
 }

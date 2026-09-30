@@ -43,6 +43,7 @@ fn imap_config(account: &Account, imap: &integration::Endpoint) -> ImapImportCon
         automap: true,
         include_deleted: false,
         fetch_batch: 64,
+        fetch_batch_bytes: inbuxa_migrate::sync::batch::DEFAULT_BATCH_BYTES,
         imap_connections: 2,
         allow_source_change: false,
     }
