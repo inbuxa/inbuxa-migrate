@@ -209,6 +209,11 @@ fn import_units(
                         units[i].local_id,
                         blob_hint(uploader, row)
                     ));
+                    net.would_fail(format!(
+                        "Email e{} ({}): its folder is not on the target",
+                        units[i].local_id,
+                        blob_hint(uploader, row)
+                    ));
                     counts.failed += 1;
                 }
             }
@@ -233,6 +238,11 @@ fn import_units(
                         "Email/import {cid} ({}) blob upload failed: {e}{}",
                         blob_hint(uploader, row),
                         size_note(&e)
+                    ));
+                    net.would_fail(format!(
+                        "Email {cid} ({}): {}",
+                        blob_hint(uploader, row),
+                        plain_reason(&e)
                     ));
                     counts.failed += 1;
                 }
@@ -615,6 +625,15 @@ fn blob_hint(uploader: &Uploader, row: &EmailRow) -> String {
         let _ = write!(s, ", {}", crate::inspect::format_bytes(len));
     }
     s
+}
+
+/// A failure reason for the dry-run plan: the size message on its own, or
+/// the error as it is.
+fn plain_reason(e: &JmapError) -> String {
+    match e {
+        JmapError::SingleObjectTooLarge(m) => m.clone(),
+        other => other.to_string(),
+    }
 }
 
 fn size_note(e: &JmapError) -> &'static str {
