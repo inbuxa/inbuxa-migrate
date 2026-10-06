@@ -1,6 +1,6 @@
 <!--
 SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
-SPDX-FileCopyrightText: 2026 Coffey Labs LLC
+SPDX-FileCopyrightText: 2026 Coffey Labs LLC <legal@coffeylabs.org>
 
 SPDX-License-Identifier: Apache-2.0 OR MIT
 -->
