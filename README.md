@@ -97,7 +97,7 @@ every live test binary.
 Apache-2.0 OR MIT, at your option. The texts are in [LICENSES](LICENSES).
 
 Copyright (C) 2020, Stalwart Labs LLC<br>
-Copyright (C) 2026, John Coffey
+Copyright (C) 2026 Coffey Labs LLC
 
 Forked from Vandelay, originally developed by Stalwart Labs, and distributed
 under the same Apache-2.0 OR MIT terms.
