@@ -1,5 +1,5 @@
 #!/bin/bash
-# SPDX-FileCopyrightText: 2026 Coffey Labs LLC
+# SPDX-FileCopyrightText: 2026 Coffey Labs LLC <legal@coffeylabs.org>
 # SPDX-License-Identifier: Apache-2.0 OR MIT
 #
 # Build one release archive for the machine this runs on.

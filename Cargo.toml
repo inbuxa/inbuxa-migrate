@@ -2,7 +2,7 @@
 name = "inbuxa-migrate"
 description = "Account migration and backup for inbuxa"
 version = "2026.9.30"
-authors = ["John Coffey <johnellis@linux.com>"]
+authors = ["Coffey Labs LLC <legal@coffeylabs.org>"]
 license = "Apache-2.0 OR MIT"
 repository = "https://git.coffeylabs.org/inbuxa/inbuxa-migrate"
 homepage = "https://git.coffeylabs.org/inbuxa/inbuxa-migrate"
