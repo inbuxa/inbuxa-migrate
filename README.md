@@ -2,7 +2,7 @@
 
 > [!NOTE]
 > Development happens on [git.coffeylabs.org/inbuxa/inbuxa-migrate](https://git.coffeylabs.org/inbuxa/inbuxa-migrate); the copy on GitHub is a read-only mirror.
-> Report issues at **[git.coffeylabs.org/inbuxa/inbuxa-migrate/issues](https://git.coffeylabs.org/inbuxa/inbuxa-migrate/issues)**, and join discussions at **[community.coffeylabs.org](https://community.coffeylabs.org)**.
+> Report issues at **[git.coffeylabs.org/inbuxa/inbuxa-migrate/issues](https://git.coffeylabs.org/inbuxa/inbuxa-migrate/issues)**, join discussions at **[community.coffeylabs.org](https://community.coffeylabs.org)**, or chat on **[Discord](https://discord.gg/nqcY4TKfAn)**.
 
 One program that moves an account into **inbuxa**: its mail, calendars,
 contacts, identities, Sieve scripts and files.
