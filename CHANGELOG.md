@@ -3,6 +3,13 @@
 All notable changes to this project are recorded here. Versions are dates:
 release `v2026.9.30` is version `2026.9.30`.
 
+## Unreleased
+
+### Changed
+- `--auth-bearer` reads `INBUXA_MIGRATE_API_KEY`, the name inbuxa-cli and the
+  console use. `INBUXA_MIGRATE_TOKEN` still works; when both are set, the API
+  key wins.
+
 ## [2026.9.30] -- 2026-09-30
 
 The first release of inbuxa-migrate.

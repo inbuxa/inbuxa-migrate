@@ -57,7 +57,8 @@ advertises the types being written. The full command reference is in
 Secrets are read from the environment, or asked for at a prompt:
 
     INBUXA_MIGRATE_PASSWORD               a password for --auth-basic
-    INBUXA_MIGRATE_TOKEN                  a bearer token for --auth-bearer
+    INBUXA_MIGRATE_API_KEY                an API key or bearer token for --auth-bearer
+                                          (INBUXA_MIGRATE_TOKEN still works)
     INBUXA_MIGRATE_EWS_CLIENT_SECRET      the OAuth client secret for app-only EWS
     INBUXA_MIGRATE_GRAPH_TOKEN            a Microsoft Graph access token
 
