@@ -3,7 +3,7 @@
 All notable changes to this project are recorded here. Versions are dates:
 release `v2026.9.30` is version `2026.9.30`.
 
-## Unreleased
+## [2026.10.26] -- 2026-10-26
 
 ### Changed
 - `--auth-bearer` reads `INBUXA_MIGRATE_API_KEY`, the name inbuxa-cli and the
