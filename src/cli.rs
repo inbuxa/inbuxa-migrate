@@ -150,7 +150,7 @@ struct JmapImportArgs {
         long,
         value_name = "TOKEN",
         num_args = 0..=1,
-        help = "Bearer token (value optional: falls back to $INBUXA_MIGRATE_TOKEN or prompt)"
+        help = "API key or bearer token (value optional: falls back to $INBUXA_MIGRATE_API_KEY or prompt)"
     )]
     auth_bearer: Option<Option<String>>,
 
@@ -211,7 +211,7 @@ struct ImapImportArgs {
         long,
         value_name = "TOKEN",
         num_args = 0..=1,
-        help = "Bearer token for XOAUTH2 (value optional: falls back to $INBUXA_MIGRATE_TOKEN or prompt)"
+        help = "Bearer token for XOAUTH2 (value optional: falls back to $INBUXA_MIGRATE_API_KEY or prompt)"
     )]
     auth_bearer: Option<Option<String>>,
 
@@ -329,7 +329,7 @@ struct ExportArgs {
         long,
         value_name = "TOKEN",
         num_args = 0..=1,
-        help = "Bearer token (value optional: falls back to $INBUXA_MIGRATE_TOKEN or prompt)"
+        help = "API key or bearer token (value optional: falls back to $INBUXA_MIGRATE_API_KEY or prompt)"
     )]
     auth_bearer: Option<Option<String>>,
 
@@ -427,7 +427,7 @@ pub struct ManageSieveImportArgs {
         long,
         value_name = "TOKEN",
         num_args = 0..=1,
-        help = "Bearer token for OAUTHBEARER (value optional: $INBUXA_MIGRATE_TOKEN or prompt)"
+        help = "Bearer token for OAUTHBEARER (value optional: $INBUXA_MIGRATE_API_KEY or prompt)"
     )]
     auth_bearer: Option<Option<String>>,
 
@@ -477,7 +477,7 @@ pub struct DavImportArgs {
         long,
         value_name = "TOKEN",
         num_args = 0..=1,
-        help = "Bearer token (value optional: $INBUXA_MIGRATE_TOKEN or prompt)"
+        help = "API key or bearer token (value optional: $INBUXA_MIGRATE_API_KEY or prompt)"
     )]
     auth_bearer: Option<Option<String>>,
 
@@ -589,7 +589,11 @@ fn resolve_managesieve_auth(
     let user = auth_user
         .ok_or_else(|| Error::Usage("--auth-user is required with --auth-bearer".to_owned()))?
         .to_owned();
-    let token = secret::resolve(bearer.as_deref(), "INBUXA_MIGRATE_TOKEN", "bearer token")?;
+    let token = secret::resolve_any(
+        bearer.as_deref(),
+        secret::API_KEY_VARS,
+        "API key or bearer token",
+    )?;
     Ok(ManageSieveAuth::Bearer { user, token })
 }
 
@@ -752,7 +756,11 @@ fn resolve_dav_auth(
     let bearer = auth_bearer.ok_or_else(|| {
         Error::Usage("exactly one of --auth-basic / --auth-bearer is required".to_owned())
     })?;
-    let token = secret::resolve(bearer.as_deref(), "INBUXA_MIGRATE_TOKEN", "bearer token")?;
+    let token = secret::resolve_any(
+        bearer.as_deref(),
+        secret::API_KEY_VARS,
+        "API key or bearer token",
+    )?;
     Ok(DavAuth::Bearer { token })
 }
 
@@ -858,7 +866,11 @@ fn resolve_imap_auth(
     let user = auth_user
         .ok_or_else(|| Error::Usage("--auth-user is required with --auth-bearer".to_owned()))?
         .to_owned();
-    let token = secret::resolve(bearer.as_deref(), "INBUXA_MIGRATE_TOKEN", "bearer token")?;
+    let token = secret::resolve_any(
+        bearer.as_deref(),
+        secret::API_KEY_VARS,
+        "API key or bearer token",
+    )?;
     Ok(ImapAuth::Bearer { user, token })
 }
 
@@ -942,7 +954,7 @@ pub struct ExchangeEwsImportArgs {
         long,
         value_name = "TOKEN",
         num_args = 0..=1,
-        help = "Bearer token (value optional: $INBUXA_MIGRATE_TOKEN or device-code flow)"
+        help = "API key or bearer token (value optional: $INBUXA_MIGRATE_API_KEY or device-code flow)"
     )]
     auth_bearer: Option<Option<String>>,
 
@@ -1109,7 +1121,7 @@ fn resolve_exchange_ews_auth(args: &ExchangeEwsImportArgs) -> Result<EwsAuth, Er
             client_secret: env_secret,
         }));
     }
-    let token = secret::resolve(None, "INBUXA_MIGRATE_TOKEN", "bearer token")?;
+    let token = secret::resolve_any(None, secret::API_KEY_VARS, "API key or bearer token")?;
     Ok(EwsAuth::Bearer { token })
 }
 
@@ -1348,7 +1360,11 @@ fn resolve_auth(
     let bearer = auth_bearer.ok_or_else(|| {
         Error::Usage("exactly one of --auth-basic / --auth-bearer is required".to_owned())
     })?;
-    let token = secret::resolve(bearer.as_deref(), "INBUXA_MIGRATE_TOKEN", "bearer token")?;
+    let token = secret::resolve_any(
+        bearer.as_deref(),
+        secret::API_KEY_VARS,
+        "API key or bearer token",
+    )?;
     Ok(Auth::Bearer { token })
 }
 
@@ -1379,6 +1395,7 @@ mod tests {
     fn auth_password_without_basic_is_usage_error() {
         let _g = lock();
         unsafe {
+            env::remove_var("INBUXA_MIGRATE_API_KEY");
             env::remove_var("INBUXA_MIGRATE_TOKEN");
             env::remove_var("INBUXA_MIGRATE_PASSWORD");
         }
@@ -1396,6 +1413,7 @@ mod tests {
     fn auth_basic_with_password_resolves() {
         let _g = lock();
         unsafe {
+            env::remove_var("INBUXA_MIGRATE_API_KEY");
             env::remove_var("INBUXA_MIGRATE_TOKEN");
             env::remove_var("INBUXA_MIGRATE_PASSWORD");
         }
@@ -1413,12 +1431,28 @@ mod tests {
     fn auth_bearer_inline_token_resolves() {
         let _g = lock();
         unsafe {
+            env::remove_var("INBUXA_MIGRATE_API_KEY");
             env::remove_var("INBUXA_MIGRATE_TOKEN");
             env::remove_var("INBUXA_MIGRATE_PASSWORD");
         }
         let bearer: Option<String> = Some("t".to_owned());
         let auth = resolve_auth(None, None, Some(&bearer)).unwrap();
         assert!(matches!(auth, Auth::Bearer { token } if token == "t"));
+    }
+
+    #[test]
+    fn auth_bearer_reads_api_key_before_token() {
+        let _g = lock();
+        unsafe {
+            env::set_var("INBUXA_MIGRATE_API_KEY", "key");
+            env::set_var("INBUXA_MIGRATE_TOKEN", "old");
+        }
+        let auth = resolve_auth(None, None, Some(&None)).unwrap();
+        assert!(matches!(auth, Auth::Bearer { token } if token == "key"));
+        unsafe { env::remove_var("INBUXA_MIGRATE_API_KEY") };
+        let auth = resolve_auth(None, None, Some(&None)).unwrap();
+        assert!(matches!(auth, Auth::Bearer { token } if token == "old"));
+        unsafe { env::remove_var("INBUXA_MIGRATE_TOKEN") };
     }
 
     fn graph_config(objects: &[&str]) -> Result<GraphImportConfig, Error> {
