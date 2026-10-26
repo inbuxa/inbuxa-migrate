@@ -1325,7 +1325,7 @@ dependencies = [
 
 [[package]]
 name = "inbuxa-migrate"
-version = "2026.9.30"
+version = "2026.10.26"
 dependencies = [
  "blake3",
  "calcard",
