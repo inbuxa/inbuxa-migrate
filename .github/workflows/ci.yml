@@ -110,7 +110,10 @@ jobs:
           git fetch --quiet origin main
           git merge-base --is-ancestor "$(git rev-parse "${TAG}^{commit}")" origin/main \
             || { echo "::error::$TAG is not on main"; exit 1; }
-          want="v$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')"
+          # The tag names the version as the binary shows it: Cargo's 27.1.0 is
+          # v27.1 and 27.1.0-rc.1 is v27.1-rc.1 (src/version.rs).
+          want="v$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version' \
+                   | sed -E 's/^([0-9]+[.][0-9]+)[.]0(-|$)/\1\2/')"
           [ "$TAG" = "$want" ] || { echo "::error::$TAG does not match Cargo.toml ($want)"; exit 1; }
 
   build:
@@ -187,7 +190,7 @@ jobs:
           id="$(curl -fsS "${auth[@]}" "$API/releases/tags/$TAG" 2>/dev/null | jq -r '.id // empty' || true)"
           if [ -z "$id" ]; then
             id="$(curl -fsS "${auth[@]}" -H 'Content-Type: application/json' \
-                  -d "$(jq -n --arg t "$TAG" --arg b "$notes" '{tag_name:$t, name:$t, draft:true, body:$b}')" \
+                  -d "$(jq -n --arg t "$TAG" --arg b "$notes" '{tag_name:$t, name:$t, draft:true, body:$b, prerelease:($t | contains("-rc."))}')" \
                   "$API/releases" | jq -r '.id // empty')"
             [ -n "$id" ] || { echo "::error::could not create the release"; exit 1; }
             created=1

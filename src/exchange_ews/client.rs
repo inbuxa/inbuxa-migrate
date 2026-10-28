@@ -95,7 +95,7 @@ impl EwsClient {
                 retries_total: AtomicU64::new(0),
                 retry_after_sleeps: AtomicU64::new(0),
                 soap_calls: AtomicU64::new(0),
-                user_agent: format!("inbuxa-migrate/{}", env!("CARGO_PKG_VERSION")),
+                user_agent: format!("inbuxa-migrate/{}", crate::version::shown()),
             }),
         }
     }
