@@ -24,7 +24,9 @@ case "$(uname -m)" in
 esac
 
 # The tag names the version the binary reports, so the two cannot disagree.
-want="v$(cd "$ROOT" && cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')"
+# Cargo's 27.1.0 is tagged v27.1, and 27.1.0-rc.1 v27.1-rc.1 (src/version.rs).
+want="v$(cd "$ROOT" && cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version' \
+         | sed -E 's/^([0-9]+[.][0-9]+)[.]0(-|$)/\1\2/')"
 [ "$VERSION" = "$want" ] || { echo "tag $VERSION does not match Cargo.toml ($want)" >&2; exit 1; }
 
 name="inbuxa-migrate-linux-$arch"

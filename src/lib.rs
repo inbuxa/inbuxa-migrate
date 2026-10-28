@@ -21,3 +21,4 @@ pub mod net;
 pub mod secret;
 pub mod sync;
 pub mod types;
+pub mod version;

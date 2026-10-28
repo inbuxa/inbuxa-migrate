@@ -1,7 +1,17 @@
 # Change Log
 
-All notable changes to this project are recorded here. Versions are dates:
-release `v2026.9.30` is version `2026.9.30`.
+All notable changes to this project are recorded here. Versions follow the
+inbuxa suite: a series (`27.1`), its patches (`27.1.3`) and release
+candidates before a series ships (`27.1-rc.1`). The tag is the version with a
+`v`. Releases before 27.1 were dates (`v2026.9.30`).
+
+## [27.1-rc.1]
+
+The first release candidate of the 27.1 series, with the rest of the suite.
+
+### Changed
+- `--version` and the User-Agent show the version as tags name it
+  (`27.1-rc.1`).
 
 ## [2026.10.26] -- 2026-10-26
 

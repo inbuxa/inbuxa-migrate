@@ -32,7 +32,7 @@ use crate::types::{ObjectType, parse_object_list};
 #[derive(Parser)]
 #[command(
     name = "inbuxa-migrate",
-    version,
+    version = crate::version::shown(),
     about = "inbuxa-migrate: account migration and backup for inbuxa"
 )]
 pub struct Cli {

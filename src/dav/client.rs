@@ -101,7 +101,7 @@ impl DavClient {
                 log_level: AtomicU8::new(LEVEL_DEFAULT),
                 retries_total: AtomicU64::new(0),
                 retry_after_sleeps: AtomicU64::new(0),
-                user_agent: format!("inbuxa-migrate/{}", env!("CARGO_PKG_VERSION")),
+                user_agent: format!("inbuxa-migrate/{}", crate::version::shown()),
             }),
         }
     }
