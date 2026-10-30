@@ -21,6 +21,7 @@ use crate::inspect::InspectConfig;
 use crate::jmap::account::AccountSelector;
 use crate::jmap::http::Auth;
 use crate::logging::Logger;
+use crate::migrate::MigrateConfig;
 use crate::secret;
 use crate::sync::export_dav::ExportDavConfig;
 use crate::sync::export_imap::ExportImapConfig;
@@ -90,6 +91,10 @@ enum Command {
         name = "import-directory"
     )]
     ImportDirectory(Box<ImportDirectoryArgs>),
+    #[command(
+        about = "Move many accounts by a plan file: the same steps for each, several at once, resumable"
+    )]
+    Migrate(Box<MigrateArgs>),
     #[command(about = "Show the contents of a local archive (read-only)")]
     Inspect(Box<InspectArgs>),
 }
@@ -685,6 +690,50 @@ struct ImportDirectoryArgs {
 }
 
 #[derive(Args)]
+struct MigrateArgs {
+    #[arg(
+        long,
+        value_name = "FILE",
+        help = "Plan file (JSON): the setup steps, the steps for each account, and the accounts"
+    )]
+    plan: PathBuf,
+
+    #[arg(
+        long,
+        value_name = "N",
+        default_value_t = 4,
+        help = "Accounts migrated at once"
+    )]
+    parallel: usize,
+
+    #[arg(
+        long,
+        help = "Run every account step again, done or not: the final pass once the old server stops taking mail"
+    )]
+    again: bool,
+
+    #[arg(
+        long = "account",
+        value_name = "EMAIL",
+        action = ArgAction::Append,
+        help = "Only this account (repeatable; default: every account in the plan)"
+    )]
+    accounts: Vec<String>,
+
+    #[arg(long, help = "Run each step with --dry-run; record nothing")]
+    dry_run: bool,
+
+    #[arg(short = 'q', long, help = "Quiet: no line per account")]
+    quiet: bool,
+
+    #[arg(
+        value_name = "DIR",
+        help = "Work directory: an archive and logs per account, the state and the report"
+    )]
+    work: PathBuf,
+}
+
+#[derive(Args)]
 struct InspectArgs {
     #[arg(value_name = "ARCHIVE", help = "Local SQLite archive")]
     archive: PathBuf,
@@ -724,6 +773,7 @@ pub enum Action {
     ExportFiles(ExportFilesConfig),
     ExportDirectory(ExportDirectoryConfig),
     ImportDirectory(ImportDirectoryConfig),
+    Migrate(MigrateConfig),
     ExportImap(CommonConfig, ExportImapConfig),
     ExportManageSieve(CommonConfig, ExportManageSieveConfig),
     ExportDav(CommonConfig, ExportDavConfig),
@@ -855,6 +905,7 @@ impl Cli {
             Command::ExportFiles(args) => resolve_export_files(*args),
             Command::ExportDirectory(args) => resolve_export_directory(*args),
             Command::ImportDirectory(args) => resolve_import_directory(*args),
+            Command::Migrate(args) => resolve_migrate(*args),
             Command::ExportImap(args) => resolve_export_imap(*args),
             Command::ExportManageSieve(args) => resolve_export_managesieve(*args),
             Command::ExportCaldav(args) => resolve_export_dav(*args, DavKindArg::Caldav),
@@ -1336,6 +1387,19 @@ fn resolve_import_directory(args: ImportDirectoryArgs) -> Result<Action, Error> 
         max_retries: args.max_retries,
         allow_invalid_certs: args.allow_invalid_certs,
         logger: Logger::from_flags(args.quiet, args.verbose),
+    }))
+}
+
+fn resolve_migrate(args: MigrateArgs) -> Result<Action, Error> {
+    Ok(Action::Migrate(MigrateConfig {
+        plan: args.plan,
+        work: args.work,
+        parallel: args.parallel,
+        again: args.again,
+        only: args.accounts,
+        dry_run: args.dry_run,
+        program: std::env::current_exe()?,
+        logger: Logger::from_flags(args.quiet, 0),
     }))
 }
 

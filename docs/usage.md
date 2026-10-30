@@ -13,7 +13,7 @@ and how to install it.
 ## Commands and global flags
 
 ```
-inbuxa-migrate <import|export|export-imap|export-managesieve|export-caldav|export-carddav|export-files|export-directory|import-directory|inspect> [args...]
+inbuxa-migrate <import|export|export-imap|export-managesieve|export-caldav|export-carddav|export-files|export-directory|import-directory|migrate|inspect> [args...]
 ```
 
 Every command takes a few global flags -- verbosity, worker pool size, retry
@@ -550,6 +550,85 @@ point at it, so a user finds its domain, its groups and its roles.
 `--domain` keeps it to the domains named. With `--dry-run` it reads the
 server and counts what it would create, sends nothing and writes no file;
 `--passwords` isn't needed then.
+
+## Migrate many accounts
+
+```
+inbuxa-migrate migrate --plan <FILE> [--parallel <N>] [--again]
+  [--account <EMAIL>]... [--dry-run] [-q] <DIR>
+```
+
+Moves a list of accounts with one command. The plan file names the steps
+and the accounts. Each step is one of the commands on this page, written
+the same way, and `migrate` runs it for every account, several accounts at
+once. `<DIR>` is the work directory. It holds an archive and a log per
+account, the state a later run resumes from, and the report.
+
+```json
+{
+  "format": "inbuxa-migrate-plan",
+  "formatVersion": 1,
+  "setup": [
+    {"name": "directory",
+     "args": ["import-directory", "--url", "https://mail.example.org",
+              "--auth-bearer", "--passwords", "passwords.csv", "directory"],
+     "secrets": {"token": "INBUXA_ADMIN_TOKEN"}}
+  ],
+  "accounts": {"directory": "directory/directory.json"},
+  "steps": [
+    {"name": "mail",
+     "args": ["import", "imap", "--url", "imaps://old.example.org",
+              "--auth-basic", "{email}*master", "{archive}"],
+     "secrets": {"password": "OLD_MASTER_PASSWORD"}},
+    {"name": "inbuxa",
+     "args": ["export", "--url", "https://mail.example.org", "--auth-bearer",
+              "--account-name", "{email}", "{archive}"],
+     "secrets": {"token": "INBUXA_ADMIN_TOKEN"}}
+  ]
+}
+```
+
+- **Steps.** `setup` steps run once, before any account:
+  `import-directory` or `export-directory`. The `steps` run for each
+  account, in order, and each has to name `{archive}`. `{email}`,
+  `{local}` and `{domain}` are the account's address and its two halves.
+  Steps run in the plan's directory, so a relative path means the same as
+  it does in the plan.
+- **Accounts.** A list of addresses, or `{"directory": "…/directory.json"}`
+  for the users that `export-directory` wrote.
+- **Secrets stay out of the plan.** A step names the environment variable
+  that holds each secret it needs: `password`, `token`, `clientSecret`
+  (EWS) or `graphToken`. A step sees only the secrets it names. A plan that
+  writes a password or token into `args` is refused. A step that needs a
+  secret it doesn't name fails at once instead of waiting for a prompt.
+- **Signing in for each account.** Each step signs in the way its command
+  does, so the plan decides how. To avoid collecting every user's password,
+  use a login that can act for each account. The example uses Dovecot's
+  master user, `{email}*master`. Use the source's own form where it has
+  one: Exchange impersonation through `--mailbox {email}`, or an
+  administrator on a JMAP source with `--account-name {email}`.
+- **One account at a time, several at once.** `--parallel` (default 4)
+  sets how many accounts run at the same time. Each step runs as its own
+  process. Its output goes to `<DIR>/<email>/<step>.log`, and one account
+  failing doesn't stop the others. A step that fails stops its account.
+  A step that leaves some objects behind (exit code 5) doesn't. A failed
+  setup step stops the run.
+- **Resuming.** A second run with the same plan and work directory skips
+  every account that finished. For the rest, it skips the steps that were
+  done and runs everything from the first one that wasn't. `--again` runs
+  every account step once more, done or not. Use it for the final pass
+  once the old server stops taking mail: the steps converge, so it only
+  moves what changed. `--account` limits a run to the accounts named.
+- **The report.** `<DIR>/report.csv` has one row per step per account:
+  how it ended (`done`, `partial`, `failed`, `not run`, or
+  `done earlier`), the counts summed over the step's types, and, for one
+  that didn't finish, its last error. Exit code 5 means some account
+  didn't finish.
+
+The work directory is made readable by its owner only, and so are the
+logs. With `--dry-run`, each step runs with `--dry-run`, nothing is
+recorded, and the report goes to `dry-run-report.csv`. An export step
+reads the archive as it is, so on a first dry run it has nothing to show.
 
 ## Inspect
 

@@ -14,6 +14,14 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
   is left as it is, so running it again creates nothing. Each user created
   gets a generated password, written to a new file readable by its owner
   only.
+- `migrate --plan` moves many accounts with one command. The plan names
+  the steps, which are the commands in the docs with `{email}` and
+  `{archive}` filled in per account, and the accounts, listed or taken
+  from `directory.json`. Several accounts run at once, each with its own
+  archive and logs. A second run resumes where each stopped, `--again`
+  runs the final pass, and `report.csv` says what moved and why anything
+  didn't. Secrets are named by environment variable, never written in the
+  plan.
 
 ### Fixed
 - `inspect` opens the archive read-only. It used to create an empty archive

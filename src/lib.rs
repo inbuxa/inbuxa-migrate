@@ -20,6 +20,7 @@ pub mod inspect;
 pub mod jmap;
 pub mod logging;
 pub mod managesieve;
+pub mod migrate;
 pub mod net;
 pub mod secret;
 pub mod sync;
