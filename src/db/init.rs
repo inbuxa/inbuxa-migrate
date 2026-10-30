@@ -5,7 +5,7 @@
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OpenFlags};
 
 pub const SCHEMA_SQL: &str = include_str!("schema.sql");
 
@@ -15,6 +15,107 @@ pub fn open(path: &std::path::Path) -> Result<Connection, OpenError> {
     apply_pragmas(&conn)?;
     apply_schema(&conn)?;
     Ok(conn)
+}
+
+/// An existing archive, for reading only: nothing is created, migrated or
+/// written. A closed archive has no `-wal` file, since every run folds it
+/// in when it ends, and is opened as immutable, so SQLite adds no lock or
+/// index files beside it either. With a `-wal` there (a run is going, or
+/// one was interrupted) it is opened read-only, so what that run wrote is
+/// shown; SQLite may then add its `-shm` index. An archive from an older release
+/// that is missing part of today's schema is refused rather than brought up
+/// to date, since that would write to it.
+pub fn open_read_only(path: &std::path::Path) -> Result<Connection, OpenError> {
+    if !path.is_file() {
+        return Err(OpenError::NotAnArchive(format!(
+            "no archive at {}",
+            path.display()
+        )));
+    }
+    #[cfg(unix)]
+    if let Some(warning) = permission_warning(path) {
+        eprintln!("warning: {warning}");
+    }
+    let mut wal = path.as_os_str().to_owned();
+    wal.push("-wal");
+    let closed = !std::path::Path::new(&wal).exists();
+    let conn = Connection::open_with_flags(
+        read_only_uri(path, closed),
+        OpenFlags::SQLITE_OPEN_READ_ONLY
+            | OpenFlags::SQLITE_OPEN_URI
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    conn.pragma_update(None, "query_only", "ON")?;
+    let present: Vec<String> = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+        .and_then(|mut s| s.query_map([], |r| r.get(0))?.collect())
+        .map_err(|e| match e.sqlite_error_code() {
+            Some(rusqlite::ErrorCode::NotADatabase) => {
+                OpenError::NotAnArchive(format!("{} is not an archive", path.display()))
+            }
+            Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked) => {
+                OpenError::NotAnArchive(format!(
+                    "{} is in use by another inbuxa-migrate run; inspect it once that run ends",
+                    path.display()
+                ))
+            }
+            _ => OpenError::Sqlite(e),
+        })?;
+    if !present.iter().any(|t| t == "sources") {
+        return Err(OpenError::NotAnArchive(format!(
+            "{} is not an archive",
+            path.display()
+        )));
+    }
+    let missing: Vec<&str> = schema_tables()
+        .filter(|t| !present.iter().any(|p| p == t))
+        .collect();
+    let has_data_type = conn
+        .prepare("SELECT 1 FROM pragma_table_info('calendar_events') WHERE name = 'data_type'")?
+        .exists([])?;
+    if !missing.is_empty() || !has_data_type {
+        return Err(OpenError::NotAnArchive(format!(
+            "{} was written by an older inbuxa-migrate and lacks part of today's layout; \
+             the next import into it brings it up to date",
+            path.display()
+        )));
+    }
+    Ok(conn)
+}
+
+/// A `file:` URI for `path`, read-only, and immutable when asked.
+fn read_only_uri(path: &std::path::Path, immutable: bool) -> String {
+    let bytes = path.as_os_str().as_encoded_bytes();
+    let mut out = String::from("file:");
+    let windows_drive = bytes.len() > 1 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic();
+    if bytes.first() == Some(&b'/') {
+        out.push_str("//");
+    } else if windows_drive {
+        out.push_str("///");
+    }
+    for &b in bytes {
+        match b {
+            b'\\' => out.push('/'),
+            b if b.is_ascii_alphanumeric() || b"-._~/:".contains(&b) => out.push(b as char),
+            b => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out.push_str("?mode=ro");
+    if immutable {
+        out.push_str("&immutable=1");
+    }
+    out
+}
+
+/// Every table the schema creates.
+fn schema_tables() -> impl Iterator<Item = &'static str> {
+    SCHEMA_SQL
+        .split("CREATE TABLE IF NOT EXISTS")
+        .skip(1)
+        .filter_map(|rest| {
+            rest.split(|c: char| c.is_whitespace() || c == '(')
+                .find(|s| !s.is_empty())
+        })
 }
 
 pub fn apply_schema(conn: &Connection) -> Result<(), OpenError> {
@@ -131,6 +232,8 @@ pub enum OpenError {
     Sqlite(#[from] rusqlite::Error),
     #[error("cannot create the archive: {0}")]
     Create(std::io::Error),
+    #[error("{0}")]
+    NotAnArchive(String),
 }
 
 #[cfg(all(test, unix))]
@@ -177,5 +280,142 @@ mod permission_tests {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
         assert!(permission_warning(&path).is_none());
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// Each file in `dir` by name, with its length and hash.
+    fn files_in(dir: &std::path::Path) -> Vec<(String, usize, String)> {
+        let mut out: Vec<(String, usize, String)> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| {
+                let e = e.unwrap();
+                let bytes = std::fs::read(e.path()).unwrap();
+                (
+                    e.file_name().to_string_lossy().into_owned(),
+                    bytes.len(),
+                    blake3::hash(&bytes).to_hex().to_string(),
+                )
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn reading_an_archive_changes_nothing_on_disk() {
+        let path = scratch("read-only");
+        let conn = open(&path).unwrap();
+        conn.execute("INSERT INTO mailboxes (name) VALUES ('Inbox')", [])
+            .unwrap();
+        drop(conn);
+        let before = files_in(path.parent().unwrap());
+        let conn = open_read_only(&path).unwrap();
+        let n: i64 = conn
+            .query_row("SELECT count(*) FROM mailboxes", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1);
+        assert!(conn.execute("DELETE FROM mailboxes", []).is_err());
+        drop(conn);
+        assert_eq!(files_in(path.parent().unwrap()), before);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn a_missing_or_foreign_file_is_refused_and_not_created() {
+        let path = scratch("missing");
+        let err = open_read_only(&path).unwrap_err().to_string();
+        assert!(err.contains("no archive at"), "{err}");
+        assert!(!path.exists());
+
+        let other = Connection::open(&path).unwrap();
+        other.execute_batch("CREATE TABLE notes(x);").unwrap();
+        drop(other);
+        let err = open_read_only(&path).unwrap_err().to_string();
+        assert!(err.contains("is not an archive"), "{err}");
+
+        std::fs::write(&path, b"plain text").unwrap();
+        let err = open_read_only(&path).unwrap_err().to_string();
+        assert!(err.contains("is not an archive"), "{err}");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn an_older_layout_is_refused_rather_than_upgraded() {
+        let path = scratch("older");
+        drop(open(&path).unwrap());
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch("DROP TABLE file_nodes;").unwrap();
+        drop(conn);
+        let err = open_read_only(&path).unwrap_err().to_string();
+        assert!(err.contains("older inbuxa-migrate"), "{err}");
+        let tables: i64 = Connection::open(&path)
+            .unwrap()
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name = 'file_nodes'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(tables, 0, "left as it was");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn a_path_becomes_a_read_only_uri() {
+        use std::path::Path;
+        assert_eq!(
+            read_only_uri(Path::new("/srv/a b/x?#%.sqlite"), true),
+            "file:///srv/a%20b/x%3F%23%25.sqlite?mode=ro&immutable=1"
+        );
+        assert_eq!(
+            read_only_uri(Path::new("a.sqlite"), false),
+            "file:a.sqlite?mode=ro"
+        );
+    }
+
+    #[test]
+    fn an_interrupted_archive_is_read_with_its_wal() {
+        let path = scratch("interrupted");
+        drop(open(&path).unwrap());
+        let mut wal = path.as_os_str().to_owned();
+        wal.push("-wal");
+        // A run that hasn't closed: its rows are still only in the -wal.
+        let writer = Connection::open(&path).unwrap();
+        writer.pragma_update(None, "wal_autocheckpoint", 0).unwrap();
+        writer
+            .execute("INSERT INTO mailboxes (name) VALUES ('Inbox')", [])
+            .unwrap();
+        assert!(std::path::Path::new(&wal).exists());
+        let conn = open_read_only(&path).unwrap();
+        let n: i64 = conn
+            .query_row("SELECT count(*) FROM mailboxes", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1);
+        drop(conn);
+        drop(writer);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn an_archive_a_run_holds_is_reported_as_in_use() {
+        let path = scratch("in-use");
+        let run = open(&path).unwrap();
+        run.execute("INSERT INTO mailboxes (name) VALUES ('Inbox')", [])
+            .unwrap();
+        let err = open_read_only(&path).unwrap_err().to_string();
+        assert!(err.contains("in use"), "{err}");
+        drop(run);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn every_schema_table_is_found() {
+        let tables: Vec<&str> = schema_tables().collect();
+        assert!(tables.contains(&"sources"), "{tables:?}");
+        assert!(tables.contains(&"contact_cards"), "{tables:?}");
+        assert!(
+            tables
+                .iter()
+                .all(|t| t.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+        );
     }
 }
