@@ -168,17 +168,17 @@ fn write(directory: &model::Directory, dir: &Path, url: &str) -> Result<(), Erro
     Ok(())
 }
 
-struct Reader<'a> {
-    client: &'a HttpClient,
-    api_url: &'a str,
-    account_id: &'a str,
-    urn: &'static str,
-    limits: Limits,
+pub(crate) struct Reader<'a> {
+    pub(crate) client: &'a HttpClient,
+    pub(crate) api_url: &'a str,
+    pub(crate) account_id: &'a str,
+    pub(crate) urn: &'static str,
+    pub(crate) limits: Limits,
 }
 
 impl Reader<'_> {
     /// Every object of one registry type, with only `properties` (and `id`).
-    fn all(&self, ty: &str, properties: &[&str]) -> Result<Vec<Value>, JmapError> {
+    pub(crate) fn all(&self, ty: &str, properties: &[&str]) -> Result<Vec<Value>, JmapError> {
         let ids = self.ids(ty)?;
         let chunk = usize::try_from(self.limits.max_objects_in_get.max(1)).unwrap_or(500);
         let mut out = Vec::with_capacity(ids.len());
@@ -205,7 +205,7 @@ impl Reader<'_> {
 
     /// As `all`, for a type this login may not be allowed to read, or a
     /// server may not have: that is a warning and an empty list.
-    fn optional(
+    pub(crate) fn optional(
         &self,
         ty: &str,
         properties: &[&str],

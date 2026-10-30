@@ -23,6 +23,7 @@ contacts, identities, Sieve scripts and files.
     inbuxa-migrate export-caldav … alice.sqlite  its calendars into any CalDAV server
     inbuxa-migrate export-carddav … alice.sqlite  its contacts into any CardDAV server
     inbuxa-migrate export-directory … out        a server's accounts, no secrets
+    inbuxa-migrate import-directory … out        those accounts, set up on inbuxa
 
 Between the two sides sits an archive: one SQLite file holding one account.
 `import` fills it from the old server; `export` writes it into the new one.
@@ -47,8 +48,9 @@ the archive as a Maildir++ tree, vCard, iCalendar and Sieve files that other
 servers and mail, calendar and contacts apps open, with no network and no
 store format in the way. For a whole server, `export-directory` writes the
 list of domains, accounts, groups, lists and aliases to set up again
-elsewhere, without passwords. The full command reference is in
-[docs/usage.md](docs/usage.md).
+elsewhere, without passwords, and `import-directory` sets them up on an
+inbuxa server, with a new password for each user. The full command
+reference is in [docs/usage.md](docs/usage.md).
 
 ## Sources
 

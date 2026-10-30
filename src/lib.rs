@@ -15,6 +15,7 @@ pub mod exchange_graph;
 pub mod export_directory;
 pub mod export_files;
 pub mod imap;
+pub mod import_directory;
 pub mod inspect;
 pub mod jmap;
 pub mod logging;

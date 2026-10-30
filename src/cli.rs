@@ -16,6 +16,7 @@ use crate::exchange_ews::types::MailboxKind;
 use crate::exchange_graph::types::{EventBodyFormat, MailboxKind as GraphMailboxKind, Surfaces};
 use crate::export_directory::ExportDirectoryConfig;
 use crate::export_files::ExportFilesConfig;
+use crate::import_directory::ImportDirectoryConfig;
 use crate::inspect::InspectConfig;
 use crate::jmap::account::AccountSelector;
 use crate::jmap::http::Auth;
@@ -84,6 +85,11 @@ enum Command {
         name = "export-directory"
     )]
     ExportDirectory(Box<ExportDirectoryArgs>),
+    #[command(
+        about = "Set up on an inbuxa server the domains, accounts, groups and lists export-directory wrote",
+        name = "import-directory"
+    )]
+    ImportDirectory(Box<ImportDirectoryArgs>),
     #[command(about = "Show the contents of a local archive (read-only)")]
     Inspect(Box<InspectArgs>),
 }
@@ -610,6 +616,75 @@ struct ExportDirectoryArgs {
 }
 
 #[derive(Args)]
+struct ImportDirectoryArgs {
+    #[arg(
+        long,
+        value_name = "URL",
+        help = "The inbuxa server: base URL or full JMAP session URL"
+    )]
+    url: String,
+
+    #[arg(long, value_name = "USER", help = "HTTP Basic user (an administrator)")]
+    auth_basic: Option<String>,
+
+    #[arg(
+        long,
+        value_name = "PASS",
+        help = "Basic password (prefer $INBUXA_MIGRATE_PASSWORD or prompt)"
+    )]
+    auth_password: Option<String>,
+
+    #[arg(
+        long,
+        value_name = "TOKEN",
+        num_args = 0..=1,
+        help = "API key or bearer token (value optional: falls back to $INBUXA_MIGRATE_API_KEY or prompt)"
+    )]
+    auth_bearer: Option<Option<String>>,
+
+    #[arg(
+        long,
+        value_name = "FILE",
+        required_unless_present = "dry_run",
+        help = "New file for the generated passwords of the users created (mode 600)"
+    )]
+    passwords: Option<PathBuf>,
+
+    #[arg(
+        long,
+        value_name = "NAME",
+        help = "Only this domain (repeatable; default: every domain in the directory)"
+    )]
+    domain: Vec<String>,
+
+    #[arg(long, help = "Count what would be created; create nothing")]
+    dry_run: bool,
+
+    #[arg(
+        long,
+        value_name = "N",
+        default_value_t = 5,
+        help = "Max retry attempts per request on transient failures"
+    )]
+    max_retries: u32,
+
+    #[arg(
+        long,
+        help = "Accept an invalid TLS certificate from the --url host only; sign-in endpoints are always verified"
+    )]
+    allow_invalid_certs: bool,
+
+    #[arg(short = 'v', long, action = ArgAction::Count, conflicts_with = "quiet", help = "Increase log verbosity")]
+    verbose: u8,
+
+    #[arg(short = 'q', long, help = "Quiet: warnings and errors only")]
+    quiet: bool,
+
+    #[arg(value_name = "DIR", help = "The directory export-directory wrote")]
+    dir: PathBuf,
+}
+
+#[derive(Args)]
 struct InspectArgs {
     #[arg(value_name = "ARCHIVE", help = "Local SQLite archive")]
     archive: PathBuf,
@@ -648,6 +723,7 @@ pub enum Action {
     Export(CommonConfig, ExportConfig),
     ExportFiles(ExportFilesConfig),
     ExportDirectory(ExportDirectoryConfig),
+    ImportDirectory(ImportDirectoryConfig),
     ExportImap(CommonConfig, ExportImapConfig),
     ExportManageSieve(CommonConfig, ExportManageSieveConfig),
     ExportDav(CommonConfig, ExportDavConfig),
@@ -778,6 +854,7 @@ impl Cli {
             Command::Export(args) => resolve_export(*args),
             Command::ExportFiles(args) => resolve_export_files(*args),
             Command::ExportDirectory(args) => resolve_export_directory(*args),
+            Command::ImportDirectory(args) => resolve_import_directory(*args),
             Command::ExportImap(args) => resolve_export_imap(*args),
             Command::ExportManageSieve(args) => resolve_export_managesieve(*args),
             Command::ExportCaldav(args) => resolve_export_dav(*args, DavKindArg::Caldav),
@@ -1236,6 +1313,25 @@ fn resolve_export_directory(args: ExportDirectoryArgs) -> Result<Action, Error> 
         auth,
         dir: args.dir,
         domains: args.domain,
+        dry_run: args.dry_run,
+        max_retries: args.max_retries,
+        allow_invalid_certs: args.allow_invalid_certs,
+        logger: Logger::from_flags(args.quiet, args.verbose),
+    }))
+}
+
+fn resolve_import_directory(args: ImportDirectoryArgs) -> Result<Action, Error> {
+    let auth = resolve_auth(
+        args.auth_basic.as_deref(),
+        args.auth_password.as_deref(),
+        args.auth_bearer.as_ref(),
+    )?;
+    Ok(Action::ImportDirectory(ImportDirectoryConfig {
+        url: args.url,
+        auth,
+        dir: args.dir,
+        domains: args.domain,
+        passwords: args.passwords,
         dry_run: args.dry_run,
         max_retries: args.max_retries,
         allow_invalid_certs: args.allow_invalid_certs,
