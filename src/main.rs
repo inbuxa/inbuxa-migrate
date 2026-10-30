@@ -10,7 +10,7 @@ use clap::Parser;
 use inbuxa_migrate::cli::{Action, Cli};
 use inbuxa_migrate::error::Error;
 use inbuxa_migrate::sync::{self, RunOutcome, Summary};
-use inbuxa_migrate::{export_directory, export_files, import_directory, inspect};
+use inbuxa_migrate::{export_directory, export_files, import_directory, inspect, migrate};
 
 fn main() {
     let code = run();
@@ -124,6 +124,28 @@ fn run() -> i32 {
                 RunOutcome::from_result(sync::export_imap::run(common, config)),
                 logger,
             )
+        }
+        Action::Migrate(config) => {
+            return match migrate::run(config) {
+                Ok(outcome) => {
+                    println!(
+                        "accounts: {} done, {} not finished; report: {}",
+                        outcome.done,
+                        outcome.unfinished,
+                        outcome.report.display()
+                    );
+                    if outcome.unfinished > 0 {
+                        eprintln!(
+                            "error: some accounts did not finish; the report says why. Fix that \
+                             and run the same command again: it resumes where each stopped"
+                        );
+                        5
+                    } else {
+                        0
+                    }
+                }
+                Err(err) => fail(&err),
+            };
         }
         Action::Inspect(config) => {
             return match inspect::run(config) {

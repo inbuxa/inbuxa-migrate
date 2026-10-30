@@ -24,6 +24,7 @@ contacts, identities, Sieve scripts and files.
     inbuxa-migrate export-carddav … alice.sqlite  its contacts into any CardDAV server
     inbuxa-migrate export-directory … out        a server's accounts, no secrets
     inbuxa-migrate import-directory … out        those accounts, set up on inbuxa
+    inbuxa-migrate migrate --plan plan.json work  many accounts, by a plan
 
 Between the two sides sits an archive: one SQLite file holding one account.
 `import` fills it from the old server; `export` writes it into the new one.
@@ -49,8 +50,10 @@ servers and mail, calendar and contacts apps open, with no network and no
 store format in the way. For a whole server, `export-directory` writes the
 list of domains, accounts, groups, lists and aliases to set up again
 elsewhere, without passwords, and `import-directory` sets them up on an
-inbuxa server, with a new password for each user. The full command
-reference is in [docs/usage.md](docs/usage.md).
+inbuxa server, with a new password for each user. `migrate` moves many
+accounts with one plan file: the same steps for each account, several at
+once, resuming where it stopped, with one report at the end. The full
+command reference is in [docs/usage.md](docs/usage.md).
 
 ## Sources
 
