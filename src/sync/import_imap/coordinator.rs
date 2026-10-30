@@ -208,8 +208,17 @@ pub struct ImapImportConfig {
 
 #[derive(Debug, Clone)]
 pub enum ImapAuth {
-    Basic { user: String, password: String },
-    Bearer { user: String, token: String },
+    Basic {
+        user: String,
+        password: String,
+    },
+    Bearer {
+        user: String,
+        token: String,
+    },
+    /// A Google Workspace service account acting for the user: each sign-in
+    /// takes a token from it, a new one once the last is nearly spent.
+    Google(std::sync::Arc<crate::google::Delegated>),
 }
 
 pub fn run(common: CommonConfig, config: ImapImportConfig) -> Result<Summary, Error> {
@@ -517,6 +526,13 @@ pub(super) fn authenticate_client(client: &mut ImapClient, auth: &ImapAuth) -> R
 
 pub(crate) fn authenticate(client: &mut ImapClient, auth: &ImapAuth) -> Result<String, Error> {
     match auth {
+        ImapAuth::Google(delegated) => {
+            let bearer = ImapAuth::Bearer {
+                user: delegated.user().to_owned(),
+                token: delegated.token()?,
+            };
+            authenticate(client, &bearer)
+        }
         ImapAuth::Basic { user, password } => {
             if client.has_capability("AUTH=PLAIN") {
                 match client.authenticate_plain(user, password) {

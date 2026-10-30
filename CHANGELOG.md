@@ -13,6 +13,11 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
   granted application permissions, a whole Microsoft 365 tenant moves in a
   plan with no one signing in. The token is renewed before it runs out. A
   plan's `clientSecret` now reaches Graph as well as EWS.
+- `import imap --google-key` signs in to Gmail as a Google Workspace service
+  account with domain-wide delegation, acting for the user `--auth-user`
+  names. A whole Workspace domain moves in a plan with one key and no
+  one's password. The JWT is signed with the key itself (RS256), and each
+  connection takes a fresh token when the last is close to running out.
 
 ## [27.1-rc.5]
 

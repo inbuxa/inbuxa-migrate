@@ -1327,6 +1327,7 @@ dependencies = [
 name = "inbuxa-migrate"
 version = "27.1.0-rc.5"
 dependencies = [
+ "aws-lc-rs",
  "blake3",
  "calcard",
  "chrono",

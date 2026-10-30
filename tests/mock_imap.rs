@@ -2308,3 +2308,111 @@ fn append_refused_before_the_go_ahead_sends_nothing_and_keeps_the_session() {
     }
     client.noop().expect("session still usable");
 }
+
+/// A service account's JSON key for a new RSA key, with the token
+/// endpoint at `token_uri`, and the key's public half.
+fn google_key(token_uri: &str) -> (String, Vec<u8>) {
+    use aws_lc_rs::encoding::{AsDer, Pkcs8V1Der};
+    use aws_lc_rs::signature::KeyPair as _;
+    let pair = aws_lc_rs::rsa::KeyPair::generate(aws_lc_rs::rsa::KeySize::Rsa2048).unwrap();
+    let der: Pkcs8V1Der<'static> = pair.as_der().unwrap();
+    let body = STANDARD.encode(der.as_ref());
+    let lines: Vec<&str> = body
+        .as_bytes()
+        .chunks(64)
+        .map(|c| std::str::from_utf8(c).unwrap())
+        .collect();
+    let pem = format!(
+        "-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----\n",
+        lines.join("\n")
+    );
+    let key = serde_json::json!({
+        "type": "service_account", "client_email": "migrate@proj.iam.gserviceaccount.com",
+        "private_key": pem, "token_uri": token_uri,
+    });
+    (key.to_string(), pair.public_key().as_ref().to_vec())
+}
+
+#[test]
+fn coordinator_signs_in_to_gmail_as_a_service_account_acting_for_the_user() {
+    let mut google = mockito::Server::new();
+    let token_uri = format!("{}/token", google.url());
+    let (key, public) = google_key(&token_uri);
+    let audience = token_uri.clone();
+    let _token = google
+        .mock("POST", "/token")
+        .match_body(mockito::Matcher::Regex(
+            "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer".to_owned(),
+        ))
+        .with_body_from_request(move |request| {
+            let body = String::from_utf8_lossy(request.body().unwrap()).into_owned();
+            let assertion = body
+                .split('&')
+                .find_map(|p| p.strip_prefix("assertion="))
+                .unwrap();
+            let (signed, signature) = assertion.rsplit_once('.').unwrap();
+            let signature = encodify::base64::URL_SAFE_NO_PAD.decode(signature).unwrap();
+            aws_lc_rs::signature::UnparsedPublicKey::new(
+                &aws_lc_rs::signature::RSA_PKCS1_2048_8192_SHA256,
+                &public,
+            )
+            .verify(signed.as_bytes(), &signature)
+            .expect("the assertion is signed with the account's key");
+            let claims = signed.split('.').nth(1).unwrap();
+            let claims: serde_json::Value =
+                serde_json::from_slice(&encodify::base64::URL_SAFE_NO_PAD.decode(claims).unwrap())
+                    .unwrap();
+            assert_eq!(claims["iss"], "migrate@proj.iam.gserviceaccount.com");
+            assert_eq!(claims["sub"], "alice@example.org");
+            assert_eq!(claims["scope"], "https://mail.google.com/");
+            assert_eq!(claims["aud"], audience.as_str());
+            br#"{"access_token":"ya29.for-alice","expires_in":3599}"#.to_vec()
+        })
+        .expect(1)
+        .create();
+
+    const CAPS: &str = "IMAP4rev2 LITERAL+ SASL-IR AUTH=XOAUTH2";
+    let control: Script = Box::new(|conn: &mut MockConn| -> std::io::Result<()> {
+        conn.write_line("* OK ready")?;
+        let (tag, _) = conn.read_command()?;
+        write_capability(conn, CAPS)?;
+        conn.write_line(&format!("{tag} OK done"))?;
+        let (tag, cmd) = conn.read_command()?;
+        let payload = cmd.strip_prefix("AUTHENTICATE XOAUTH2 ").unwrap();
+        assert_eq!(
+            STANDARD.decode(payload).unwrap(),
+            b"user=alice@example.org\x01auth=Bearer ya29.for-alice\x01\x01"
+        );
+        write_post_auth_caps(conn, &tag, CAPS)?;
+        let (tag, _) = conn.read_command()?;
+        write_capability(conn, CAPS)?;
+        conn.write_line(&format!("{tag} OK done"))?;
+        let (tag, _) = conn.read_command()?;
+        conn.write_line("* LIST () \"/\" \"INBOX\"")?;
+        conn.write_line(&format!("{tag} OK"))?;
+        let (tag, _) = conn.read_command()?;
+        conn.write_line(&format!("{tag} OK"))?;
+        let (tag, _) = conn.read_command()?;
+        write_select(conn, &tag, 100, 1, 0)?;
+        let (tag, _) = conn.read_command()?;
+        conn.write_line("* SEARCH")?;
+        conn.write_line(&format!("{tag} OK"))?;
+        drain_until_close(conn);
+        Ok(())
+    });
+    let server = MockImap::start_scripts(vec![control, worker_idle_script(CAPS)]);
+    let account = inbuxa_migrate::google::ServiceAccount::parse(&key).unwrap();
+    let delegated = inbuxa_migrate::google::Delegated::new(
+        std::sync::Arc::new(account),
+        "alice@example.org",
+        inbuxa_migrate::google::MAIL_SCOPE,
+    );
+    let archive = tempfile("google_service_account");
+    let summary = run_import(&server, "alice@example.org", archive, |c| {
+        c.auth = ImapAuth::Google(std::sync::Arc::new(delegated));
+    })
+    .expect("import");
+    assert!(!summary.any_failed());
+    // Both connections signed in on the one token.
+    _token.assert();
+}

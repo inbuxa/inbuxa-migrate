@@ -235,7 +235,7 @@ struct JmapImportArgs {
 }
 
 #[derive(Args)]
-#[command(group(clap::ArgGroup::new("auth").required(true).args(["auth_basic", "auth_bearer"])))]
+#[command(group(clap::ArgGroup::new("auth").required(true).args(["auth_basic", "auth_bearer", "google_key"])))]
 struct ImapImportArgs {
     #[arg(
         long,
@@ -269,9 +269,16 @@ struct ImapImportArgs {
     #[arg(
         long,
         value_name = "USER",
-        help = "XOAUTH2 identity (required with --auth-bearer)"
+        help = "XOAUTH2 identity (required with --auth-bearer and --google-key)"
     )]
     auth_user: Option<String>,
+
+    #[arg(
+        long,
+        value_name = "FILE",
+        help = "Google Workspace: a service account's JSON key with domain-wide delegation; signs in as --auth-user"
+    )]
+    google_key: Option<PathBuf>,
 
     #[arg(long, help = "Permit credentials on imap:// without STARTTLS")]
     allow_cleartext: bool,
@@ -1211,12 +1218,30 @@ fn resolve_jmap_import(args: JmapImportArgs) -> Result<Action, Error> {
 
 fn resolve_imap_import(args: ImapImportArgs) -> Result<Action, Error> {
     let common = common_config(&args.global, args.archive);
-    let auth = resolve_imap_auth(
-        args.auth_basic.as_deref(),
-        args.auth_password.as_deref(),
-        args.auth_bearer.as_ref(),
-        args.auth_user.as_deref(),
-    )?;
+    let auth = match &args.google_key {
+        Some(key) => {
+            if args.auth_password.is_some() {
+                return Err(Error::Usage(
+                    "--auth-password is only valid together with --auth-basic".to_owned(),
+                ));
+            }
+            let user = args.auth_user.as_deref().ok_or_else(|| {
+                Error::Usage("--auth-user names the account --google-key signs in as".to_owned())
+            })?;
+            let account = std::sync::Arc::new(crate::google::ServiceAccount::load(key)?);
+            ImapAuth::Google(std::sync::Arc::new(crate::google::Delegated::new(
+                account,
+                user,
+                crate::google::MAIL_SCOPE,
+            )))
+        }
+        None => resolve_imap_auth(
+            args.auth_basic.as_deref(),
+            args.auth_password.as_deref(),
+            args.auth_bearer.as_ref(),
+            args.auth_user.as_deref(),
+        )?,
+    };
     if !args.folder.is_empty() && (!args.include.is_empty() || !args.exclude.is_empty()) {
         return Err(Error::Usage(
             "--folder is mutually exclusive with --include/--exclude".to_owned(),
@@ -2106,6 +2131,35 @@ mod tests {
                     if client_secret == "s3cret" && authority.ends_with("/contoso.onmicrosoft.com")
             )),
             _ => panic!("expected an app-only exchange-graph import"),
+        }
+    }
+
+    #[test]
+    fn imap_google_key_signs_in_as_the_user_auth_user_names() {
+        let _g = lock();
+        let parse = |extra: &[&str]| {
+            let mut argv = vec![
+                "inbuxa-migrate",
+                "import",
+                "imap",
+                "--url",
+                "imaps://imap.gmail.com",
+            ];
+            argv.extend_from_slice(extra);
+            argv.push("archive.sqlite");
+            Cli::try_parse_from(argv)
+        };
+        assert!(parse(&["--google-key", "k.json", "--auth-basic", "a"]).is_err());
+        match parse(&["--google-key", "k.json"]).unwrap().resolve() {
+            Err(Error::Usage(m)) => assert!(m.contains("--auth-user"), "{m}"),
+            _ => panic!("--auth-user is needed"),
+        }
+        match parse(&["--google-key", "/nonexistent/k.json", "--auth-user", "a@x"])
+            .unwrap()
+            .resolve()
+        {
+            Err(Error::Usage(m)) => assert!(m.contains("/nonexistent/k.json"), "{m}"),
+            _ => panic!("a missing key file is a usage error"),
         }
     }
 }
