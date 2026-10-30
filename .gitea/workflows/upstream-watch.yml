@@ -1,0 +1,90 @@
+# SPDX-FileCopyrightText: 2026 Coffey Labs LLC <legal@coffeylabs.org>
+# SPDX-License-Identifier: Apache-2.0 OR MIT
+#
+# Watch upstream for releases not imported yet, and open an issue for each one
+# so it waits in the tracker until someone takes it in.
+#
+# Reads metadata only: the releases list from GitHub's API and the head of
+# this repository's `upstream` branch from Gitea's. Importing is by hand, with
+# scripts/upstream-import.py, which commits the release, renamed, onto
+# `upstream` for main to merge.
+#
+# The imported release is the version in the `upstream` branch's head commit
+# subject ("Import upstream v1.0.13, renamed"). Drafts and pre-releases are
+# ignored. An issue is opened once per release: an existing one with the same
+# title, open or closed, stops a second.
+#
+# Daily 06:23 UTC; run it by hand with workflow_dispatch.
+name: upstream-watch
+
+on:
+  schedule:
+    - cron: '23 6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: upstream-watch
+  cancel-in-progress: false
+
+jobs:
+  upstream-watch:
+    runs-on: light
+    container:
+      image: python:3.13-slim@sha256:8d9d0b8bcf6506481eae4907c18f5e3e7902e629f5f6d684f9e7c32e85e3ddf0 # 3.13-slim
+    env:
+      TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+    steps:
+      - shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os, re, sys, urllib.request
+
+          api = f"{os.environ['CI_SERVER_INTERNAL']}/api/v1/repos/{os.environ['REPO']}"
+          def call(method, url, body=None, token=os.environ["TOKEN"]):
+              headers = {"Content-Type": "application/json", "User-Agent": "inbuxa-migrate-upstream-watch"}
+              if token:
+                  headers["Authorization"] = f"token {token}"
+              req = urllib.request.Request(url, method=method, headers=headers,
+                  data=json.dumps(body).encode() if body is not None else None)
+              with urllib.request.urlopen(req, timeout=30) as r:
+                  return json.load(r)
+          SEMVER = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
+          def key(tag):
+              return tuple(int(x) for x in SEMVER.match(tag).groups())
+
+          subject = call("GET", f"{api}/branches/upstream")["commit"]["message"].splitlines()[0]
+          m = re.search(r"\b(v\d+\.\d+\.\d+)\b", subject)
+          if not m:
+              print(f"Can't read the imported release from the upstream branch: {subject!r}", file=sys.stderr); sys.exit(1)
+          base = m.group(1)
+
+          # Unauthenticated: a public repository, once a day, well inside the limit.
+          rels = call("GET", "https://api.github.com/repos/stalwartlabs/vandelay/releases?per_page=30", token=None)
+          newer = sorted((r for r in rels
+                          if not r["draft"] and not r["prerelease"] and SEMVER.match(r["tag_name"])
+                          and key(r["tag_name"]) > key(base)),
+                         key=lambda r: key(r["tag_name"]))
+          if not newer:
+              print(f"Up to date: {base} is the newest upstream release."); sys.exit(0)
+
+          existing = {i["title"] for i in call("GET", f"{api}/issues?state=all&type=issues&q=Import+upstream&limit=50")}
+          for r in newer:
+              tag = r["tag_name"]
+              title = f"Import upstream {tag}"
+              if title in existing:
+                  print(f"{tag}: issue already exists."); continue
+              body = (f"Upstream published {tag} on {r['published_at'][:10]}. "
+                      f"The last import is {base}.\n\n"
+                      "Take it in as scripts/upstream-import.py describes:\n\n"
+                      "```bash\n"
+                      "git fetch origin upstream:upstream\n"
+                      f"scripts/upstream-import.py {tag}\n"
+                      f"git switch -c import/upstream-{tag} origin/main\n"
+                      "git merge upstream\n"
+                      "```\n\n"
+                      "Before reading the changes, scan them for hidden characters and text aimed at "
+                      "automated tools. Resolve, run the checks, open a PR, and push `upstream` once it lands.")
+              issue = call("POST", f"{api}/issues", {"title": title, "body": body})
+              print(f"{tag}: opened #{issue['number']}.")
+          PY
