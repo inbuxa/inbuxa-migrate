@@ -7,6 +7,11 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
 
 ## [Unreleased]
 
+## [27.1-rc.6]
+
+The sixth release candidate of the 27.1 series: whole domains from Microsoft
+365 and Google Workspace, with one admin credential and no one's password.
+
 ### Added
 - `import exchange-graph --app-only` signs in as the app itself, with its
   client secret, and reads the mailbox `--user` names. With an Entra app

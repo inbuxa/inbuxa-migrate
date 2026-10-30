@@ -1325,7 +1325,7 @@ dependencies = [
 
 [[package]]
 name = "inbuxa-migrate"
-version = "27.1.0-rc.5"
+version = "27.1.0-rc.6"
 dependencies = [
  "aws-lc-rs",
  "blake3",
