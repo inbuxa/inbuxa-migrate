@@ -199,7 +199,7 @@ pub fn run(common: CommonConfig, config: ManageSieveImportConfig) -> Result<Summ
                 }
                 Disposition::Referral => {
                     return Err(Error::Connection(format!(
-                        "ManageSieve referral on GETSCRIPT {name:?}: {e}; vandelay does not follow referrals"
+                        "ManageSieve referral on GETSCRIPT {name:?}: {e}; inbuxa-migrate does not follow referrals"
                     )));
                 }
                 Disposition::TransportDrop => {
@@ -536,7 +536,7 @@ fn listscripts_with_retry(
                 }
                 Disposition::Referral => {
                     return Err(Error::Connection(format!(
-                        "LISTSCRIPTS referral: {e}; vandelay does not follow referrals"
+                        "LISTSCRIPTS referral: {e}; inbuxa-migrate does not follow referrals"
                     )));
                 }
                 _ => return Err(Error::Connection(format!("LISTSCRIPTS failed: {e}"))),

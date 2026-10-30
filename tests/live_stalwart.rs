@@ -7,10 +7,10 @@
 mod integration;
 mod seeder;
 
+use inbuxa_migrate::jmap::account::{self, AccountSelector};
+use inbuxa_migrate::jmap::http::{Auth, HttpClient, RetryPolicy};
+use inbuxa_migrate::jmap::session::Session;
 use integration::stalwart::shared as shared_stalwart;
-use vandelay::jmap::account::{self, AccountSelector};
-use vandelay::jmap::http::{Auth, HttpClient, RetryPolicy};
-use vandelay::jmap::session::Session;
 
 fn admin_client() -> HttpClient {
     HttpClient::new(

@@ -98,7 +98,9 @@ fn verify_account(label: &str, user: &Jmap, account_id: &str, s: &SeedStats) {
             assert_eq!(list.len(), 2, "{label}: sieve script count");
             let primary = list
                 .iter()
-                .find(|s| s.get("name").and_then(Value::as_str) == Some("vandelay-test-filter"))
+                .find(|s| {
+                    s.get("name").and_then(Value::as_str) == Some("inbuxa-migrate-test-filter")
+                })
                 .expect("primary sieve script present");
             assert_eq!(
                 primary.get("isActive").and_then(Value::as_bool),

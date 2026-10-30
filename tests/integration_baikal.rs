@@ -16,11 +16,11 @@ use integration::validate::{
     contact_card_count, count, open_archive, tmp_archive,
 };
 
+use inbuxa_migrate::error::Error;
+use inbuxa_migrate::sync::import_dav;
+use inbuxa_migrate::sync::import_dav::{DavAuth, DavImportConfig, DavKindArg};
 use rusqlite::Connection;
 use serde_json::Value;
-use vandelay::error::Error;
-use vandelay::sync::import_dav;
-use vandelay::sync::import_dav::{DavAuth, DavImportConfig, DavKindArg};
 
 fn dav_config(kind: DavKindArg, account: &Account, dav_root: &str) -> DavImportConfig {
     let path = match kind {

@@ -6,10 +6,10 @@
 
 use clap::Parser;
 
-use vandelay::cli::{Action, Cli};
-use vandelay::error::Error;
-use vandelay::inspect;
-use vandelay::sync::{self, RunOutcome, Summary};
+use inbuxa_migrate::cli::{Action, Cli};
+use inbuxa_migrate::error::Error;
+use inbuxa_migrate::inspect;
+use inbuxa_migrate::sync::{self, RunOutcome, Summary};
 
 fn main() {
     let code = run();

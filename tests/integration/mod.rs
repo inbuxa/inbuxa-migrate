@@ -22,7 +22,7 @@ pub mod webdav;
 
 pub use error::{ContainerError, ContainerResult};
 
-pub const OWNER_LABEL: &str = "art.stalw.vandelay.itest";
+pub const OWNER_LABEL: &str = "art.stalw.inbuxa-migrate.itest";
 
 use std::sync::Once;
 

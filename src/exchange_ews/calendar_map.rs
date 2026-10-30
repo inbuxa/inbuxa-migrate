@@ -53,7 +53,7 @@ fn build_event_map(raw: &CalendarItemRaw, iana: Option<&str>) -> Map<String, Val
         event.insert(
             "uid".to_owned(),
             Value::String(format!(
-                "vandelay-ews-event-{}",
+                "inbuxa-migrate-ews-event-{}",
                 blake3::hash(raw.id.id.as_bytes()).to_hex()
             )),
         );
@@ -723,7 +723,7 @@ mod tests {
             .unwrap();
         let addr = p["calendarAddress"].as_str().unwrap();
         assert!(
-            addr.starts_with("urn:x-vandelay:attendee:"),
+            addr.starts_with("urn:x-inbuxa-migrate:attendee:"),
             "a name-only attendee gets a stable synthetic calendarAddress, got {addr}"
         );
         assert!(
@@ -771,7 +771,7 @@ mod tests {
         let v = to_jscalendar(&raw).data;
         let org_addr = v["organizerCalendarAddress"].as_str().unwrap();
         assert!(
-            org_addr.starts_with("urn:x-vandelay:attendee:") && !org_addr.contains("mailto:"),
+            org_addr.starts_with("urn:x-inbuxa-migrate:attendee:") && !org_addr.contains("mailto:"),
             "an EX organizer must not become mailto:/o=.../cn=...; got {org_addr}"
         );
         let att = v["participants"]
@@ -921,7 +921,7 @@ mod tests {
         let v = to_jscalendar(&raw).data;
         let addr = v["organizerCalendarAddress"].as_str().unwrap();
         assert!(
-            addr.starts_with("urn:x-vandelay:attendee:"),
+            addr.starts_with("urn:x-inbuxa-migrate:attendee:"),
             "an unresolvable directory reference stays synthetic, got {addr}"
         );
         let participants = v["participants"].as_object().unwrap();
@@ -947,7 +947,7 @@ mod tests {
             v["organizerCalendarAddress"]
                 .as_str()
                 .unwrap()
-                .starts_with("urn:x-vandelay:attendee:")
+                .starts_with("urn:x-inbuxa-migrate:attendee:")
         );
     }
 

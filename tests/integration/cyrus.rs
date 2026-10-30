@@ -142,7 +142,7 @@ pub struct Cyrus {
 
 impl Cyrus {
     pub fn start() -> ContainerResult<Self> {
-        let image: GenericImage = GenericBuildableImage::new("vandelay-cyrus", "test")
+        let image: GenericImage = GenericBuildableImage::new("inbuxa-migrate-cyrus", "test")
             .with_dockerfile_string(DOCKERFILE.to_owned())
             .with_data(IMAPD_CONF.as_bytes().to_vec(), "imapd.conf")
             .with_data(CYRUS_CONF.as_bytes().to_vec(), "cyrus.conf")
@@ -313,10 +313,13 @@ impl Cyrus {
     ) -> ContainerResult<(Vec<u8>, String)> {
         let mut client = ImapSeed::connect(&self.imap.host, self.imap.port)?;
         client.login(&account.username, &account.password)?;
-        let message_id = format!("<cyrus-added-{tag}-{}@vandelay.test>", account.username);
+        let message_id = format!(
+            "<cyrus-added-{tag}-{}@inbuxa-migrate.test>",
+            account.username
+        );
         let body = format!(
-            "From: cyrus-added-{tag}@vandelay.test\r\n\
-             To: {}@vandelay.test\r\n\
+            "From: cyrus-added-{tag}@inbuxa-migrate.test\r\n\
+             To: {}@inbuxa-migrate.test\r\n\
              Subject: Cyrus added probe {tag}\r\n\
              Message-ID: {message_id}\r\n\
              Date: Wed, 01 Jan 2025 12:00:00 +0000\r\n\
@@ -372,10 +375,10 @@ impl Cyrus {
 }
 
 pub fn flag_probe_message() -> Vec<u8> {
-    let body = "From: probe-flags@vandelay.test\r\n\
-                To: user@vandelay.test\r\n\
+    let body = "From: probe-flags@inbuxa-migrate.test\r\n\
+                To: user@inbuxa-migrate.test\r\n\
                 Subject: Cyrus flag probe\r\n\
-                Message-ID: <cyrus-flag-probe@vandelay.test>\r\n\
+                Message-ID: <cyrus-flag-probe@inbuxa-migrate.test>\r\n\
                 Date: Wed, 01 Jan 2025 12:00:00 +0000\r\n\
                 \r\n\
                 Cyrus flag probe body.\r\n";

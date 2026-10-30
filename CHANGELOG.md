@@ -1,6 +1,207 @@
 # Change Log
 
-All notable changes to this project will be documented in this file. This project adheres to [Semantic Versioning](http://semver.org/).
+All notable changes to this project are recorded here. Versions follow the
+inbuxa suite: a series (`27.1`), its patches (`27.1.3`) and release
+candidates before a series ships (`27.1-rc.1`). The tag is the version with a
+`v`. Releases before 27.1 were dates (`v2026.9.30`).
+
+## [Unreleased]
+
+## [27.1-rc.6]
+
+The sixth release candidate of the 27.1 series: whole domains from Microsoft
+365 and Google Workspace, with one admin credential and no one's password.
+
+### Added
+- `import exchange-graph --app-only` signs in as the app itself, with its
+  client secret, and reads the mailbox `--user` names. With an Entra app
+  granted application permissions, a whole Microsoft 365 tenant moves in a
+  plan with no one signing in. The token is renewed before it runs out. A
+  plan's `clientSecret` now reaches Graph as well as EWS.
+- `import imap --google-key` signs in to Gmail as a Google Workspace service
+  account with domain-wide delegation, acting for the user `--auth-user`
+  names. A whole Workspace domain moves in a plan with one key and no
+  one's password. The JWT is signed with the key itself (RS256), and each
+  connection takes a fresh token when the last is close to running out.
+- The guide offers Microsoft 365 (an Entra app, app-only) and Google
+  Workspace (a service account) as sources. Its check signs the app in and
+  names any permission it lacks, or asks Google for a token for the first
+  account.
+
+## [27.1-rc.5]
+
+The fifth release candidate of the 27.1 series: the guided mode. A move
+into inbuxa can now be walked through in the browser, from the source to the
+final pass.
+
+### Added
+- `guide` walks through a move into inbuxa in the browser. It serves a page
+  on 127.0.0.1 that asks for the source (IMAP with a master user, JMAP with
+  an administrator, or Maildir folders), the accounts (pasted, from a CSV,
+  or read from the source) and the inbuxa server. It can create the missing
+  accounts, previews with a dry run, then moves the mail with live progress
+  and runs a final pass. It writes an ordinary plan and runs it with
+  `migrate`, so the same move can be finished from a terminal. Secrets stay
+  in memory, and only the browser given the address, with its random
+  token, gets an answer.
+
+## [27.1-rc.4]
+
+The fourth release candidate of the 27.1 series: a whole domain moves with
+one plan file, set up on inbuxa from an exported directory and exported
+account by account with one administrator's key.
+
+### Added
+- `import-directory` sets up on an inbuxa server what `export-directory`
+  wrote: tenants, roles, domains, groups, users and mailing lists, with
+  their aliases, quotas, roles and memberships. What the server already has
+  is left as it is, so running it again creates nothing. Each user created
+  gets a generated password, written to a new file readable by its owner
+  only.
+- `migrate --plan` moves many accounts with one command. The plan names
+  the steps, which are the commands in the docs with `{email}` and
+  `{archive}` filled in per account, and the accounts, listed or taken
+  from `directory.json`. Several accounts run at once, each with its own
+  archive and logs. A second run resumes where each stopped, `--again`
+  runs the final pass, and `report.csv` says what moved and why anything
+  didn't. Secrets are named by environment variable, never written in the
+  plan.
+
+### Fixed
+- `export` into inbuxa renames Stalwart's Sieve extensions
+  (`vnd.stalwart.while` and the rest) to inbuxa's. It looked for inbuxa's
+  names in the server's list of Sieve extensions, which doesn't name them,
+  so scripts went in unchanged. It now goes by the session, which says the
+  server is inbuxa.
+- `inspect` opens the archive read-only. It used to create an empty archive
+  at a mistyped path and bring an older archive's layout up to date; now
+  the first is an error and the second is refused, and reading a closed
+  archive leaves no files beside it.
+- `import carddav` takes a card that is in two address books into both.
+  It used to fail on that card on every run. Taking it out of one book, or
+  deleting that book, now leaves it in the other.
+- `import caldav` keeps every occurrence of a series someone was invited to
+  one occurrence at a time, with no master event. It used to keep the first
+  and drop the rest. `export` now tells such occurrences apart instead of
+  writing them all onto one event, and `export-caldav` writes them as one
+  resource, as CalDAV keeps them.
+
+## [27.1-rc.3]
+
+The third release candidate of the 27.1 series: contacts, calendars and
+filters go straight into another server, as mail already could.
+
+### Added
+- `export-managesieve` writes an archive's Sieve scripts into any
+  ManageSieve server and makes the archive's active script the active one.
+  Like `export-imap`, it writes only what's missing or differs, so running
+  it again writes nothing. A script the server refuses is counted and the
+  rest go on; `--dry-run` checks each one with `CHECKSCRIPT`.
+- `export-caldav` and `export-carddav` write an archive's calendars and
+  address books into any CalDAV or CardDAV server. The account's home is
+  found from the server's root, collections are matched by name or made,
+  and each event or card is written only when it's missing or differs, under
+  its etag, so running it again writes nothing. Nothing is deleted.
+
+### Changed
+- `export-files` names its layout in `manifest.json` by the address of its
+  specification, `https://coffeylabs.org/specs/account-export/`, instead of
+  `inbuxa-migrate-files`. The layout itself is unchanged (`formatVersion` 1).
+
+## [27.1-rc.2]
+
+The second release candidate of the 27.1 series: three ways out of an
+archive or a server that need no vendor's store format.
+
+### Added
+- `export-files` writes an archive out as plain files in open formats: mail
+  as a Maildir++ tree, each address book as a `.vcf`, each calendar as an
+  `.ics`, Sieve scripts, the file tree, and a `manifest.json` with what those
+  formats don't hold. It needs no network, writes only into a new or empty
+  directory, and keeps the directory private to its owner.
+- `export-imap` writes an archive's mail into any IMAP server: folders in the
+  server's own layout (SPECIAL-USE folders for sent, drafts, trash, junk and
+  archive), flags, keywords where the folder keeps them, and arrival times.
+  Like `export`, it matches what is already there, so running it again
+  writes only what changed.
+- `export-directory` writes who is on a server: its domains, users, groups,
+  mailing lists, aliases, quotas, tenants and roles, read from the registry
+  with an administrator's login, as `directory.json` and CSV files that
+  another server can be set up from. Credentials, OTP seeds, API keys and
+  DKIM keys are never asked for. `--domain` keeps it to some domains.
+
+### Changed
+- `import maildir` reads folder names in modified UTF-7, as Dovecot and
+  Courier write them, and the custom keywords in each folder's
+  `dovecot-keywords` file (Junk, labels).
+- A FETCH section with a header list, such as
+  `BODY[HEADER.FIELDS (MESSAGE-ID)]`, is read as one item.
+- `import takeout` unfolds and unescapes a calendar's `X-WR-CALNAME` and
+  `X-WR-CALDESC`, so a long name or one with a comma reads back whole.
+
+## [27.1-rc.1]
+
+The first release candidate of the 27.1 series, with the rest of the suite.
+
+### Changed
+- `--version` and the User-Agent show the version as tags name it
+  (`27.1-rc.1`).
+
+## [2026.10.26] -- 2026-10-26
+
+### Changed
+- `--auth-bearer` reads `INBUXA_MIGRATE_API_KEY`, the name inbuxa-cli and the
+  console use. `INBUXA_MIGRATE_TOKEN` still works; when both are set, the API
+  key wins.
+
+## [2026.9.30] -- 2026-09-30
+
+The first release of inbuxa-migrate.
+
+### Changed
+- Renamed to inbuxa-migrate: the binary, the crate, and the credential
+  variables, now `INBUXA_MIGRATE_PASSWORD`, `INBUXA_MIGRATE_TOKEN`,
+  `INBUXA_MIGRATE_EWS_CLIENT_SECRET` and `INBUXA_MIGRATE_GRAPH_TOKEN`. The old
+  names are not read. Archives written by Vandelay are not read either.
+- Registry calls (`x:Account`, `x:Domain` and the other `x:` types) use the
+  capability the server advertises: `urn:inbuxa:jmap:registry` on inbuxa,
+  `urn:stalwart:jmap` on a Stalwart source. A server that advertises neither
+  gets a clear error instead of a request it never offered to accept.
+- Released as Linux archives for amd64 and arm64 on the Gitea release page,
+  with `SHA256SUMS`. The npm, Homebrew, shell and PowerShell installers and
+  the MSI are gone.
+- A second export brings matched items up to date instead of skipping them:
+  flags and folders on mail, changed contacts and events, and edited Sieve
+  scripts.
+- A message filed in several folders is written once, in every one of them,
+  and a resumed export adds any folder it was still missing.
+- Sieve scripts from a Stalwart server keep working on inbuxa: their
+  `vnd.stalwart.*` extension names are renamed to inbuxa's, each rename is
+  logged, and a script that can't be activated fails the export instead of
+  leaving filtering quietly off.
+- `--allow-invalid-certs` covers only the server named with `--url`. Microsoft
+  and Google sign-in are always verified.
+- Export imports mail in batches, uploads in parallel within the target's
+  limits, and prints progress: count, rate and time left.
+- `export --dry-run` predicts what would fail -- messages over the target's
+  upload limit, objects over its request limit, Sieve scripts it would reject
+  -- lists what would be created, updated and skipped, and exits as the real
+  run would.
+
+### Fixed
+- Every connection times out instead of waiting forever on a dropped link,
+  and a timeout is retried like any other transient error.
+- An interrupted IMAP or Maildir import keeps what it wrote, and a message
+  that can't be read is recorded and skipped rather than ending the folder.
+- IMAP and EWS imports hold a bounded amount in memory, in batches capped by
+  size as well as count.
+- The archive is created readable by its owner only, and an existing archive
+  others can read is reported.
+- A dry run no longer writes to the target's address books.
+
+---
+
+# Earlier releases (upstream Vandelay)
 
 ## [1.0.11] - 2026-09-28
 

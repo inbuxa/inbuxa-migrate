@@ -22,16 +22,16 @@ fn imaps_url() -> String {
     format!("imaps://{}:{}", s.host, s.imaps_port)
 }
 
-use vandelay::jmap::account::AccountSelector;
-use vandelay::jmap::http::Auth;
-use vandelay::logging::Logger;
-use vandelay::sync::import_imap::{ImapAuth, ImapImportConfig};
-use vandelay::sync::{self, CommonConfig, ConnectConfig, ExportConfig, ImportConfig};
+use inbuxa_migrate::jmap::account::AccountSelector;
+use inbuxa_migrate::jmap::http::Auth;
+use inbuxa_migrate::logging::Logger;
+use inbuxa_migrate::sync::import_imap::{ImapAuth, ImapImportConfig};
+use inbuxa_migrate::sync::{self, CommonConfig, ConnectConfig, ExportConfig, ImportConfig};
 
 fn tmp_archive(tag: &str) -> PathBuf {
     let mut p = std::env::temp_dir();
     p.push(format!(
-        "vandelay-imap-{tag}-{}-{}.sqlite",
+        "inbuxa-migrate-imap-{tag}-{}-{}.sqlite",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

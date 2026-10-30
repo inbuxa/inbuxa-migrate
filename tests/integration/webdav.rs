@@ -137,7 +137,7 @@ pub struct WebDav {
 
 impl WebDav {
     pub fn start() -> ContainerResult<Self> {
-        let image: GenericImage = GenericBuildableImage::new("vandelay-webdav", "test")
+        let image: GenericImage = GenericBuildableImage::new("inbuxa-migrate-webdav", "test")
             .with_dockerfile_string(DOCKERFILE.to_owned())
             .with_data(APACHE_CONF.as_bytes().to_vec(), "apache.conf")
             .with_data(htpasswd_for_test().into_bytes(), "htpasswd")

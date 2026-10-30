@@ -10,15 +10,15 @@ mod seeder;
 use std::path::{Path, PathBuf};
 
 use encodify::base64::STANDARD;
+use inbuxa_migrate::jmap::account::{self, AccountSelector};
+use inbuxa_migrate::jmap::http::{Auth, HttpClient, RetryPolicy};
+use inbuxa_migrate::jmap::request::Request;
+use inbuxa_migrate::jmap::session::Session;
+use inbuxa_migrate::logging::Logger;
+use inbuxa_migrate::sync::{self, CommonConfig, ConnectConfig, ExportConfig, ImportConfig};
 use integration::stalwart::shared as shared_stalwart;
 use rusqlite::Connection;
 use serde_json::{Map, Value, json};
-use vandelay::jmap::account::{self, AccountSelector};
-use vandelay::jmap::http::{Auth, HttpClient, RetryPolicy};
-use vandelay::jmap::request::Request;
-use vandelay::jmap::session::Session;
-use vandelay::logging::Logger;
-use vandelay::sync::{self, CommonConfig, ConnectConfig, ExportConfig, ImportConfig};
 
 fn base_url() -> &'static str {
     shared_stalwart().base_url()
@@ -27,7 +27,7 @@ fn base_url() -> &'static str {
 fn tmp_archive(tag: &str) -> PathBuf {
     let mut p = std::env::temp_dir();
     p.push(format!(
-        "vandelay-{tag}-{}-{}.sqlite",
+        "inbuxa-migrate-{tag}-{}-{}.sqlite",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -181,7 +181,7 @@ fn import_resolves_account_via_admin_principal_path() {
             },
             account: AccountSelector::Name(target.email.clone()),
         },
-        objects: Some(vec![vandelay::types::ObjectType::Mailbox]),
+        objects: Some(vec![inbuxa_migrate::types::ObjectType::Mailbox]),
         allow_source_change: false,
     };
     let summary = sync::import_jmap::run(common(&archive, false), cfg)
@@ -390,7 +390,7 @@ fn import_export_deeply_nested_mailbox_tree() {
             auth: basic("test4"),
             account: AccountSelector::Id(src.account_id.clone()),
         },
-        objects: Some(vec![vandelay::types::ObjectType::Mailbox]),
+        objects: Some(vec![inbuxa_migrate::types::ObjectType::Mailbox]),
         allow_source_change: false,
     };
     let s = sync::import_jmap::run(common(&archive, false), imp).expect("import");
@@ -432,7 +432,7 @@ fn import_export_deeply_nested_mailbox_tree() {
             auth: basic("test5"),
             account: AccountSelector::Id(tgt.account_id.clone()),
         },
-        objects: Some(vec![vandelay::types::ObjectType::Mailbox]),
+        objects: Some(vec![inbuxa_migrate::types::ObjectType::Mailbox]),
         allow_source_change: false,
     };
     sync::import_jmap::run(common(&again_archive, false), imp_again)
@@ -470,7 +470,7 @@ fn import_export_deeply_nested_filenode_tree() {
             auth: basic("test4"),
             account: AccountSelector::Id(src.account_id.clone()),
         },
-        objects: Some(vec![vandelay::types::ObjectType::FileNode]),
+        objects: Some(vec![inbuxa_migrate::types::ObjectType::FileNode]),
         allow_source_change: false,
     };
     let s = sync::import_jmap::run(common(&archive, false), imp).expect("import");
@@ -514,7 +514,7 @@ fn import_export_deeply_nested_filenode_tree() {
                 auth: basic("test5"),
                 account: AccountSelector::Id(tgt.account_id.clone()),
             },
-            objects: Some(vec![vandelay::types::ObjectType::FileNode]),
+            objects: Some(vec![inbuxa_migrate::types::ObjectType::FileNode]),
             allow_source_change: false,
         },
     )
@@ -554,7 +554,7 @@ fn prune_multilevel_mailbox_tree_destroys_leaf_first() {
                 auth: basic("test4"),
                 account: AccountSelector::Id(src.account_id.clone()),
             },
-            objects: Some(vec![vandelay::types::ObjectType::Mailbox]),
+            objects: Some(vec![inbuxa_migrate::types::ObjectType::Mailbox]),
             allow_source_change: false,
         },
     )
@@ -567,7 +567,7 @@ fn prune_multilevel_mailbox_tree_destroys_leaf_first() {
 
     let arch_empty = tmp_archive("prune_deep_empty");
     {
-        let _ = vandelay::db::init::open(&arch_empty).expect("init empty archive");
+        let _ = inbuxa_migrate::db::init::open(&arch_empty).expect("init empty archive");
     }
 
     let small_jmap = jmap_for(&fx.account("test6").expect("test6").localpart);
@@ -595,7 +595,7 @@ fn prune_multilevel_mailbox_tree_destroys_leaf_first() {
                 auth: basic("test6"),
                 account: AccountSelector::Id(fx.account("test6").unwrap().account_id.clone()),
             },
-            objects: Some(vec![vandelay::types::ObjectType::Mailbox]),
+            objects: Some(vec![inbuxa_migrate::types::ObjectType::Mailbox]),
             allow_source_change: false,
         },
     )
@@ -644,8 +644,8 @@ fn prune_non_tree_type_contact_card() {
                 account: AccountSelector::Id(src.account_id.clone()),
             },
             objects: Some(vec![
-                vandelay::types::ObjectType::AddressBook,
-                vandelay::types::ObjectType::ContactCard,
+                inbuxa_migrate::types::ObjectType::AddressBook,
+                inbuxa_migrate::types::ObjectType::ContactCard,
             ]),
             allow_source_change: false,
         },
@@ -659,7 +659,7 @@ fn prune_non_tree_type_contact_card() {
 
     let arch_empty = tmp_archive("prune_cc_empty");
     {
-        let conn = vandelay::db::init::open(&arch_empty).expect("init empty archive");
+        let conn = inbuxa_migrate::db::init::open(&arch_empty).expect("init empty archive");
         conn.execute(
             "INSERT INTO address_books (id,name,is_default) VALUES (1,'AB',1)",
             [],
@@ -690,8 +690,8 @@ fn prune_non_tree_type_contact_card() {
     seeder::teardown(base_url()).expect("teardown");
 }
 
-const ISSUE30_CARD_UID: &str = "vandelay-issue30-card";
-const ISSUE30_EVENT_UID: &str = "vandelay-issue30-event";
+const ISSUE30_CARD_UID: &str = "inbuxa-migrate-issue30-card";
+const ISSUE30_EVENT_UID: &str = "inbuxa-migrate-issue30-event";
 
 fn data_uri_bytes(resource: &Value, uri_key: &str, expect_media_type: &str) -> Vec<u8> {
     let uri = resource
@@ -716,10 +716,10 @@ fn export_inlines_contact_and_event_blobs_instead_of_blob_ids() {
     let tgt = fx.account("test6").expect("test6");
     let archive = tmp_archive("issue30");
 
-    let photo: &[u8] = b"\x89PNG\r\n\x1a\nvandelay issue 30 contact photo bytes";
-    let agenda: &[u8] = b"vandelay issue 30 calendar enclosure bytes";
+    let photo: &[u8] = b"\x89PNG\r\n\x1a\ninbuxa-migrate issue 30 contact photo bytes";
+    let agenda: &[u8] = b"inbuxa-migrate issue 30 calendar enclosure bytes";
     {
-        let conn = vandelay::db::init::open(&archive).expect("init archive");
+        let conn = inbuxa_migrate::db::init::open(&archive).expect("init archive");
         conn.execute(
             "INSERT INTO address_books (id,name,is_default) VALUES (1,'Issue30 Book',1)",
             [],
@@ -730,8 +730,8 @@ fn export_inlines_contact_and_event_blobs_instead_of_blob_ids() {
             [],
         )
         .unwrap();
-        let photo_blob = vandelay::db::blobs::intern_blob(&conn, photo).unwrap();
-        let agenda_blob = vandelay::db::blobs::intern_blob(&conn, agenda).unwrap();
+        let photo_blob = inbuxa_migrate::db::blobs::intern_blob(&conn, photo).unwrap();
+        let agenda_blob = inbuxa_migrate::db::blobs::intern_blob(&conn, agenda).unwrap();
         let card = json!({
             "@type": "Card",
             "version": "1.0",
@@ -944,7 +944,7 @@ fn export_prune_destroys_unmatched() {
                 auth: basic("test1"),
                 account: AccountSelector::Id(big.account_id.clone()),
             },
-            objects: Some(vec![vandelay::types::ObjectType::Mailbox]),
+            objects: Some(vec![inbuxa_migrate::types::ObjectType::Mailbox]),
             allow_source_change: false,
         },
     )
@@ -964,7 +964,7 @@ fn export_prune_destroys_unmatched() {
                 auth: basic("test3"),
                 account: AccountSelector::Id(small.account_id.clone()),
             },
-            objects: Some(vec![vandelay::types::ObjectType::Mailbox]),
+            objects: Some(vec![inbuxa_migrate::types::ObjectType::Mailbox]),
             allow_source_change: false,
         },
     )
@@ -1004,7 +1004,7 @@ fn import_resume_converges_after_partial() {
     };
 
     let mut first = mk();
-    first.objects = Some(vec![vandelay::types::ObjectType::Mailbox]);
+    first.objects = Some(vec![inbuxa_migrate::types::ObjectType::Mailbox]);
     sync::import_jmap::run(common(&archive, false), first).expect("partial import");
 
     let conn = Connection::open(&archive).unwrap();
@@ -1038,10 +1038,10 @@ fn import_resume_converges_after_partial() {
 #[test]
 #[ignore = "requires Docker"]
 fn live_burst_exceeds_concurrent_requests_and_recovers() {
+    use inbuxa_migrate::jmap::http::{HttpClient, RetryPolicy};
+    use inbuxa_migrate::jmap::request::{Request, check_method_error};
+    use inbuxa_migrate::jmap::session::{Limits, Session};
     use std::sync::Arc;
-    use vandelay::jmap::http::{HttpClient, RetryPolicy};
-    use vandelay::jmap::request::{Request, check_method_error};
-    use vandelay::jmap::session::{Limits, Session};
 
     let fx = seeder::provision(base_url()).expect("provision");
     let acc = fx.account("test1").expect("test1");
@@ -1131,7 +1131,7 @@ fn live_burst_exceeds_concurrent_requests_and_recovers() {
 }
 
 struct JmapSettingsGuard {
-    admin: vandelay::jmap::http::HttpClient,
+    admin: inbuxa_migrate::jmap::http::HttpClient,
     admin_api: String,
     admin_account: String,
     previous: serde_json::Map<String, serde_json::Value>,
@@ -1139,8 +1139,8 @@ struct JmapSettingsGuard {
 
 impl JmapSettingsGuard {
     fn override_settings(updates: serde_json::Map<String, serde_json::Value>) -> Self {
-        use vandelay::jmap::http::{Auth, HttpClient, RetryPolicy};
-        use vandelay::jmap::session::Session;
+        use inbuxa_migrate::jmap::http::{Auth, HttpClient, RetryPolicy};
+        use inbuxa_migrate::jmap::session::Session;
         let admin = HttpClient::new(
             Auth::Basic {
                 user: seeder::ADMIN_USER.to_owned(),
@@ -1188,7 +1188,7 @@ impl Drop for JmapSettingsGuard {
 }
 
 fn read_jmap_settings(
-    admin: &vandelay::jmap::http::HttpClient,
+    admin: &inbuxa_migrate::jmap::http::HttpClient,
     api: &str,
     account: &str,
     properties: &[&str],
@@ -1217,7 +1217,7 @@ fn read_jmap_settings(
 }
 
 fn apply_jmap_settings(
-    admin: &vandelay::jmap::http::HttpClient,
+    admin: &inbuxa_migrate::jmap::http::HttpClient,
     api: &str,
     account: &str,
     updates: &serde_json::Map<String, serde_json::Value>,
@@ -1252,9 +1252,9 @@ fn apply_jmap_settings(
 #[test]
 #[ignore = "requires Docker"]
 fn live_blob_quota_429_triggers_retry_after_then_succeeds() {
-    use vandelay::jmap::blobxfer;
-    use vandelay::jmap::http::{HttpClient, RetryPolicy};
-    use vandelay::jmap::session::Session;
+    use inbuxa_migrate::jmap::blobxfer;
+    use inbuxa_migrate::jmap::http::{HttpClient, RetryPolicy};
+    use inbuxa_migrate::jmap::session::Session;
 
     let fx = seeder::provision(base_url()).expect("provision");
     let acc = fx.account("test1").expect("test1");

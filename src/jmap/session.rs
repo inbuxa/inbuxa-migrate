@@ -139,7 +139,7 @@ impl std::fmt::Display for OriginMismatch {
         }
         write!(
             f,
-            " on {} (connected to {}); vandelay must use the advertised URL. \
+            " on {} (connected to {}); inbuxa-migrate must use the advertised URL. \
              If this is wrong, fix the server's advertised HTTP URL setting.",
             self.session_origin, self.connect_origin
         )

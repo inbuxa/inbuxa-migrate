@@ -395,7 +395,7 @@ fn spawn_token_refresher(
     let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let shutdown_signal = shutdown.clone();
     let handle = std::thread::Builder::new()
-        .name("vandelay-graph-token-refresh".to_owned())
+        .name("inbuxa-migrate-graph-token-refresh".to_owned())
         .spawn(move || {
             while !shutdown_signal.load(std::sync::atomic::Ordering::Relaxed) {
                 let now = unix_now();

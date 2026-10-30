@@ -18,7 +18,7 @@ impl MailboxKind {
             "primary" => Ok(MailboxKind::Primary),
             "archive" => Ok(MailboxKind::Archive),
             "public-folders" => Err(Error::Usage(
-                "Microsoft Graph does not expose public folders. Run `vandelay import exchange-ews --mailbox-kind public-folders` instead.".to_owned(),
+                "Microsoft Graph does not expose public folders. Run `inbuxa-migrate import exchange-ews --mailbox-kind public-folders` instead.".to_owned(),
             )),
             other => Err(Error::Usage(format!(
                 "--mailbox-kind must be primary | archive, got {other:?}"

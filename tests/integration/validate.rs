@@ -9,13 +9,13 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 
-use vandelay::logging::Logger;
-use vandelay::sync::CommonConfig;
+use inbuxa_migrate::logging::Logger;
+use inbuxa_migrate::sync::CommonConfig;
 
 pub fn tmp_archive(tag: &str) -> PathBuf {
     let mut p = std::env::temp_dir();
     p.push(format!(
-        "vandelay-container-{tag}-{}-{}.sqlite",
+        "inbuxa-migrate-container-{tag}-{}-{}.sqlite",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

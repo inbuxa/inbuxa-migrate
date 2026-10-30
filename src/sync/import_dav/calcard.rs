@@ -52,7 +52,7 @@ pub fn vcard_to_jscontact(text: &str, item_href: &str) -> Result<JsContact, Calc
 
 pub fn synthesise_uid(item_href: &str) -> String {
     let hash = blake3::hash(item_href.as_bytes());
-    format!("vandelay-syn-{}", hash.to_hex())
+    format!("inbuxa-migrate-syn-{}", hash.to_hex())
 }
 
 #[derive(Debug)]
@@ -208,7 +208,7 @@ END:VCALENDAR\r\n";
         let href = "/dav/card/u/d/no-uid.vcf";
         let jc = vcard_to_jscontact(no_uid, href).expect("synthetic uid");
         assert_eq!(jc.uid, synthesise_uid(href));
-        assert!(jc.uid.starts_with("vandelay-syn-"));
+        assert!(jc.uid.starts_with("inbuxa-migrate-syn-"));
     }
 
     #[test]

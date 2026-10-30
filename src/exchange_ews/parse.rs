@@ -724,7 +724,7 @@ fn wrap_inner_with_namespaces(inner: &str) -> String {
         return String::new();
     }
     format!(
-        "<vandelay-inner xmlns=\"{NS_TYPES}\" xmlns:t=\"{NS_TYPES}\" xmlns:m=\"{NS_MESSAGES}\">{inner}</vandelay-inner>",
+        "<inbuxa-migrate-inner xmlns=\"{NS_TYPES}\" xmlns:t=\"{NS_TYPES}\" xmlns:m=\"{NS_MESSAGES}\">{inner}</inbuxa-migrate-inner>",
     )
 }
 

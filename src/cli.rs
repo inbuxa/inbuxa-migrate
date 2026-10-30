@@ -30,9 +30,9 @@ use crate::types::{ObjectType, parse_object_list};
 
 #[derive(Parser)]
 #[command(
-    name = "vandelay",
+    name = "inbuxa-migrate",
     version,
-    about = "Vandelay: the JMAP importer-exporter"
+    about = "Inbuxa: the JMAP importer-exporter"
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -138,7 +138,7 @@ struct JmapImportArgs {
     #[arg(
         long,
         value_name = "PASS",
-        help = "Basic password (prefer $VANDELAY_PASSWORD or prompt)"
+        help = "Basic password (prefer $INBUXA_MIGRATE_PASSWORD or prompt)"
     )]
     auth_password: Option<String>,
 
@@ -146,7 +146,7 @@ struct JmapImportArgs {
         long,
         value_name = "TOKEN",
         num_args = 0..=1,
-        help = "Bearer token (value optional: falls back to $VANDELAY_TOKEN or prompt)"
+        help = "Bearer token (value optional: falls back to $INBUXA_MIGRATE_TOKEN or prompt)"
     )]
     auth_bearer: Option<Option<String>>,
 
@@ -199,7 +199,7 @@ struct ImapImportArgs {
     #[arg(
         long,
         value_name = "PASS",
-        help = "Basic password (prefer $VANDELAY_PASSWORD or prompt)"
+        help = "Basic password (prefer $INBUXA_MIGRATE_PASSWORD or prompt)"
     )]
     auth_password: Option<String>,
 
@@ -207,7 +207,7 @@ struct ImapImportArgs {
         long,
         value_name = "TOKEN",
         num_args = 0..=1,
-        help = "Bearer token for XOAUTH2 (value optional: falls back to $VANDELAY_TOKEN or prompt)"
+        help = "Bearer token for XOAUTH2 (value optional: falls back to $INBUXA_MIGRATE_TOKEN or prompt)"
     )]
     auth_bearer: Option<Option<String>>,
 
@@ -309,7 +309,7 @@ struct ExportArgs {
     #[arg(
         long,
         value_name = "PASS",
-        help = "Basic password (prefer $VANDELAY_PASSWORD or prompt)"
+        help = "Basic password (prefer $INBUXA_MIGRATE_PASSWORD or prompt)"
     )]
     auth_password: Option<String>,
 
@@ -317,7 +317,7 @@ struct ExportArgs {
         long,
         value_name = "TOKEN",
         num_args = 0..=1,
-        help = "Bearer token (value optional: falls back to $VANDELAY_TOKEN or prompt)"
+        help = "Bearer token (value optional: falls back to $INBUXA_MIGRATE_TOKEN or prompt)"
     )]
     auth_bearer: Option<Option<String>>,
 
@@ -407,7 +407,7 @@ pub struct ManageSieveImportArgs {
     #[arg(
         long,
         value_name = "PASS",
-        help = "Basic password (prefer $VANDELAY_PASSWORD or prompt)"
+        help = "Basic password (prefer $INBUXA_MIGRATE_PASSWORD or prompt)"
     )]
     auth_password: Option<String>,
 
@@ -415,7 +415,7 @@ pub struct ManageSieveImportArgs {
         long,
         value_name = "TOKEN",
         num_args = 0..=1,
-        help = "Bearer token for OAUTHBEARER (value optional: $VANDELAY_TOKEN or prompt)"
+        help = "Bearer token for OAUTHBEARER (value optional: $INBUXA_MIGRATE_TOKEN or prompt)"
     )]
     auth_bearer: Option<Option<String>>,
 
@@ -457,7 +457,7 @@ pub struct DavImportArgs {
     #[arg(
         long,
         value_name = "PASS",
-        help = "Basic password (prefer $VANDELAY_PASSWORD or prompt)"
+        help = "Basic password (prefer $INBUXA_MIGRATE_PASSWORD or prompt)"
     )]
     auth_password: Option<String>,
 
@@ -465,7 +465,7 @@ pub struct DavImportArgs {
         long,
         value_name = "TOKEN",
         num_args = 0..=1,
-        help = "Bearer token (value optional: $VANDELAY_TOKEN or prompt)"
+        help = "Bearer token (value optional: $INBUXA_MIGRATE_TOKEN or prompt)"
     )]
     auth_bearer: Option<Option<String>>,
 
@@ -560,7 +560,7 @@ fn resolve_managesieve_auth(
                 "--auth-user is only valid with --auth-bearer".to_owned(),
             ));
         }
-        let password = secret::resolve(auth_password, "VANDELAY_PASSWORD", "password")?;
+        let password = secret::resolve(auth_password, "INBUXA_MIGRATE_PASSWORD", "password")?;
         return Ok(ManageSieveAuth::Basic {
             user: user.to_owned(),
             password,
@@ -577,7 +577,7 @@ fn resolve_managesieve_auth(
     let user = auth_user
         .ok_or_else(|| Error::Usage("--auth-user is required with --auth-bearer".to_owned()))?
         .to_owned();
-    let token = secret::resolve(bearer.as_deref(), "VANDELAY_TOKEN", "bearer token")?;
+    let token = secret::resolve(bearer.as_deref(), "INBUXA_MIGRATE_TOKEN", "bearer token")?;
     Ok(ManageSieveAuth::Bearer { user, token })
 }
 
@@ -726,7 +726,7 @@ fn resolve_dav_auth(
     auth_bearer: Option<&Option<String>>,
 ) -> Result<DavAuth, Error> {
     if let Some(user) = auth_basic {
-        let password = secret::resolve(auth_password, "VANDELAY_PASSWORD", "password")?;
+        let password = secret::resolve(auth_password, "INBUXA_MIGRATE_PASSWORD", "password")?;
         return Ok(DavAuth::Basic {
             user: user.to_owned(),
             password,
@@ -740,7 +740,7 @@ fn resolve_dav_auth(
     let bearer = auth_bearer.ok_or_else(|| {
         Error::Usage("exactly one of --auth-basic / --auth-bearer is required".to_owned())
     })?;
-    let token = secret::resolve(bearer.as_deref(), "VANDELAY_TOKEN", "bearer token")?;
+    let token = secret::resolve(bearer.as_deref(), "INBUXA_MIGRATE_TOKEN", "bearer token")?;
     Ok(DavAuth::Bearer { token })
 }
 
@@ -828,7 +828,7 @@ fn resolve_imap_auth(
                 "--auth-user is only valid with --auth-bearer".to_owned(),
             ));
         }
-        let password = secret::resolve(auth_password, "VANDELAY_PASSWORD", "password")?;
+        let password = secret::resolve(auth_password, "INBUXA_MIGRATE_PASSWORD", "password")?;
         return Ok(ImapAuth::Basic {
             user: user.to_owned(),
             password,
@@ -845,7 +845,7 @@ fn resolve_imap_auth(
     let user = auth_user
         .ok_or_else(|| Error::Usage("--auth-user is required with --auth-bearer".to_owned()))?
         .to_owned();
-    let token = secret::resolve(bearer.as_deref(), "VANDELAY_TOKEN", "bearer token")?;
+    let token = secret::resolve(bearer.as_deref(), "INBUXA_MIGRATE_TOKEN", "bearer token")?;
     Ok(ImapAuth::Bearer { user, token })
 }
 
@@ -921,7 +921,7 @@ pub struct ExchangeEwsImportArgs {
     #[arg(
         long,
         value_name = "PASS",
-        help = "Basic password (prefer $VANDELAY_PASSWORD or prompt)"
+        help = "Basic password (prefer $INBUXA_MIGRATE_PASSWORD or prompt)"
     )]
     auth_password: Option<String>,
 
@@ -929,7 +929,7 @@ pub struct ExchangeEwsImportArgs {
         long,
         value_name = "TOKEN",
         num_args = 0..=1,
-        help = "Bearer token (value optional: $VANDELAY_TOKEN or device-code flow)"
+        help = "Bearer token (value optional: $INBUXA_MIGRATE_TOKEN or device-code flow)"
     )]
     auth_bearer: Option<Option<String>>,
 
@@ -946,7 +946,7 @@ pub struct ExchangeEwsImportArgs {
     #[arg(
         long,
         value_name = "SECRET",
-        help = "OAuth client secret (app-only flow; prefer $VANDELAY_EWS_CLIENT_SECRET)"
+        help = "OAuth client secret (app-only flow; prefer $INBUXA_MIGRATE_EWS_CLIENT_SECRET)"
     )]
     ews_client_secret: Option<String>,
 
@@ -1029,7 +1029,7 @@ fn resolve_exchange_ews_auth(args: &ExchangeEwsImportArgs) -> Result<EwsAuth, Er
     if let Some(user) = args.auth_basic.as_deref() {
         let password = secret::resolve(
             args.auth_password.as_deref(),
-            "VANDELAY_PASSWORD",
+            "INBUXA_MIGRATE_PASSWORD",
             "password",
         )?;
         return Ok(EwsAuth::Basic {
@@ -1066,7 +1066,7 @@ fn resolve_exchange_ews_auth(args: &ExchangeEwsImportArgs) -> Result<EwsAuth, Er
     if let Some(secret) = args.ews_client_secret.clone() {
         let resolved = secret::resolve(
             Some(secret.as_str()),
-            "VANDELAY_EWS_CLIENT_SECRET",
+            "INBUXA_MIGRATE_EWS_CLIENT_SECRET",
             "client secret",
         )?;
         return Ok(EwsAuth::OAuth(OAuthFlow::ClientCredentials {
@@ -1075,7 +1075,7 @@ fn resolve_exchange_ews_auth(args: &ExchangeEwsImportArgs) -> Result<EwsAuth, Er
             client_secret: resolved,
         }));
     }
-    if let Ok(env_secret) = std::env::var("VANDELAY_EWS_CLIENT_SECRET")
+    if let Ok(env_secret) = std::env::var("INBUXA_MIGRATE_EWS_CLIENT_SECRET")
         && !env_secret.is_empty()
     {
         return Ok(EwsAuth::OAuth(OAuthFlow::ClientCredentials {
@@ -1084,7 +1084,7 @@ fn resolve_exchange_ews_auth(args: &ExchangeEwsImportArgs) -> Result<EwsAuth, Er
             client_secret: env_secret,
         }));
     }
-    let token = secret::resolve(None, "VANDELAY_TOKEN", "bearer token")?;
+    let token = secret::resolve(None, "INBUXA_MIGRATE_TOKEN", "bearer token")?;
     Ok(EwsAuth::Bearer { token })
 }
 
@@ -1125,7 +1125,7 @@ pub struct ExchangeGraphImportArgs {
         long,
         value_name = "TOKEN",
         num_args = 0..=1,
-        help = "Pre-acquired bearer token (skip device-code flow). Resolves: flag value -> $VANDELAY_GRAPH_TOKEN -> prompt."
+        help = "Pre-acquired bearer token (skip device-code flow). Resolves: flag value -> $INBUXA_MIGRATE_GRAPH_TOKEN -> prompt."
     )]
     access_token: Option<Option<String>>,
 
@@ -1168,7 +1168,7 @@ pub struct ExchangeGraphImportArgs {
         help = "Years either side of today to scan for edited recurrence occurrences (max 5)",
         long_help = "Years either side of today to scan for edited recurrence occurrences.\n  \
             Graph reports a series exception only inside an expanded calendar view, and caps\n  \
-            any single view at five years, so vandelay scans [today - N, today] and\n  \
+            any single view at five years, so inbuxa-migrate scans [today - N, today] and\n  \
             [today, today + N]. An occurrence edited outside that span imports with the\n  \
             series default instead of its edit."
     )]
@@ -1177,7 +1177,7 @@ pub struct ExchangeGraphImportArgs {
     #[arg(
         long,
         help = "Skip contact photos (saves one request per contact on large address books)",
-        long_help = "Skip contact photos.\n              Graph will not say which contacts have a photo: $expand=photo comes back empty\n              even when one exists, so the only way to find out is to ask for the bytes.\n              vandelay therefore spends one extra request per contact. Pass this to skip\n              photos entirely on a large address book."
+        long_help = "Skip contact photos.\n              Graph will not say which contacts have a photo: $expand=photo comes back empty\n              even when one exists, so the only way to find out is to ask for the bytes.\n              inbuxa-migrate therefore spends one extra request per contact. Pass this to skip\n              photos entirely on a large address book."
     )]
     skip_contact_photos: bool,
 
@@ -1265,7 +1265,11 @@ fn resolve_graph_auth(
     tenant: &str,
 ) -> Result<GraphAuth, Error> {
     if let Some(slot) = access_token {
-        let token = secret::resolve(slot.as_deref(), "VANDELAY_GRAPH_TOKEN", "bearer token")?;
+        let token = secret::resolve(
+            slot.as_deref(),
+            "INBUXA_MIGRATE_GRAPH_TOKEN",
+            "bearer token",
+        )?;
         return Ok(GraphAuth::PreAcquired { token });
     }
     let client_id = client_id
@@ -1305,7 +1309,7 @@ fn resolve_auth(
     auth_bearer: Option<&Option<String>>,
 ) -> Result<Auth, Error> {
     if let Some(user) = auth_basic {
-        let password = secret::resolve(auth_password, "VANDELAY_PASSWORD", "password")?;
+        let password = secret::resolve(auth_password, "INBUXA_MIGRATE_PASSWORD", "password")?;
         return Ok(Auth::Basic {
             user: user.to_owned(),
             password,
@@ -1319,7 +1323,7 @@ fn resolve_auth(
     let bearer = auth_bearer.ok_or_else(|| {
         Error::Usage("exactly one of --auth-basic / --auth-bearer is required".to_owned())
     })?;
-    let token = secret::resolve(bearer.as_deref(), "VANDELAY_TOKEN", "bearer token")?;
+    let token = secret::resolve(bearer.as_deref(), "INBUXA_MIGRATE_TOKEN", "bearer token")?;
     Ok(Auth::Bearer { token })
 }
 
@@ -1350,8 +1354,8 @@ mod tests {
     fn auth_password_without_basic_is_usage_error() {
         let _g = lock();
         unsafe {
-            env::remove_var("VANDELAY_TOKEN");
-            env::remove_var("VANDELAY_PASSWORD");
+            env::remove_var("INBUXA_MIGRATE_TOKEN");
+            env::remove_var("INBUXA_MIGRATE_PASSWORD");
         }
         let bearer: Option<String> = Some("t".to_owned());
         let r = resolve_auth(None, Some("hunter2"), Some(&bearer));
@@ -1367,8 +1371,8 @@ mod tests {
     fn auth_basic_with_password_resolves() {
         let _g = lock();
         unsafe {
-            env::remove_var("VANDELAY_TOKEN");
-            env::remove_var("VANDELAY_PASSWORD");
+            env::remove_var("INBUXA_MIGRATE_TOKEN");
+            env::remove_var("INBUXA_MIGRATE_PASSWORD");
         }
         let auth = resolve_auth(Some("alice"), Some("pw"), None).unwrap();
         match auth {
@@ -1384,8 +1388,8 @@ mod tests {
     fn auth_bearer_inline_token_resolves() {
         let _g = lock();
         unsafe {
-            env::remove_var("VANDELAY_TOKEN");
-            env::remove_var("VANDELAY_PASSWORD");
+            env::remove_var("INBUXA_MIGRATE_TOKEN");
+            env::remove_var("INBUXA_MIGRATE_PASSWORD");
         }
         let bearer: Option<String> = Some("t".to_owned());
         let auth = resolve_auth(None, None, Some(&bearer)).unwrap();
@@ -1394,7 +1398,7 @@ mod tests {
 
     fn graph_config(objects: &[&str]) -> Result<GraphImportConfig, Error> {
         let mut argv = vec![
-            "vandelay",
+            "inbuxa-migrate",
             "import",
             "exchange-graph",
             "--access-token",

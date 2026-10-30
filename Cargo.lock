@@ -2937,7 +2937,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "vandelay"
+name = "inbuxa-migrate"
 version = "1.0.11"
 dependencies = [
  "blake3",

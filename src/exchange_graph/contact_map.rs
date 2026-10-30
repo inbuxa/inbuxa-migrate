@@ -354,7 +354,7 @@ fn has_uri_scheme(value: &str) -> bool {
 
 pub fn synthetic_uid(graph_id: &str) -> String {
     let hash = blake3::hash(graph_id.as_bytes());
-    format!("vandelay-graph-{}", hash.to_hex())
+    format!("inbuxa-migrate-graph-{}", hash.to_hex())
 }
 
 fn normalise_utc_datetime(raw: &str) -> String {
@@ -465,7 +465,7 @@ mod tests {
     fn minimal_contact_yields_card_with_synthetic_uid() {
         let c = json!({"id": "GRAPH-1", "displayName": "Alice"});
         let conv = convert_contact(&c).unwrap();
-        assert!(conv.uid.starts_with("vandelay-graph-"));
+        assert!(conv.uid.starts_with("inbuxa-migrate-graph-"));
         assert_eq!(conv.data["@type"], "Card");
         assert_eq!(conv.data["kind"], "individual");
         assert_eq!(conv.data["name"]["full"], "Alice");

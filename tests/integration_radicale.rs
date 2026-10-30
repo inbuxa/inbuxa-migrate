@@ -16,11 +16,11 @@ use integration::validate::{
 };
 use integration::{Account, Endpoint};
 
+use inbuxa_migrate::error::Error;
+use inbuxa_migrate::sync::import_dav;
+use inbuxa_migrate::sync::import_dav::{DavAuth, DavImportConfig, DavKindArg};
 use rusqlite::Connection;
 use serde_json::Value;
-use vandelay::error::Error;
-use vandelay::sync::import_dav;
-use vandelay::sync::import_dav::{DavAuth, DavImportConfig, DavKindArg};
 
 fn dav_config(kind: DavKindArg, account: &Account, http: &Endpoint) -> DavImportConfig {
     DavImportConfig {

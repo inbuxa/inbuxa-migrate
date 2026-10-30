@@ -9,3 +9,5 @@ target
 !CHANGELOG.md
 .*
 !.github
+!.gitea
+!/docs/*.md
