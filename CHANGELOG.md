@@ -7,6 +7,13 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
 
 ## [Unreleased]
 
+### Added
+- `import exchange-graph --app-only` signs in as the app itself, with its
+  client secret, and reads the mailbox `--user` names. With an Entra app
+  granted application permissions, a whole Microsoft 365 tenant moves in a
+  plan with no one signing in. The token is renewed before it runs out. A
+  plan's `clientSecret` now reaches Graph as well as EWS.
+
 ## [27.1-rc.5]
 
 The fifth release candidate of the 27.1 series: the guided mode. A move

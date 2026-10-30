@@ -3021,3 +3021,132 @@ fn contact_photo_categories_and_im_addresses_are_imported() {
         "the type is sniffed from the bytes, not taken from Graph's jpeg header"
     );
 }
+
+#[test]
+fn app_only_signs_in_as_the_app_and_reads_the_named_mailbox() {
+    let mut server = Server::new();
+    let token = make_jwt(9999999999, "");
+    let _token = server
+        .mock("POST", "/contoso.example/oauth2/v2.0/token")
+        .match_body(Matcher::AllOf(vec![
+            Matcher::Regex("grant_type=client_credentials".to_owned()),
+            Matcher::Regex("client_id=app-1".to_owned()),
+            Matcher::Regex("client_secret=s3cret".to_owned()),
+            Matcher::Regex(r"scope=https%3A%2F%2Fgraph\.microsoft\.com%2F\.default".to_owned()),
+        ]))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(json!({"access_token": token, "expires_in": 3599}).to_string())
+        .expect(1)
+        .create();
+    let bearer = format!("Bearer {token}");
+    let get = |server: &mut Server, path: &str, body: &str| {
+        server
+            .mock("GET", path)
+            .match_header("authorization", bearer.as_str())
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(body)
+            .create()
+    };
+    let mut mocks = vec![
+        get(
+            &mut server,
+            "/users/alice@x.com?$select=id,userPrincipalName",
+            r#"{"id":"uid-1","userPrincipalName":"alice@x.com"}"#,
+        ),
+        get(
+            &mut server,
+            "/users/uid-1?$select=id,userPrincipalName,displayName,mail",
+            r#"{"id":"uid-1","userPrincipalName":"alice@x.com"}"#,
+        ),
+        get(
+            &mut server,
+            "/users/uid-1/mailFolders?$top=100&includeHiddenFolders=true",
+            r#"{"value":[{"id":"FMAIL","displayName":"Inbox","isHidden":false}]}"#,
+        ),
+        get(
+            &mut server,
+            "/users/uid-1/mailFolders/FMAIL/childFolders?$top=100&includeHiddenFolders=true",
+            r#"{"value":[]}"#,
+        ),
+        get(
+            &mut server,
+            "/users/uid-1/mailFolders/FMAIL/messages?$top=100&$select=id,isRead,isDraft,isReadReceiptRequested,flag,categories",
+            r#"{"value":[{"id":"MSG-1"}]}"#,
+        ),
+    ];
+    for name in [
+        "inbox",
+        "drafts",
+        "sentitems",
+        "deleteditems",
+        "junkemail",
+        "archive",
+    ] {
+        let body = if name == "inbox" {
+            r#"{"id":"FMAIL"}"#
+        } else {
+            r#"{"id":"OTHER"}"#
+        };
+        mocks.push(get(
+            &mut server,
+            &format!("/users/uid-1/mailFolders/{name}?$select=id"),
+            body,
+        ));
+    }
+    let _value = server
+        .mock("GET", "/users/uid-1/messages/MSG-1/$value")
+        .match_header("authorization", bearer.as_str())
+        .with_status(200)
+        .with_header("content-type", "text/plain")
+        .with_body("From: a@x\r\nTo: b@x\r\nSubject: hi\r\nMessage-ID: <app@x>\r\n\r\nhello")
+        .create();
+
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    let archive = tmp.path().to_owned();
+    let common = || inbuxa_migrate::sync::CommonConfig {
+        archive: archive.clone(),
+        threads: 2,
+        dry_run: false,
+        max_retries: 0,
+        allow_invalid_certs: false,
+        logger: inbuxa_migrate::logging::Logger::new(0),
+    };
+    let auth = inbuxa_migrate::sync::import_exchange_graph::GraphAuth::ClientCredentials {
+        authority: format!("{}/contoso.example", server.url()),
+        client_id: "app-1".to_owned(),
+        client_secret: "s3cret".to_owned(),
+    };
+    let mut config = inbuxa_migrate::sync::import_exchange_graph::GraphImportConfig {
+        auth,
+        api_base: server.url(),
+        user_target: None,
+        mailbox_kind: inbuxa_migrate::exchange_graph::types::MailboxKind::Primary,
+        surfaces: surfaces("mail"),
+        event_body_format: inbuxa_migrate::exchange_graph::types::EventBodyFormat::Text,
+        graph_connections: 2,
+        top: 100,
+        exception_window_years: 5,
+        contact_photos: false,
+        event_attachments: true,
+        allow_source_change: false,
+    };
+
+    // The app has no mailbox of its own.
+    let err = inbuxa_migrate::sync::import_exchange_graph::run(common(), config.clone())
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("--user"), "{err}");
+
+    config.user_target = Some("alice@x.com".to_owned());
+    drop(tmp);
+    let summary = inbuxa_migrate::sync::import_exchange_graph::run(common(), config).unwrap();
+    let emails = summary
+        .per_type
+        .iter()
+        .find(|(t, _)| *t == "email")
+        .map_or(0, |(_, c)| c.created);
+    assert_eq!(emails, 1);
+    _token.assert();
+}

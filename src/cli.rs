@@ -1704,6 +1704,14 @@ pub struct ExchangeGraphImportArgs {
 
     #[arg(
         long,
+        conflicts_with = "access_token",
+        requires = "user",
+        help = "Sign in as the app itself, with its client secret ($INBUXA_MIGRATE_CLIENT_SECRET or prompt), and read the mailbox --user names; needs --tenant"
+    )]
+    app_only: bool,
+
+    #[arg(
+        long,
         value_name = "LIST",
         help = "Comma-separated surface list: mail | calendar | contacts | files (default: all)"
     )]
@@ -1801,6 +1809,7 @@ fn resolve_exchange_graph_import(args: ExchangeGraphImportArgs) -> Result<Action
         args.access_token.as_ref(),
         args.client_id.as_deref(),
         &args.tenant,
+        args.app_only,
     )?;
     let surfaces = args
         .objects
@@ -1836,6 +1845,7 @@ fn resolve_graph_auth(
     access_token: Option<&Option<String>>,
     client_id: Option<&str>,
     tenant: &str,
+    app_only: bool,
 ) -> Result<GraphAuth, Error> {
     if let Some(slot) = access_token {
         let token = secret::resolve(
@@ -1854,6 +1864,22 @@ fn resolve_graph_auth(
         })?
         .to_owned();
     let authority = crate::exchange_graph::oauth::default_authority(tenant);
+    if app_only {
+        // An app signs in to one tenant: the shared authorities are for
+        // people choosing theirs.
+        if ["common", "organizations", "consumers"].contains(&tenant.to_ascii_lowercase().as_str())
+        {
+            return Err(Error::Usage(
+                "--app-only needs the tenant: --tenant <id or name.onmicrosoft.com>".to_owned(),
+            ));
+        }
+        let client_secret = secret::resolve(None, "INBUXA_MIGRATE_CLIENT_SECRET", "client secret")?;
+        return Ok(GraphAuth::ClientCredentials {
+            authority,
+            client_id,
+            client_secret,
+        });
+    }
     Ok(GraphAuth::DeviceCode {
         authority,
         client_id,
@@ -2042,6 +2068,44 @@ mod tests {
                 );
             }
             other => panic!("expected Usage error, got {:?}", other.map(|_| ())),
+        }
+    }
+
+    #[test]
+    fn graph_app_only_needs_a_tenant_and_a_mailbox_and_reads_its_secret() {
+        let _g = lock();
+        let parse = |extra: &[&str]| {
+            let mut argv = vec![
+                "inbuxa-migrate",
+                "import",
+                "exchange-graph",
+                "--client-id",
+                "app-1",
+                "--app-only",
+            ];
+            argv.extend_from_slice(extra);
+            argv.push("archive.sqlite");
+            Cli::try_parse_from(argv)
+        };
+        assert!(parse(&["--tenant", "contoso.onmicrosoft.com"]).is_err());
+        assert!(parse(&["--user", "a@x", "--access-token", "t"]).is_err());
+        let cli = parse(&["--user", "a@x"]).unwrap();
+        match cli.resolve() {
+            Err(Error::Usage(m)) => assert!(m.contains("--tenant"), "{m}"),
+            _ => panic!("the shared authority is refused"),
+        }
+        unsafe { env::set_var("INBUXA_MIGRATE_CLIENT_SECRET", "s3cret") };
+        let resolved = parse(&["--user", "a@x", "--tenant", "contoso.onmicrosoft.com"])
+            .unwrap()
+            .resolve();
+        unsafe { env::remove_var("INBUXA_MIGRATE_CLIENT_SECRET") };
+        match resolved {
+            Ok(Action::ImportExchangeGraph(_, config)) => assert!(matches!(
+                config.auth,
+                GraphAuth::ClientCredentials { ref authority, ref client_secret, .. }
+                    if client_secret == "s3cret" && authority.ends_with("/contoso.onmicrosoft.com")
+            )),
+            _ => panic!("expected an app-only exchange-graph import"),
         }
     }
 }

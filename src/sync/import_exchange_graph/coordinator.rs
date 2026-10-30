@@ -15,7 +15,7 @@ use crate::exchange_graph::api::{DEFAULT_API_BASE, Endpoints};
 use crate::exchange_graph::client::GraphClient;
 use crate::exchange_graph::error::GraphError;
 use crate::exchange_graph::oauth::{
-    AcquiredToken, OAuthFlow, acquire, default_authority, refresh_access_token,
+    AcquiredToken, OAuthFlow, acquire, client_credentials, default_authority, refresh_access_token,
 };
 use crate::exchange_graph::types::{EventBodyFormat, MailboxKind, Surfaces, synthetic_account_id};
 use crate::jmap::http::RetryPolicy;
@@ -31,6 +31,13 @@ pub enum GraphAuth {
     DeviceCode {
         authority: String,
         client_id: String,
+    },
+    /// The app signs in as itself, with what an administrator granted it,
+    /// and reads the mailbox `user_target` names.
+    ClientCredentials {
+        authority: String,
+        client_id: String,
+        client_secret: String,
     },
 }
 
@@ -67,6 +74,11 @@ pub struct GraphCoordinator<'a> {
 
 pub fn run(common: CommonConfig, config: GraphImportConfig) -> Result<Summary, Error> {
     let logger = common.logger;
+    if matches!(config.auth, GraphAuth::ClientCredentials { .. }) && config.user_target.is_none() {
+        return Err(Error::Usage(
+            "app-only sign-in has no mailbox of its own: name one with --user".to_owned(),
+        ));
+    }
     let mut conn = db::init::open(&common.archive)?;
 
     let acquired = acquire_with_flow(&config.auth)?;
@@ -289,6 +301,15 @@ fn acquire_with_flow(auth: &GraphAuth) -> Result<AcquiredToken, Error> {
             authority: authority.clone(),
             client_id: client_id.clone(),
         },
+        GraphAuth::ClientCredentials {
+            authority,
+            client_id,
+            client_secret,
+        } => OAuthFlow::ClientCredentials {
+            authority: authority.clone(),
+            client_id: client_id.clone(),
+            client_secret: client_secret.clone(),
+        },
     };
     acquire(&flow).map_err(Error::from)
 }
@@ -360,7 +381,8 @@ fn resolve_principal(
 
 fn canonical_session_url(config: &GraphImportConfig) -> String {
     let authority = match &config.auth {
-        GraphAuth::DeviceCode { authority, .. } => authority.clone(),
+        GraphAuth::DeviceCode { authority, .. }
+        | GraphAuth::ClientCredentials { authority, .. } => authority.clone(),
         GraphAuth::PreAcquired { .. } => default_authority("common"),
     };
     format!(
@@ -376,17 +398,36 @@ fn spawn_token_refresher(
     initial: &AcquiredToken,
     logger: crate::logging::Logger,
 ) -> Option<TokenRefresher> {
-    let (authority, client_id) = match auth {
+    // A delegated token is renewed with its refresh token, which may be
+    // replaced each time; an app-only one by signing in again.
+    let mut renew: Box<dyn FnMut() -> Result<AcquiredToken, GraphError> + Send> = match auth {
         GraphAuth::DeviceCode {
             authority,
             client_id,
-        } => (authority.clone(), client_id.clone()),
+        } => {
+            let (authority, client_id) = (authority.clone(), client_id.clone());
+            let mut refresh_token = initial.refresh_token.clone()?;
+            Box::new(move || {
+                let tok = refresh_access_token(&authority, &client_id, &refresh_token)?;
+                if let Some(new_refresh) = &tok.refresh_token {
+                    refresh_token.clone_from(new_refresh);
+                }
+                Ok(tok)
+            })
+        }
+        GraphAuth::ClientCredentials {
+            authority,
+            client_id,
+            client_secret,
+        } => {
+            let (authority, client_id, client_secret) =
+                (authority.clone(), client_id.clone(), client_secret.clone());
+            Box::new(move || client_credentials(&authority, &client_id, &client_secret))
+        }
         GraphAuth::PreAcquired { .. } => return None,
     };
-    let refresh = initial.refresh_token.clone()?;
     let mut deadline_unix = initial_deadline_unix(initial)?;
     let client = client.clone();
-    let mut refresh_token = refresh;
     let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let shutdown_signal = shutdown.clone();
     let handle = std::thread::Builder::new()
@@ -410,12 +451,9 @@ fn spawn_token_refresher(
                         break;
                     }
                 }
-                match refresh_access_token(&authority, &client_id, &refresh_token) {
+                match renew() {
                     Ok(tok) => {
                         client.set_bearer(tok.access_token.clone());
-                        if let Some(new_refresh) = tok.refresh_token {
-                            refresh_token = new_refresh;
-                        }
                         deadline_unix = unix_now()
                             + tok.expires_in.unwrap_or_else(|| {
                                 crate::exchange_graph::oauth::decode_jwt_claims(&tok.access_token)
