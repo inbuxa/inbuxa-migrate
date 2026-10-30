@@ -371,6 +371,10 @@ file, color and time zone, which Sieve script is active, the identities,
 and the links. It is written last: a tree without one was interrupted, and
 the way to finish it is to run again into an empty directory.
 
+The layout and the manifest are specified at
+<https://coffeylabs.org/specs/account-export/>, so other tools can read and
+write them too.
+
 `--objects` takes the same types as `export`; naming a folder or a message
 type writes all of mail, and the same for contacts and calendars. With
 `--dry-run` it counts what it would write and creates nothing.

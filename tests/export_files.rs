@@ -230,7 +230,7 @@ fn writes_open_formats_and_a_manifest() {
     assert!(!f.root.join("escape").exists());
 
     let m = manifest(&f.out);
-    assert_eq!(m["format"], "inbuxa-migrate-files");
+    assert_eq!(m["format"], "https://coffeylabs.org/specs/account-export/");
     assert_eq!(m["formatVersion"], 1);
     assert_eq!(m["sources"][0]["kind"], "jmap");
     let folders = m["mail"]["folders"].as_array().unwrap();
