@@ -243,6 +243,7 @@ fn jmap(base_url: &str, auth: &str, calls: Value) -> ContainerResult<Value> {
             "urn:ietf:params:jmap:core",
             "urn:ietf:params:jmap:mail",
             "urn:ietf:params:jmap:sieve",
+            "urn:ietf:params:jmap:filenode",
             "urn:inbuxa:jmap:registry",
         ],
         "methodCalls": calls,

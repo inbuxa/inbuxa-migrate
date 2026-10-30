@@ -59,7 +59,10 @@ inbuxa-migrate import <source> [source-args...] <ARCHIVE>
 
 Reads a source account into the SQLite `ARCHIVE`, creating it if it is absent.
 An archive remembers which account filled it; every importer takes
-`--allow-source-change` to fill it from a different one anyway.
+`--allow-source-change` to fill it from a different one anyway. The DAV
+importers (`caldav`, `carddav`, `webdav`) also take `--replace-source`, which
+first removes the other sources of the same kind, and what came from them, so
+a share that moved leaves one tree in the archive, not two.
 
 ### JMAP
 
@@ -73,6 +76,11 @@ inbuxa-migrate import jmap \
 ```
 
 Imports one JMAP account, from inbuxa, Stalwart or any other JMAP server. `--objects` accepts a comma-separated list of object tokens (`mailbox,email,calendar,calendarevent,addressbook,contactcard,identity,sievescript,participantidentity,filenode`). The default is everything the server advertises.
+
+The out-of-office reply, the server's `VacationResponse`, comes with
+`sievescript`. Files are read in either shape servers spell them: `nodeType`
+and `type`, as inbuxa and other servers on the 0.16 line do, or `@type` and
+`mediaType`, as draft-ietf-jmap-filenode-18 servers such as Stalwart 1.0 do.
 
 ### IMAP
 
@@ -285,7 +293,11 @@ what changed at the source in between.
   `updated` time, the archive's is written only if it is newer; otherwise
   the properties that differ are written.
 - **Sieve scripts** are matched by name, and the target's is replaced when
-  its content differs from the archive's.
+  its content differs from the archive's. Where the target has a
+  `VacationResponse`, the out-of-office reply is written there, and the
+  script a server keeps for it is not copied as a script.
+- **Files** are written in the shape the target takes, which `export` asks
+  it once per run: inbuxa takes `nodeType` and `type`.
 
 Messages go in batches, as many to an `Email/import` as the target's
 `maxObjectsInSet` allows, up to 50, with their blobs uploaded several at a

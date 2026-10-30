@@ -367,3 +367,90 @@ fn the_guide_sets_up_the_accounts_previews_and_moves_them() {
         "{report}"
     );
 }
+
+#[test]
+#[ignore = "requires Docker"]
+fn files_go_into_inbuxa_in_its_own_shape_and_come_back() {
+    let server = Inbuxa::start().expect("start inbuxa");
+    let dir = TempDir::new().unwrap();
+    let out = dir.path().join("out.sqlite");
+    let back = dir.path().join("back.sqlite");
+    {
+        let conn = db::init::open(&out).unwrap();
+        let blob = db::blobs::intern_blob(&conn, b"#!/bin/sh\necho hi\n").unwrap();
+        conn.execute(
+            "INSERT INTO file_nodes (id,parent_id,node_type,blob_id,name,media_type,created)
+             VALUES (1,NULL,'directory',NULL,'docs',NULL,'2022-02-02T02:02:02Z'),
+                    (2,1,'file',?1,'run.sh','text/x-sh','2022-02-02T02:02:02Z')",
+            [blob],
+        )
+        .unwrap();
+    }
+    let run = |args: &[&str]| {
+        let out = Command::new(BIN)
+            .args(args)
+            .env("INBUXA_MIGRATE_API_KEY", &server.token)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(out.status.success(), "{args:?}: {stderr}");
+    };
+    let target = [
+        "--url",
+        server.base_url.as_str(),
+        "--auth-bearer",
+        "--account-name",
+        ADMIN_EMAIL,
+        "--objects",
+        "filenode",
+    ];
+    run(&[&["export"][..], &target, &[out.to_str().unwrap()]].concat());
+
+    let account = server.account_of(ADMIN_EMAIL, ADMIN_PASSWORD).unwrap();
+    let r = server
+        .call(
+            ADMIN_EMAIL,
+            ADMIN_PASSWORD,
+            json!([["FileNode/query", {"accountId": account}, "q"],
+                   ["FileNode/get", {"accountId": account,
+                       "#ids": {"resultOf": "q", "name": "FileNode/query", "path": "/ids"},
+                       "properties": ["name", "nodeType", "type", "parentId"]}, "g"]]),
+        )
+        .unwrap();
+    let list = r[1][1]["list"].as_array().unwrap_or_else(|| panic!("{r}"));
+    let file = list
+        .iter()
+        .find(|n| n["name"] == "run.sh")
+        .unwrap_or_else(|| panic!("no file: {r}"));
+    assert_eq!(file["nodeType"], "file", "{file}");
+    assert_eq!(file["type"], "text/x-sh", "{file}");
+    assert!(
+        list.iter()
+            .any(|n| n["name"] == "docs" && n["nodeType"] == "directory"),
+        "{r}"
+    );
+
+    run(&[&["import", "jmap"][..], &target, &[back.to_str().unwrap()]].concat());
+    let conn = db::init::open(&back).unwrap();
+    let mut rows: Vec<(String, String, Option<String>)> = conn
+        .prepare(
+            "SELECT name, node_type, media_type FROM file_nodes WHERE name IN ('docs','run.sh')",
+        )
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    rows.sort();
+    assert_eq!(
+        rows,
+        [
+            ("docs".to_owned(), "directory".to_owned(), None),
+            (
+                "run.sh".to_owned(),
+                "file".to_owned(),
+                Some("text/x-sh".to_owned())
+            )
+        ]
+    );
+}

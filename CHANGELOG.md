@@ -7,6 +7,41 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
 
 ## [Unreleased]
 
+Upstream's 1.0.12 and 1.0.13 are merged in.
+
+### Added
+- The out-of-office reply comes across: imported from a server's
+  `VacationResponse`, and exported to the target's, in place of copying the
+  script the server keeps for it.
+- WebDAV, CalDAV, CardDAV: `--replace-source` removes the other recorded
+  sources of the same kind, and what was imported from them, before
+  importing, so a moved share leaves one tree in the archive.
+- Files keep their `executable` flag where the server has one. An archive
+  gains the column at its next import; until then `inspect` and the other
+  read-only commands call it an older layout.
+
+### Changed
+- FileNodes are read in either shape servers use: `nodeType` and `type`, as
+  inbuxa and other 0.16-line servers spell them, or `@type` and `mediaType`
+  (draft-ietf-jmap-filenode-18, as in Stalwart 1.0). An export asks the
+  target which it takes and writes that one. Upstream dropped the older
+  shape; this fork keeps both.
+- The Graph device-code sign-in asks for `Files.Read`, so the default run
+  reaches OneDrive.
+- iCalendar and vCard parse failures say what was wrong and quote the line.
+
+### Fixed
+- IMAP: children of a `\Noselect` parent folder kept their place instead of
+  landing at the top level.
+- JMAP import no longer holds every blob of a page in memory at once, which
+  large messages could exhaust.
+- CalDAV, CardDAV: items with bare CR line breaks, as Kerio Connect sends,
+  are read.
+- EWS: a bare `--auth-bearer` takes the API key or token from the
+  environment without asking for `--ews-client-id`.
+- `--account-name` as an administrator takes the data account from the
+  principal's `accounts`, as RFC 9670 defines it.
+
 ## [27.1-rc.6]
 
 The sixth release candidate of the 27.1 series: whole domains from Microsoft

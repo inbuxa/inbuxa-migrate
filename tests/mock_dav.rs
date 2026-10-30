@@ -1340,7 +1340,9 @@ fn webdav_display_or_basename_test_via_parser_keeps_basename_semantics() {
 fn dry_run_writes_nothing_but_emits_per_collection_counts() {
     use inbuxa_migrate::logging::Logger;
     use inbuxa_migrate::sync::CommonConfig;
-    use inbuxa_migrate::sync::import_dav::{DavAuth, DavImportConfig, DavKindArg, run};
+    use inbuxa_migrate::sync::import_dav::{
+        DavAuth, DavImportConfig, DavKindArg, SourceChange, run,
+    };
     use std::path::PathBuf;
 
     let mut server = mockito::Server::new();
@@ -1409,7 +1411,7 @@ fn dry_run_writes_nothing_but_emits_per_collection_counts() {
         allow_cleartext: true,
         dav_connections: 1,
         multiget_batch: 50,
-        allow_source_change: false,
+        source_change: SourceChange::Reject,
     };
     let summary = run(common, config).expect("dry-run ok");
 
@@ -1453,7 +1455,9 @@ fn dav_source_change_protection_fires_across_users_on_same_root() {
     use encodify::base64::STANDARD;
     use inbuxa_migrate::logging::Logger;
     use inbuxa_migrate::sync::CommonConfig;
-    use inbuxa_migrate::sync::import_dav::{DavAuth, DavImportConfig, DavKindArg, run};
+    use inbuxa_migrate::sync::import_dav::{
+        DavAuth, DavImportConfig, DavKindArg, SourceChange, run,
+    };
     use std::path::PathBuf;
 
     let mut server = mockito::Server::new();
@@ -1568,7 +1572,7 @@ fn dav_source_change_protection_fires_across_users_on_same_root() {
         allow_cleartext: true,
         dav_connections: 1,
         multiget_batch: 50,
-        allow_source_change: false,
+        source_change: SourceChange::Reject,
     };
 
     run(
@@ -1698,7 +1702,7 @@ fn caldav_import_config(url: &str) -> inbuxa_migrate::sync::import_dav::DavImpor
         allow_cleartext: true,
         dav_connections: 1,
         multiget_batch: 8,
-        allow_source_change: false,
+        source_change: inbuxa_migrate::sync::import_dav::SourceChange::Reject,
     }
 }
 
@@ -1830,6 +1834,122 @@ END:VCALENDAR
     let _ = std::fs::remove_file(&archive);
 }
 
+// Kerio Connect sends calendar-data with bare CR line breaks, raw or as &#13; (issue #48).
+#[test]
+fn kerio_bare_cr_calendar_data_imports() {
+    let mut server = mockito::Server::new();
+    let url = server.url();
+    let home = "/full-calendars/domain.ext/user/";
+    let coll = "/full-calendars/domain.ext/user/ceb087f2-0604-4c31-a70e-9f68e90600c6/";
+
+    let home_set = format!(
+        r#"<?xml version="1.0"?>
+<a:multistatus xmlns:a="DAV:" xmlns:f="urn:ietf:params:xml:ns:caldav">
+  <a:response>
+    <a:href>{coll}</a:href>
+    <a:propstat>
+      <a:prop>
+        <a:resourcetype><a:collection/><f:calendar/></a:resourcetype>
+        <a:displayname>Calendar</a:displayname>
+      </a:prop>
+      <a:status>HTTP/1.1 200 OK</a:status>
+    </a:propstat>
+  </a:response>
+</a:multistatus>"#
+    );
+    let _discovery = multistatus_response(&mut server, "PROPFIND", home, &home_set);
+
+    let item = |n: u32| format!("{coll}ceb087f2-0604-4c31-a70e-9f68e90600c6-0000000{n}.eml");
+    let listing = format!(
+        r#"<?xml version="1.0"?>
+<a:multistatus xmlns:a="DAV:">
+  <a:response>
+    <a:href>{}</a:href>
+    <a:propstat><a:prop><a:resourcetype/><a:getetag>"k1"</a:getetag></a:prop>
+      <a:status>HTTP/1.1 200 OK</a:status></a:propstat>
+  </a:response>
+  <a:response>
+    <a:href>{}</a:href>
+    <a:propstat><a:prop><a:resourcetype/><a:getetag>"k2"</a:getetag></a:prop>
+      <a:status>HTTP/1.1 200 OK</a:status></a:propstat>
+  </a:response>
+</a:multistatus>"#,
+        item(1),
+        item(2)
+    );
+    let _enumeration = multistatus_response(&mut server, "PROPFIND", coll, &listing);
+
+    let ical = |uid: &str, summary: &str, eol: &str| {
+        [
+            "BEGIN:VCALENDAR",
+            "PRODID:-//Kerio Technologies//Kerio Connect//EN",
+            "VERSION:2.0",
+            "BEGIN:VEVENT",
+            &format!("UID:{uid}"),
+            "DTSTAMP:20260101T000000Z",
+            "DTSTART:20260101T090000Z",
+            "DTEND:20260101T100000Z",
+            &format!("SUMMARY:{summary}"),
+            "X-LABEL:0",
+            "END:VEVENT",
+            "END:VCALENDAR",
+            "",
+        ]
+        .join(eol)
+    };
+    let data = format!(
+        r#"<?xml version="1.0"?>
+<a:multistatus xmlns:a="DAV:" xmlns:f="urn:ietf:params:xml:ns:caldav">
+  <a:response>
+    <a:href>{}</a:href>
+    <a:propstat><a:prop><a:getetag>"k1"</a:getetag>
+      <f:calendar-data><![CDATA[{}]]></f:calendar-data></a:prop>
+      <a:status>HTTP/1.1 200 OK</a:status></a:propstat>
+  </a:response>
+  <a:response>
+    <a:href>{}</a:href>
+    <a:propstat><a:prop><a:getetag>"k2"</a:getetag>
+      <f:calendar-data>{}</f:calendar-data></a:prop>
+      <a:status>HTTP/1.1 200 OK</a:status></a:propstat>
+  </a:response>
+</a:multistatus>"#,
+        item(1),
+        ical("k1@kerio", "Raw CR", "\r"),
+        item(2),
+        ical("k2@kerio", "Entity CR", "&#13;"),
+    );
+    let _multiget = multistatus_response(&mut server, "REPORT", coll, &data);
+
+    let archive = dav_archive();
+    let summary = inbuxa_migrate::sync::import_dav::run(
+        dav_common(&archive),
+        caldav_import_config(&format!("{url}{home}")),
+    )
+    .expect("import");
+
+    let events = summary
+        .per_type
+        .iter()
+        .find(|(t, _)| *t == "calendarevent")
+        .map(|(_, c)| c.clone())
+        .expect("calendarevent counts");
+    assert_eq!(events.failed, 0, "{events:?}");
+    assert_eq!(events.fetched, 2, "{events:?}");
+
+    let conn = rusqlite::Connection::open(&archive).expect("open archive");
+    let mut titles: Vec<String> = conn
+        .prepare("SELECT json_extract(data, '$.title') FROM calendar_events")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    titles.sort_unstable();
+    assert_eq!(titles, ["Entity CR", "Raw CR"]);
+    drop(conn);
+    let _ = std::fs::remove_file(&archive);
+}
+
 #[test]
 fn credentials_rejected_during_discovery_still_aborts_the_run() {
     let mut server = mockito::Server::new();
@@ -1903,4 +2023,191 @@ fn dav_import_reports_both_phases_when_every_collection_fails() {
         "both phases are reported even when every collection failed"
     );
     let _ = std::fs::remove_file(&archive);
+}
+
+fn webdav_share(server: &mut mockito::Server, prefix: &str, body: &str) -> Vec<mockito::Mock> {
+    let url = server.url();
+    let root = format!(
+        r#"<?xml version="1.0"?>
+<d:multistatus xmlns:d="DAV:">
+  <d:response>
+    <d:href>{url}{prefix}</d:href>
+    <d:propstat>
+      <d:prop><d:resourcetype><d:collection/></d:resourcetype><d:displayname>share</d:displayname></d:prop>
+      <d:status>HTTP/1.1 200 OK</d:status>
+    </d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>{url}{prefix}docs/</d:href>
+    <d:propstat>
+      <d:prop><d:resourcetype><d:collection/></d:resourcetype><d:displayname>docs</d:displayname></d:prop>
+      <d:status>HTTP/1.1 200 OK</d:status>
+    </d:propstat>
+  </d:response>
+</d:multistatus>"#
+    );
+    let docs = format!(
+        r#"<?xml version="1.0"?>
+<d:multistatus xmlns:d="DAV:">
+  <d:response>
+    <d:href>{url}{prefix}docs/</d:href>
+    <d:propstat>
+      <d:prop><d:resourcetype><d:collection/></d:resourcetype><d:displayname>docs</d:displayname></d:prop>
+      <d:status>HTTP/1.1 200 OK</d:status>
+    </d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>{url}{prefix}docs/a.txt</d:href>
+    <d:propstat>
+      <d:prop><d:resourcetype/><d:getcontenttype>text/plain</d:getcontenttype><d:getetag>"a1"</d:getetag></d:prop>
+      <d:status>HTTP/1.1 200 OK</d:status>
+    </d:propstat>
+  </d:response>
+</d:multistatus>"#
+    );
+    vec![
+        multistatus_response(server, "PROPFIND", prefix, &root),
+        multistatus_response(server, "PROPFIND", &format!("{prefix}docs/"), &docs),
+        server
+            .mock("GET", format!("{prefix}docs/a.txt").as_str())
+            .with_status(200)
+            .with_header("content-type", "text/plain")
+            .with_body(body)
+            .create(),
+    ]
+}
+
+fn webdav_import_config(
+    url: &str,
+    source_change: inbuxa_migrate::sync::import_dav::SourceChange,
+) -> inbuxa_migrate::sync::import_dav::DavImportConfig {
+    inbuxa_migrate::sync::import_dav::DavImportConfig {
+        kind: inbuxa_migrate::sync::import_dav::DavKindArg::Webdav,
+        source_change,
+        ..caldav_import_config(url)
+    }
+}
+
+#[test]
+fn allow_source_change_keeps_the_moved_share_old_tree() {
+    use inbuxa_migrate::sync::import_dav::{SourceChange, run};
+
+    let mut server = mockito::Server::new();
+    let url = server.url();
+    let _old = webdav_share(&mut server, "/old/u/", "old\n");
+    let _new = webdav_share(&mut server, "/new/u/", "new\n");
+    let archive = dav_archive();
+
+    run(
+        dav_common(&archive),
+        webdav_import_config(&format!("{url}/old/u/"), SourceChange::Reject),
+    )
+    .expect("old share import");
+    run(
+        dav_common(&archive),
+        webdav_import_config(&format!("{url}/new/u/"), SourceChange::Allow),
+    )
+    .expect("new share import");
+
+    let (nodes, sources) = (
+        row_count(&archive, "file_nodes"),
+        row_count(&archive, "sources"),
+    );
+    let _ = std::fs::remove_file(&archive);
+    assert_eq!(nodes, 4, "both trees stay side by side");
+    assert_eq!(sources, 2);
+}
+
+#[test]
+fn replace_source_drops_the_moved_share_old_tree() {
+    use inbuxa_migrate::sync::import_dav::{SourceChange, run};
+
+    let mut server = mockito::Server::new();
+    let url = server.url();
+    let _old = webdav_share(&mut server, "/old/u/", "old\n");
+    let _new = webdav_share(&mut server, "/new/u/", "new\n");
+    let archive = dav_archive();
+
+    run(
+        dav_common(&archive),
+        webdav_import_config(&format!("{url}/old/u/"), SourceChange::Reject),
+    )
+    .expect("old share import");
+    let summary = run(
+        dav_common(&archive),
+        webdav_import_config(&format!("{url}/new/u/"), SourceChange::Replace),
+    )
+    .expect("new share import");
+    let rerun = run(
+        dav_common(&archive),
+        webdav_import_config(&format!("{url}/new/u/"), SourceChange::Reject),
+    );
+
+    let conn = rusqlite::Connection::open(&archive).unwrap();
+    let account: String = conn
+        .query_row("SELECT account_id FROM sources", [], |r| r.get(0))
+        .unwrap();
+    let orphans: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM file_nodes
+             WHERE id NOT IN (SELECT local_id FROM sync_id_dav)",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    drop(conn);
+    let (nodes, sources, blobs) = (
+        row_count(&archive, "file_nodes"),
+        row_count(&archive, "sources"),
+        row_count(&archive, "blobs"),
+    );
+    let _ = std::fs::remove_file(&archive);
+
+    assert_eq!(nodes, 2, "only the new tree remains");
+    assert_eq!(orphans, 0);
+    assert_eq!(sources, 1);
+    assert!(account.ends_with("/new/u/"), "kept source is {account}");
+    assert_eq!(blobs, 1, "the old file's blob is collected");
+    let filenode = summary
+        .per_type
+        .iter()
+        .find(|(name, _)| *name == "filenode")
+        .expect("filenode counts");
+    assert_eq!(filenode.1.deleted, 2);
+    assert!(
+        rerun.is_ok(),
+        "once replaced, the archive records a single source: {rerun:?}"
+    );
+}
+
+#[test]
+fn dry_run_replace_source_keeps_the_old_tree() {
+    use inbuxa_migrate::sync::import_dav::{SourceChange, run};
+
+    let mut server = mockito::Server::new();
+    let url = server.url();
+    let _old = webdav_share(&mut server, "/old/u/", "old\n");
+    let _new = webdav_share(&mut server, "/new/u/", "new\n");
+    let archive = dav_archive();
+
+    run(
+        dav_common(&archive),
+        webdav_import_config(&format!("{url}/old/u/"), SourceChange::Reject),
+    )
+    .expect("old share import");
+    let mut common = dav_common(&archive);
+    common.dry_run = true;
+    run(
+        common,
+        webdav_import_config(&format!("{url}/new/u/"), SourceChange::Replace),
+    )
+    .expect("dry-run");
+
+    let (nodes, sources) = (
+        row_count(&archive, "file_nodes"),
+        row_count(&archive, "sources"),
+    );
+    let _ = std::fs::remove_file(&archive);
+    assert_eq!(nodes, 2);
+    assert_eq!(sources, 1);
 }

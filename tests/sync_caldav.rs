@@ -20,7 +20,7 @@ fn base_url() -> &'static str {
 use inbuxa_migrate::jmap::account::AccountSelector;
 use inbuxa_migrate::jmap::http::Auth;
 use inbuxa_migrate::logging::Logger;
-use inbuxa_migrate::sync::import_dav::{DavAuth, DavImportConfig, DavKindArg};
+use inbuxa_migrate::sync::import_dav::{DavAuth, DavImportConfig, DavKindArg, SourceChange};
 use inbuxa_migrate::sync::{self, CommonConfig, ConnectConfig, ExportConfig, ImportConfig};
 
 fn tmp_archive(tag: &str) -> PathBuf {
@@ -59,7 +59,7 @@ fn caldav_cfg(base_url: &str, domain: &str, localpart: &str) -> DavImportConfig 
         allow_cleartext: false,
         dav_connections: 4,
         multiget_batch: 50,
-        allow_source_change: false,
+        source_change: SourceChange::Reject,
     }
 }
 

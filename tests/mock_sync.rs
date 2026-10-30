@@ -5187,3 +5187,1005 @@ fn export_rerun_leaves_an_event_alone_when_nothing_is_newer() {
     );
     assert_eq!(counts.skipped, 1);
 }
+
+// Draft -18 FileNodes import by @type; an unrecognised @type fails only that node.
+#[test]
+fn import_file_node_by_type_and_skips_unknown_type() {
+    let mut server = mockito::Server::new();
+    let base = server.url();
+    let api = "/jmap/api";
+    let archive = tmp();
+
+    let _root = server.mock("GET", "/").with_status(404).create();
+    let _wk = server
+        .mock("GET", "/.well-known/jmap")
+        .with_body(session_body_full(&base))
+        .expect_at_least(1)
+        .create();
+    let _fnterm = anchor_terminator(&mut server, api, "FileNode");
+
+    let _fq = server
+        .mock("POST", api)
+        .match_body(Matcher::Regex("FileNode/query".into()))
+        .with_body(
+            json!({"methodResponses":[["FileNode/query",
+                {"accountId":"w","ids":["F1","F2","F3","F4"]},"q"]]})
+            .to_string(),
+        )
+        .create();
+    let _fg = server
+        .mock("POST", api)
+        .match_body(Matcher::Regex("FileNode/get".into()))
+        .with_body(
+            json!({"methodResponses":[["FileNode/get",{"accountId":"w","state":"sf1","list":[
+                {"@type":"Directory","id":"F1","parentId":null,"name":"docs","role":null,
+                 "isSubscribed":true,"created":"2026-01-01T00:00:00Z"},
+                {"@type":"File","id":"F2","parentId":"F1","name":"a.sh","blobId":"BLBF",
+                 "size":10,"mediaType":"text/x-sh","executable":true,
+                 "created":"2026-01-02T00:00:00Z"},
+                {"@type":"SymLink","id":"F3","parentId":null,"name":"latest",
+                 "target":["docs","a.sh"],"created":"2026-01-03T00:00:00Z"},
+                {"@type":"Socket","id":"F4","parentId":null,"name":"sock",
+                 "created":"2026-01-04T00:00:00Z"}
+            ],"notFound":[]},"g"]]})
+            .to_string(),
+        )
+        .create();
+    let _dl = server
+        .mock("GET", Matcher::Regex("/jmap/dl/w/BLBF/.*".into()))
+        .with_body("file bytes")
+        .create();
+
+    let outcome = sync::import_jmap::run_reporting(
+        common(&archive),
+        import_cfg_objects(&base, vec![ObjectType::FileNode]),
+    );
+    assert!(outcome.error.is_none(), "{:?}", outcome.error);
+
+    let nodes = outcome
+        .summary
+        .per_type
+        .iter()
+        .find(|(t, _)| *t == "FileNode")
+        .map(|(_, c)| c.clone())
+        .expect("file node counts");
+    assert_eq!(nodes.fetched, 3);
+    assert_eq!(nodes.failed, 1);
+
+    let conn = rusqlite::Connection::open(&archive).unwrap();
+    let mut stmt = conn
+        .prepare(
+            "SELECT name, node_type, media_type, executable, target FROM file_nodes ORDER BY name",
+        )
+        .unwrap();
+    type Row = (String, String, Option<String>, i64, Option<String>);
+    let rows: Vec<Row> = stmt
+        .query_map([], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    drop(stmt);
+    assert_eq!(
+        rows,
+        vec![
+            (
+                "a.sh".to_owned(),
+                "file".to_owned(),
+                Some("text/x-sh".to_owned()),
+                1,
+                None
+            ),
+            ("docs".to_owned(), "directory".to_owned(), None, 0, None),
+            (
+                "latest".to_owned(),
+                "symlink".to_owned(),
+                None,
+                0,
+                Some(r#"["docs","a.sh"]"#.to_owned())
+            ),
+        ]
+    );
+    let _ = std::fs::remove_file(&archive);
+}
+
+#[test]
+fn import_writes_each_email_blob_before_later_downloads_complete() {
+    // Each download waits for the previous blob to reach the archive WAL; collecting a page first would time out.
+    let mut server = mockito::Server::new();
+    let base = server.url();
+    let api = "/jmap/api";
+    let archive = tmp();
+    let wal = PathBuf::from(format!("{}-wal", archive.display()));
+
+    let _root = server.mock("GET", "/").with_status(404).create();
+    let _wk = server
+        .mock("GET", "/.well-known/jmap")
+        .with_body(session_body_full(&base))
+        .expect_at_least(1)
+        .create();
+    let _mbterm = anchor_terminator(&mut server, api, "Mailbox");
+    let _emterm = anchor_terminator(&mut server, api, "Email");
+    let _mbq = server
+        .mock("POST", api)
+        .match_body(Matcher::Regex("Mailbox/query".into()))
+        .with_body(
+            json!({"methodResponses":[["Mailbox/query",
+                {"accountId":"w","ids":["MX"]},"q"]]})
+            .to_string(),
+        )
+        .create();
+    let _mbg = server
+        .mock("POST", api)
+        .match_body(Matcher::Regex("Mailbox/get".into()))
+        .with_body(
+            json!({"methodResponses":[["Mailbox/get",{"accountId":"w","state":"sm1","list":[
+                {"id":"MX","name":"Inbox","parentId":null,"role":"inbox","sortOrder":0,"isSubscribed":true}
+            ],"notFound":[]},"g"]]})
+            .to_string(),
+        )
+        .create();
+    let _eq = server
+        .mock("POST", api)
+        .match_body(Matcher::Regex("Email/query".into()))
+        .with_body(
+            json!({"methodResponses":[["Email/query",
+                {"accountId":"w","ids":["E1","E2","E3"]},"q"]]})
+            .to_string(),
+        )
+        .create();
+    let list: Vec<Value> = (1..=3)
+        .map(|n| {
+            json!({"id":format!("E{n}"),"blobId":format!("BLB{n}"),
+                "receivedAt":"2020-01-01T00:00:00Z","mailboxIds":{"MX":true},"keywords":{}})
+        })
+        .collect();
+    let _eg = server
+        .mock("POST", api)
+        .match_body(Matcher::Regex("Email/get".into()))
+        .with_body(
+            json!({"methodResponses":[["Email/get",{"accountId":"w","state":"se1",
+                "list":list,"notFound":[]},"g"]]})
+            .to_string(),
+        )
+        .create();
+
+    let wal_seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u64>::new()));
+    let wal_len = {
+        let wal = wal.clone();
+        move || std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0)
+    };
+    let mut downloads = Vec::new();
+    for n in 1..=3u8 {
+        let seen = wal_seen.clone();
+        let wal_len = wal_len.clone();
+        downloads.push(
+            server
+                .mock("GET", Matcher::Regex(format!("/jmap/dl/w/BLB{n}/.*")))
+                .with_body_from_request(move |_| {
+                    let floor = seen.lock().unwrap().last().copied();
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+                    let mut len = wal_len();
+                    while floor.is_some_and(|f| len <= f) && std::time::Instant::now() < deadline {
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                        len = wal_len();
+                    }
+                    seen.lock().unwrap().push(len);
+                    let mut body = format!("From: a@x\r\nMessage-ID: <{n}@h>\r\n\r\n").into_bytes();
+                    body.resize(body.len() + 64 * 1024, b'a' + n);
+                    body
+                })
+                .create(),
+        );
+    }
+
+    let summary = sync::import_jmap::run(
+        common(&archive),
+        import_cfg_objects(&base, vec![ObjectType::Mailbox, ObjectType::Email]),
+    )
+    .expect("import succeeds");
+    assert!(!summary.any_failed());
+
+    let seen = wal_seen.lock().unwrap().clone();
+    assert_eq!(seen.len(), 3);
+    assert!(
+        seen.windows(2).all(|w| w[1] > w[0]),
+        "each blob reaches the archive before the next download finishes: {seen:?}"
+    );
+    let conn = rusqlite::Connection::open(&archive).unwrap();
+    assert_eq!(
+        conn.query_row::<i64, _, _>("SELECT count(*) FROM emails", [], |r| r.get(0))
+            .unwrap(),
+        3
+    );
+    let _ = std::fs::remove_file(&archive);
+}
+
+// DAV alpha colors are sent without alpha and unusable colors are dropped.
+#[test]
+fn export_calendar_normalizes_colors() {
+    let mut server = mockito::Server::new();
+    let base = server.url();
+    let api = "/jmap/api";
+    let archive = tmp();
+    {
+        let conn = db::init::open(&archive).unwrap();
+        conn.execute(
+            "INSERT INTO calendars (id,name,color,is_default) VALUES
+                (1,'Sogo','#AAAAAAFF',0), (2,'Short','#abcd',0), (3,'Odd','rgba(1,2,3,0.5)',0)",
+            [],
+        )
+        .unwrap();
+    }
+
+    let _root = server.mock("GET", "/").with_status(404).create();
+    let _wk = server
+        .mock("GET", "/.well-known/jmap")
+        .with_body(session_body_full(&base))
+        .expect_at_least(1)
+        .create();
+    let _g = server
+        .mock("POST", api)
+        .match_body(Matcher::Regex("Calendar/get".into()))
+        .with_body(
+            json!({"methodResponses":[["Calendar/get",{"accountId":"w","list":[],
+                "notFound":[]},"g"]]})
+            .to_string(),
+        )
+        .expect(1)
+        .create();
+    let create = server
+        .mock("POST", api)
+        .match_body(Matcher::Regex("Calendar/set".into()))
+        .with_body_from_request(|req| {
+            let body: Value = serde_json::from_slice(req.body().unwrap()).unwrap();
+            let create = &body["methodCalls"][0][1]["create"];
+            assert_eq!(create["c1"]["color"], json!("#AAAAAA"));
+            assert_eq!(create["c2"]["color"], json!("#abc"));
+            assert!(create["c3"].get("color").is_none(), "{create}");
+            json!({"methodResponses":[["Calendar/set",{"accountId":"w",
+                "created":{"c1":{"id":"T1"},"c2":{"id":"T2"},"c3":{"id":"T3"}}},"s"]]})
+            .to_string()
+            .into_bytes()
+        })
+        .expect(1)
+        .create();
+
+    let summary = sync::export::run(
+        common(&archive),
+        export_cfg_objects(&base, vec![ObjectType::Calendar]),
+    )
+    .expect("export");
+    create.assert();
+    let counts = summary
+        .per_type
+        .iter()
+        .find(|(t, _)| *t == "Calendar")
+        .map(|(_, c)| c.clone())
+        .expect("calendar counts");
+    assert_eq!(counts.created, 3);
+    assert_eq!(counts.failed, 0);
+    let _ = std::fs::remove_file(&archive);
+}
+
+// Archived participant identities are never sent to the target, even with prune, and nothing fails.
+#[test]
+fn export_skips_participant_identities() {
+    let mut server = mockito::Server::new();
+    let base = server.url();
+    let api = "/jmap/api";
+    let archive = tmp();
+    {
+        let conn = db::init::open(&archive).unwrap();
+        conn.execute(
+            "INSERT INTO participant_identities (id,name,calendar_address,is_default)
+             VALUES (1,'Bob','mailto:bob@example.org',1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO calendars (id,name,is_default) VALUES (1,'Family',1)",
+            [],
+        )
+        .unwrap();
+    }
+
+    let _root = server.mock("GET", "/").with_status(404).create();
+    let _wk = server
+        .mock("GET", "/.well-known/jmap")
+        .with_body(session_body_full(&base))
+        .expect_at_least(1)
+        .create();
+    let participant = server
+        .mock("POST", api)
+        .match_body(Matcher::Regex("ParticipantIdentity/".into()))
+        .with_status(500)
+        .expect(0)
+        .create();
+    let calendars = server
+        .mock("POST", api)
+        .match_body(Matcher::Regex("Calendar/get".into()))
+        .with_body(
+            json!({"methodResponses":[["Calendar/get",{"accountId":"w","list":[
+                {"id":"F","name":"Family","isDefault":true}
+            ],"notFound":[]},"g"]]})
+            .to_string(),
+        )
+        .expect(1)
+        .create();
+
+    for objects in [
+        vec![ObjectType::ParticipantIdentity, ObjectType::Calendar],
+        vec![ObjectType::ParticipantIdentity],
+    ] {
+        let mut config = export_cfg_objects(&base, objects);
+        config.prune = true;
+        let summary = sync::export::run(common(&archive), config).expect("export");
+        assert!(!summary.any_failed(), "{:?}", summary.per_type);
+        assert!(
+            summary
+                .per_type
+                .iter()
+                .all(|(t, _)| *t != "ParticipantIdentity")
+        );
+    }
+    participant.assert();
+    calendars.assert();
+    let _ = std::fs::remove_file(&archive);
+}
+
+// Pruning stale scripts leaves the archive's active script active on the target.
+#[test]
+fn export_sieve_prune_keeps_archive_active_script_active() {
+    prune_sieve_with_archive_active(true, Some("M1"));
+}
+
+// With no active script in the archive, the stale active target script is deactivated and pruned.
+#[test]
+fn export_sieve_prune_destroys_stale_active_script() {
+    prune_sieve_with_archive_active(false, None);
+}
+
+fn prune_sieve_with_archive_active(archive_active: bool, expected_active: Option<&str>) {
+    let mut server = mockito::Server::new();
+    let base = server.url();
+    let archive = tmp();
+    {
+        let conn = db::init::open(&archive).unwrap();
+        let blob = db::blobs::intern_blob(&conn, b"keep;\n").unwrap();
+        conn.execute(
+            "INSERT INTO sieve_scripts (id,name,is_active,blob_id) VALUES (1,'main',?1,?2)",
+            rusqlite::params![archive_active, blob],
+        )
+        .unwrap();
+    }
+
+    let _root = server.mock("GET", "/").with_status(404).create();
+    let _wk = server
+        .mock("GET", "/.well-known/jmap")
+        .with_body(session_body_full(&base))
+        .expect_at_least(1)
+        .create();
+    let active = std::sync::Arc::new(std::sync::Mutex::new(Some("O1".to_owned())));
+    let target_active = active.clone();
+    let log = CallLog::default();
+    let _api = jmap_dispatch(&mut server, &log, move |name, args| {
+        let mut active = target_active.lock().unwrap();
+        match name {
+            "SieveScript/get" => json!({"accountId":"w","state":"x","notFound":[],"list":[
+                {"id":"M1","name":"main","isActive":active.as_deref() == Some("M1"),"blobId":"BM"},
+                {"id":"O1","name":"old","isActive":active.as_deref() == Some("O1"),"blobId":"BO"}
+            ]}),
+            "SieveScript/set" => {
+                if args["onSuccessDeactivateScript"] == json!(true) {
+                    *active = None;
+                }
+                if let Some(id) = args["onSuccessActivateScript"].as_str() {
+                    *active = Some(id.to_owned());
+                }
+                let mut response = json!({"accountId":"w"});
+                if let Some(ids) = args["destroy"].as_array() {
+                    let (blocked, destroyed): (Vec<&Value>, Vec<&Value>) =
+                        ids.iter().partition(|id| id.as_str() == active.as_deref());
+                    response["destroyed"] = json!(destroyed);
+                    response["notDestroyed"] = blocked
+                        .iter()
+                        .map(|id| {
+                            (
+                                id.as_str().unwrap().to_owned(),
+                                json!({"type":"scriptIsActive"}),
+                            )
+                        })
+                        .collect::<serde_json::Map<_, _>>()
+                        .into();
+                }
+                response
+            }
+            other => panic!("unexpected {other}"),
+        }
+    });
+
+    let mut config = export_cfg_objects(&base, vec![ObjectType::SieveScript]);
+    config.prune = true;
+    let summary = sync::export::run(common(&archive), config).expect("export");
+    assert!(!summary.any_failed(), "{:?}", summary.per_type);
+    let destroyed: Vec<Value> = log
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|(_, args)| args.get("destroy").cloned())
+        .collect();
+    assert_eq!(destroyed, vec![json!(["O1"])]);
+    assert_eq!(active.lock().unwrap().as_deref(), expected_active);
+    let _ = std::fs::remove_file(&archive);
+}
+
+fn session_body_vacation(base: &str) -> String {
+    let mut session: Value = serde_json::from_str(&session_body_full(base)).unwrap();
+    session["accounts"]["w"]["accountCapabilities"]["urn:ietf:params:jmap:vacationresponse"] =
+        json!({});
+    session.to_string()
+}
+
+type CallLog = std::sync::Arc<std::sync::Mutex<Vec<(String, Value)>>>;
+
+fn jmap_dispatch(
+    server: &mut mockito::Server,
+    log: &CallLog,
+    respond: impl Fn(&str, &Value) -> Value + Send + Sync + 'static,
+) -> mockito::Mock {
+    let log = log.clone();
+    server
+        .mock("POST", "/jmap/api")
+        .with_body_from_request(move |req| {
+            let body: Value = serde_json::from_slice(req.body().unwrap()).unwrap();
+            let mut responses = Vec::new();
+            for call in body["methodCalls"].as_array().unwrap() {
+                let name = call[0].as_str().unwrap();
+                log.lock().unwrap().push((name.to_owned(), call[1].clone()));
+                responses.push(json!([name, respond(name, &call[1]), call[2]]));
+            }
+            json!({ "methodResponses": responses })
+                .to_string()
+                .into_bytes()
+        })
+        .expect_at_least(1)
+        .create()
+}
+
+fn vacation_row(archive: &Path) -> Option<(bool, Option<String>, Option<String>)> {
+    let conn = db::init::open(archive).unwrap();
+    conn.query_row(
+        "SELECT is_enabled, subject, from_date FROM vacation_response",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )
+    .ok()
+}
+
+// A 0.16 source keeps the vacation script and stores the VacationResponse; catch-up refreshes it.
+#[test]
+fn import_vacation_response_from_stalwart_016_source() {
+    let mut server = mockito::Server::new();
+    let base = server.url();
+    let archive = tmp();
+    let vacation = std::sync::Arc::new(std::sync::Mutex::new(json!({
+        "id": "singleton", "isEnabled": true, "fromDate": "2026-10-01T00:00:00Z",
+        "toDate": null, "subject": "Away", "textBody": "Back soon", "htmlBody": null
+    })));
+
+    let _root = server.mock("GET", "/").with_status(404).create();
+    let _wk = server
+        .mock("GET", "/.well-known/jmap")
+        .with_body(session_body_vacation(&base))
+        .expect_at_least(1)
+        .create();
+    let _dl1 = server
+        .mock("GET", Matcher::Regex("/jmap/dl/w/B1/.*".into()))
+        .with_body("keep;\n")
+        .create();
+    let _dl2 = server
+        .mock("GET", Matcher::Regex("/jmap/dl/w/B2/.*".into()))
+        .with_body("require [\"vacation\"];\nvacation \"Back soon\";\n")
+        .create();
+    let log = CallLog::default();
+    let current = vacation.clone();
+    let _api = jmap_dispatch(&mut server, &log, move |name, args| match name {
+        "SieveScript/query" if args.get("anchor").is_some() => json!({"accountId":"w","ids":[]}),
+        "SieveScript/query" => json!({"accountId":"w","ids":["S1","S2"]}),
+        "SieveScript/get" => json!({"accountId":"w","state":"x","notFound":[],"list":[
+            {"id":"S1","name":"filters","isActive":false,"blobId":"B1"},
+            {"id":"S2","name":"vacation","isActive":true,"blobId":"B2"}
+        ]}),
+        "VacationResponse/get" => json!({"accountId":"w","state":"x","notFound":[],
+            "list":[current.lock().unwrap().clone()]}),
+        other => panic!("unexpected {other}"),
+    });
+
+    let summary = sync::import_jmap::run(
+        common(&archive),
+        import_cfg_objects(&base, vec![ObjectType::SieveScript]),
+    )
+    .expect("import");
+    assert!(!summary.any_failed());
+    let counts = summary
+        .per_type
+        .iter()
+        .find(|(t, _)| *t == "VacationResponse")
+        .map(|(_, c)| c.clone())
+        .expect("vacation counts");
+    assert_eq!(counts.fetched, 1);
+    assert_eq!(
+        vacation_row(&archive),
+        Some((
+            true,
+            Some("Away".to_owned()),
+            Some("2026-10-01T00:00:00Z".to_owned())
+        ))
+    );
+    let scripts: i64 = db::init::open(&archive)
+        .unwrap()
+        .query_row("SELECT count(*) FROM sieve_scripts", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(scripts, 2, "the vacation script is still archived");
+
+    *vacation.lock().unwrap() = json!({"id": "singleton", "isEnabled": false, "subject": "Later"});
+    sync::import_jmap::run(
+        common(&archive),
+        import_cfg_objects(&base, vec![ObjectType::SieveScript]),
+    )
+    .expect("catch-up import");
+    assert_eq!(
+        vacation_row(&archive),
+        Some((false, Some("Later".to_owned()), None))
+    );
+
+    *vacation.lock().unwrap() = json!({"id": "singleton", "isEnabled": false});
+    sync::import_jmap::run(
+        common(&archive),
+        import_cfg_objects(&base, vec![ObjectType::SieveScript]),
+    )
+    .expect("second catch-up import");
+    assert_eq!(
+        vacation_row(&archive),
+        None,
+        "an unset vacation clears the row"
+    );
+    let _ = std::fs::remove_file(&archive);
+}
+
+fn seed_vacation_archive(archive: &Path) {
+    let conn = db::init::open(archive).unwrap();
+    let filters = db::blobs::intern_blob(&conn, b"keep;\n").unwrap();
+    let vacation = db::blobs::intern_blob(&conn, b"vacation \"Back soon\";\n").unwrap();
+    conn.execute(
+        "INSERT INTO sources (id,kind,session_url,account_id,username)
+         VALUES (1,'jmap','http://src','a','bob')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO sieve_scripts (id,name,is_active,blob_id) VALUES
+            (1,'filters',0,?1), (2,'vacation',1,?2)",
+        rusqlite::params![filters, vacation],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO vacation_response (id,source_id,is_enabled,subject,text_body)
+         VALUES (1,1,1,'Away','Back soon')",
+        [],
+    )
+    .unwrap();
+}
+
+// The vacation script becomes a VacationResponse update, sent last and never pruned.
+#[test]
+fn export_vacation_script_becomes_vacation_response() {
+    let mut server = mockito::Server::new();
+    let base = server.url();
+    let archive = tmp();
+    seed_vacation_archive(&archive);
+
+    let _root = server.mock("GET", "/").with_status(404).create();
+    let _wk = server
+        .mock("GET", "/.well-known/jmap")
+        .with_body(session_body_vacation(&base))
+        .expect_at_least(1)
+        .create();
+    let _up = server
+        .mock("POST", Matcher::Regex("/jmap/upload/".into()))
+        .with_body(json!({"blobId":"UP1"}).to_string())
+        .create();
+    let log = CallLog::default();
+    let second_run = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let target_state = second_run.clone();
+    let _api = jmap_dispatch(&mut server, &log, move |name, args| match name {
+        "SieveScript/get" if target_state.load(std::sync::atomic::Ordering::Relaxed) => {
+            json!({"accountId":"w","state":"x","notFound":[],"list":[
+                {"id":"V1","name":"vacation","isActive":true,"blobId":"BV"},
+                {"id":"S1","name":"filters","isActive":false,"blobId":"UP1"}
+            ]})
+        }
+        "SieveScript/get" => json!({"accountId":"w","state":"x","notFound":[],"list":[
+            {"id":"O1","name":"old","isActive":false,"blobId":"BO"}
+        ]}),
+        "SieveScript/set" if args.get("create").is_some() => {
+            json!({"accountId":"w","created":{"c1":{"id":"S1"}}})
+        }
+        "SieveScript/set" if args.get("destroy").is_some() => {
+            json!({"accountId":"w","destroyed":args["destroy"].clone()})
+        }
+        "SieveScript/set" => json!({"accountId":"w"}),
+        "VacationResponse/set" => json!({"accountId":"w","updated":{"singleton":null}}),
+        other => panic!("unexpected {other}"),
+    });
+    let export = || {
+        let mut config = export_cfg_objects(&base, vec![ObjectType::SieveScript]);
+        config.prune = true;
+        let summary = sync::export::run(common(&archive), config).expect("export");
+        assert!(!summary.any_failed(), "{:?}", summary.per_type);
+        let calls = std::mem::take(&mut *log.lock().unwrap());
+        (summary, calls)
+    };
+    let args_of = |calls: &[(String, Value)], key: &str| -> Vec<Value> {
+        calls
+            .iter()
+            .filter_map(|(_, args)| args.get(key).cloned())
+            .collect()
+    };
+    let expected_vacation = json!({"isEnabled": true, "fromDate": null, "toDate": null,
+        "subject": "Away", "textBody": "Back soon", "htmlBody": null});
+
+    let (summary, calls) = export();
+    let creates = args_of(&calls, "create");
+    assert_eq!(creates.len(), 1);
+    assert_eq!(creates[0]["c1"]["name"], json!("filters"));
+    assert!(
+        creates[0].get("c2").is_none(),
+        "vacation is not created as a script"
+    );
+    assert_eq!(args_of(&calls, "destroy"), vec![json!(["O1"])]);
+    let (last_name, last_args) = calls.last().unwrap();
+    assert_eq!(last_name, "VacationResponse/set");
+    assert_eq!(last_args["update"]["singleton"], expected_vacation);
+    let counts = |ty: &str| {
+        summary
+            .per_type
+            .iter()
+            .find(|(t, _)| *t == ty)
+            .map(|(_, c)| c.clone())
+            .unwrap()
+    };
+    assert_eq!(counts("SieveScript").created, 1);
+    assert_eq!(counts("SieveScript").skipped, 1);
+    assert_eq!(counts("VacationResponse").updated, 1);
+
+    second_run.store(true, std::sync::atomic::Ordering::Relaxed);
+    let (_, calls) = export();
+    assert!(args_of(&calls, "create").is_empty());
+    assert!(
+        args_of(&calls, "destroy").is_empty(),
+        "the target vacation script is not pruned"
+    );
+    let (last_name, last_args) = calls.last().unwrap();
+    assert_eq!(last_name, "VacationResponse/set");
+    assert_eq!(last_args["update"]["singleton"], expected_vacation);
+    let _ = std::fs::remove_file(&archive);
+}
+
+// Without VacationResponse on the target, the vacation script is exported as before.
+#[test]
+fn export_vacation_script_unchanged_without_target_capability() {
+    let mut server = mockito::Server::new();
+    let base = server.url();
+    let archive = tmp();
+    seed_vacation_archive(&archive);
+
+    let _root = server.mock("GET", "/").with_status(404).create();
+    let _wk = server
+        .mock("GET", "/.well-known/jmap")
+        .with_body(session_body_full(&base))
+        .expect_at_least(1)
+        .create();
+    let _up = server
+        .mock("POST", Matcher::Regex("/jmap/upload/".into()))
+        .with_body(json!({"blobId":"UP1"}).to_string())
+        .create();
+    let log = CallLog::default();
+    let _api = jmap_dispatch(&mut server, &log, |name, args| match name {
+        "SieveScript/get" => json!({"accountId":"w","state":"x","notFound":[],"list":[]}),
+        "SieveScript/set" if args.get("create").is_some() => {
+            let id = args["create"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .next()
+                .unwrap()
+                .clone();
+            json!({"accountId":"w","created":{ id.clone(): {"id": format!("T{id}")} }})
+        }
+        "SieveScript/set" => json!({"accountId":"w"}),
+        other => panic!("unexpected {other}"),
+    });
+
+    let summary = sync::export::run(
+        common(&archive),
+        export_cfg_objects(&base, vec![ObjectType::SieveScript]),
+    )
+    .expect("export");
+    assert!(!summary.any_failed(), "{:?}", summary.per_type);
+    let calls = log.lock().unwrap().clone();
+    let names: Vec<&Value> = calls
+        .iter()
+        .filter_map(|(_, args)| args.get("create"))
+        .flat_map(|c| c.as_object().unwrap().values().map(|v| &v["name"]))
+        .collect();
+    assert_eq!(names, vec![&json!("filters"), &json!("vacation")]);
+    assert!(
+        calls
+            .iter()
+            .all(|(n, _)| !n.starts_with("VacationResponse"))
+    );
+    assert!(
+        summary
+            .per_type
+            .iter()
+            .all(|(t, _)| *t != "VacationResponse")
+    );
+    let _ = std::fs::remove_file(&archive);
+}
+
+fn session_body_admin_vacation(base: &str) -> String {
+    let mut session: Value = serde_json::from_str(&session_body_full(base)).unwrap();
+    let caps = &mut session["capabilities"];
+    caps["urn:ietf:params:jmap:principals"] = json!({});
+    caps["urn:ietf:params:jmap:sieve"] = json!({});
+    caps["urn:ietf:params:jmap:vacationresponse"] = json!({});
+    let mut admin = session["accounts"]["w"].take();
+    admin["name"] = json!("admin");
+    session["accounts"] = json!({ "a": admin });
+    session.to_string()
+}
+
+fn principal_bob(name: &str) -> Option<Value> {
+    match name {
+        "Principal/query" => Some(json!({"accountId":"a","ids":["p2"]})),
+        "Principal/get" => Some(json!({"accountId":"a","state":"x","notFound":[],"list":[
+            {"id":"p2","name":"bob","accounts":{"w":{"name":"bob"}}}
+        ]})),
+        _ => None,
+    }
+}
+
+// Admin credentials with --account-name: the target is not listed in the session, the session advertises VacationResponse.
+#[test]
+fn export_vacation_response_for_unlisted_account_of_admin_session() {
+    let mut server = mockito::Server::new();
+    let base = server.url();
+    let archive = tmp();
+    seed_vacation_archive(&archive);
+
+    let _root = server.mock("GET", "/").with_status(404).create();
+    let _wk = server
+        .mock("GET", "/.well-known/jmap")
+        .with_body(session_body_admin_vacation(&base))
+        .expect_at_least(1)
+        .create();
+    let _up = server
+        .mock("POST", Matcher::Regex("/jmap/upload/w/".into()))
+        .with_body(json!({"blobId":"UP1"}).to_string())
+        .create();
+    let log = CallLog::default();
+    let _api = jmap_dispatch(&mut server, &log, |name, args| {
+        if let Some(reply) = principal_bob(name) {
+            return reply;
+        }
+        match name {
+            "SieveScript/get" => json!({"accountId":"w","state":"x","notFound":[],"list":[]}),
+            "SieveScript/set" if args.get("create").is_some() => {
+                json!({"accountId":"w","created":{"c1":{"id":"S1"}}})
+            }
+            "SieveScript/set" => json!({"accountId":"w"}),
+            "VacationResponse/set" => json!({"accountId":"w","updated":{"singleton":null}}),
+            other => panic!("unexpected {other}"),
+        }
+    });
+
+    let mut config = export_cfg_objects(&base, vec![ObjectType::SieveScript]);
+    config.connect.account = AccountSelector::Name("bob".into());
+    let summary = sync::export::run(common(&archive), config).expect("export");
+    assert!(!summary.any_failed(), "{:?}", summary.per_type);
+    let calls = log.lock().unwrap().clone();
+    let names: Vec<&Value> = calls
+        .iter()
+        .filter_map(|(_, args)| args.get("create"))
+        .flat_map(|c| c.as_object().unwrap().values().map(|v| &v["name"]))
+        .collect();
+    assert_eq!(names, vec![&json!("filters")], "vacation is not created");
+    let (last_name, last_args) = calls.last().unwrap();
+    assert_eq!(last_name, "VacationResponse/set");
+    assert_eq!(last_args["accountId"], json!("w"));
+    assert_eq!(last_args["update"]["singleton"]["subject"], json!("Away"));
+    let _ = std::fs::remove_file(&archive);
+}
+
+// Admin credentials with --account-name: the import stores the target account's VacationResponse.
+#[test]
+fn import_vacation_response_for_unlisted_account_of_admin_session() {
+    let mut server = mockito::Server::new();
+    let base = server.url();
+    let archive = tmp();
+
+    let _root = server.mock("GET", "/").with_status(404).create();
+    let _wk = server
+        .mock("GET", "/.well-known/jmap")
+        .with_body(session_body_admin_vacation(&base))
+        .expect_at_least(1)
+        .create();
+    let _dl = server
+        .mock("GET", Matcher::Regex("/jmap/dl/w/B1/.*".into()))
+        .with_body("require [\"vacation\"];\nvacation \"Back soon\";\n")
+        .create();
+    let log = CallLog::default();
+    let _api = jmap_dispatch(&mut server, &log, |name, args| {
+        if let Some(reply) = principal_bob(name) {
+            return reply;
+        }
+        match name {
+            "SieveScript/query" if args.get("anchor").is_some() => {
+                json!({"accountId":"w","ids":[]})
+            }
+            "SieveScript/query" => json!({"accountId":"w","ids":["S1"]}),
+            "SieveScript/get" => json!({"accountId":"w","state":"x","notFound":[],"list":[
+                {"id":"S1","name":"vacation","isActive":true,"blobId":"B1"}
+            ]}),
+            "VacationResponse/get" => json!({"accountId":"w","state":"x","notFound":[],"list":[
+                {"id":"singleton","isEnabled":true,"fromDate":null,"toDate":null,
+                 "subject":"Away","textBody":"Back soon","htmlBody":null}
+            ]}),
+            other => panic!("unexpected {other}"),
+        }
+    });
+
+    let mut config = import_cfg_objects(&base, vec![ObjectType::SieveScript]);
+    config.connect.account = AccountSelector::Name("bob".into());
+    let summary = sync::import_jmap::run(common(&archive), config).expect("import");
+    assert!(!summary.any_failed(), "{:?}", summary.per_type);
+    let fetched = summary
+        .per_type
+        .iter()
+        .find(|(t, _)| *t == "VacationResponse")
+        .map(|(_, c)| c.fetched);
+    assert_eq!(fetched, Some(1));
+    assert_eq!(
+        vacation_row(&archive),
+        Some((true, Some("Away".to_owned()), None))
+    );
+    assert!(
+        log.lock()
+            .unwrap()
+            .iter()
+            .any(|(n, args)| n == "VacationResponse/get" && args["accountId"] == json!("w"))
+    );
+    let _ = std::fs::remove_file(&archive);
+}
+
+// A target on the 0.16 line, as inbuxa is, answers the shape probe and gets
+// `nodeType` and `type`; a draft-18 one refuses the probe's sort and gets
+// `@type`, `mediaType` and `executable`.
+#[test]
+fn export_file_nodes_in_the_targets_own_shape() {
+    for legacy in [true, false] {
+        let mut server = mockito::Server::new();
+        let base = server.url();
+        let archive = tmp();
+        {
+            let conn = db::init::open(&archive).unwrap();
+            let blob = db::blobs::intern_blob(&conn, b"#!/bin/sh\n").unwrap();
+            conn.execute(
+                "INSERT INTO file_nodes (id,parent_id,node_type,blob_id,name,media_type,created,executable)
+                 VALUES (1,NULL,'directory',NULL,'docs',NULL,'2022-02-02T02:02:02Z',0),
+                        (2,1,'file',?1,'run.sh','text/x-sh','2022-02-02T02:02:02Z',1)",
+                [blob],
+            )
+            .unwrap();
+        }
+        let _root = server.mock("GET", "/").with_status(404).create();
+        let _wk = server
+            .mock("GET", "/.well-known/jmap")
+            .with_body(session_body_full(&base))
+            .expect_at_least(1)
+            .create();
+        let _up = server
+            .mock("POST", Matcher::Regex("/jmap/upload/".into()))
+            .with_body(json!({"blobId":"UP1"}).to_string())
+            .create();
+        let log = CallLog::default();
+        let seen = log.clone();
+        let _api = server
+            .mock("POST", "/jmap/api")
+            .with_body_from_request(move |req| {
+                let body: Value = serde_json::from_slice(req.body().unwrap()).unwrap();
+                let mut responses = Vec::new();
+                for call in body["methodCalls"].as_array().unwrap() {
+                    let (name, args) = (call[0].as_str().unwrap(), &call[1]);
+                    seen.lock().unwrap().push((name.to_owned(), args.clone()));
+                    let (name, reply) = match name {
+                        "FileNode/query" if args.get("sort").is_some() && !legacy => {
+                            ("error", json!({"type":"unsupportedSort"}))
+                        }
+                        "FileNode/query" => {
+                            (name, json!({"accountId":"w","ids":[],"queryState":"q"}))
+                        }
+                        "FileNode/set" => {
+                            let created: serde_json::Map<String, Value> = args["create"]
+                                .as_object()
+                                .unwrap()
+                                .keys()
+                                .enumerate()
+                                .map(|(i, k)| (k.clone(), json!({"id": format!("N{i}{k}")})))
+                                .collect();
+                            (name, json!({"accountId":"w","created":created}))
+                        }
+                        other => panic!("unexpected {other}"),
+                    };
+                    responses.push(json!([name, reply, call[2]]));
+                }
+                json!({ "methodResponses": responses })
+                    .to_string()
+                    .into_bytes()
+            })
+            .expect_at_least(1)
+            .create();
+
+        let config = export_cfg_objects(&base, vec![ObjectType::FileNode]);
+        let summary = sync::export::run(common(&archive), config).expect("export");
+        assert!(!summary.any_failed(), "{:?}", summary.per_type);
+
+        let created: Vec<Value> = log
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(name, _)| name == "FileNode/set")
+            .flat_map(|(_, args)| {
+                args["create"]
+                    .as_object()
+                    .unwrap()
+                    .values()
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let file = created
+            .iter()
+            .find(|n| n["name"] == "run.sh")
+            .expect("file created");
+        let dir = created
+            .iter()
+            .find(|n| n["name"] == "docs")
+            .expect("directory created");
+        if legacy {
+            assert_eq!(dir["nodeType"], "directory", "{dir}");
+            assert_eq!(file["nodeType"], "file", "{file}");
+            assert_eq!(file["type"], "text/x-sh", "{file}");
+            for n in [file, dir] {
+                for gone in ["@type", "mediaType", "executable"] {
+                    assert!(n.get(gone).is_none(), "{gone} in {n}");
+                }
+            }
+        } else {
+            assert_eq!(dir["@type"], "Directory", "{dir}");
+            assert_eq!(file["@type"], "File", "{file}");
+            assert_eq!(file["mediaType"], "text/x-sh", "{file}");
+            assert_eq!(file["executable"], true, "{file}");
+            for n in [file, dir] {
+                assert!(
+                    n.get("nodeType").is_none() && n.get("type").is_none(),
+                    "{n}"
+                );
+            }
+        }
+        let _ = std::fs::remove_file(&archive);
+    }
+}
