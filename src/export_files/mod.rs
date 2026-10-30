@@ -33,6 +33,11 @@ pub mod paths;
 
 use paths::{Names, safe_component};
 
+/// The layout's name in `manifest.json`: the address of its specification,
+/// so it names no tool and can't clash with another format. 27.1.0-rc.2
+/// wrote `inbuxa-migrate-files` instead.
+pub const FORMAT: &str = "https://coffeylabs.org/specs/account-export/";
+
 /// The layout this release writes; raised when `manifest.json` or the tree
 /// changes in a way a reader has to know about.
 pub const FORMAT_VERSION: u32 = 1;
@@ -67,7 +72,7 @@ pub fn run(config: ExportFilesConfig) -> Result<Summary, Error> {
 
     let mut summary = Summary::default();
     let mut manifest = json!({
-        "format": "inbuxa-migrate-files",
+        "format": FORMAT,
         "formatVersion": FORMAT_VERSION,
         "createdBy": format!("inbuxa-migrate {}", crate::version::shown()),
         "created": OffsetDateTime::now_utc().format(&Rfc3339).unwrap_or_default(),
