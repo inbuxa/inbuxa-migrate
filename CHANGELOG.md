@@ -5,6 +5,15 @@ inbuxa suite: a series (`27.1`), its patches (`27.1.3`) and release
 candidates before a series ships (`27.1-rc.1`). The tag is the version with a
 `v`. Releases before 27.1 were dates (`v2026.9.30`).
 
+## [Unreleased]
+
+### Added
+- `export-managesieve` writes an archive's Sieve scripts into any
+  ManageSieve server and makes the archive's active script the active one.
+  Like `export-imap`, it writes only what's missing or differs, so running
+  it again writes nothing. A script the server refuses is counted and the
+  rest go on; `--dry-run` checks each one with `CHECKSCRIPT`.
+
 ## [27.1-rc.2]
 
 The second release candidate of the 27.1 series: three ways out of an

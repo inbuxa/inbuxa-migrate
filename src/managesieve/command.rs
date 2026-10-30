@@ -34,6 +34,39 @@ pub fn getscript(name: &str) -> String {
     out
 }
 
+/// `PUTSCRIPT` with the script as a non-synchronizing literal (RFC 5804,
+/// section 4): the bytes follow at once, and a CRLF ends the command.
+pub fn putscript(name: &str, script: &[u8]) -> Vec<u8> {
+    literal_command("PUTSCRIPT", Some(name), script)
+}
+
+/// `CHECKSCRIPT`: the server compiles the script and stores nothing.
+pub fn checkscript(script: &[u8]) -> Vec<u8> {
+    literal_command("CHECKSCRIPT", None, script)
+}
+
+pub fn setactive(name: &str) -> String {
+    let mut out = String::with_capacity(name.len() + 16);
+    out.push_str("SETACTIVE ");
+    encode_argument(name, &mut out);
+    out.push_str("\r\n");
+    out
+}
+
+fn literal_command(verb: &str, name: Option<&str>, script: &[u8]) -> Vec<u8> {
+    let mut head = String::with_capacity(verb.len() + 32);
+    head.push_str(verb);
+    if let Some(name) = name {
+        head.push(' ');
+        encode_argument(name, &mut head);
+    }
+    head.push_str(&format!(" {{{}+}}\r\n", script.len()));
+    let mut out = head.into_bytes();
+    out.extend_from_slice(script);
+    out.extend_from_slice(b"\r\n");
+    out
+}
+
 pub fn authenticate(mechanism: &str) -> String {
     let mut out = String::with_capacity(mechanism.len() + 20);
     out.push_str("AUTHENTICATE ");

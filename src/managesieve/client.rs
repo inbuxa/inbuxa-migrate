@@ -180,6 +180,35 @@ impl SieveClient {
         self.run(&command::getscript(name))
     }
 
+    pub fn putscript(&mut self, name: &str, script: &[u8]) -> Result<(), SieveError> {
+        self.run_logged(
+            &command::putscript(name, script),
+            &format!("PUTSCRIPT {name:?}"),
+        )
+    }
+
+    pub fn checkscript(&mut self, script: &[u8]) -> Result<(), SieveError> {
+        self.run_logged(&command::checkscript(script), "CHECKSCRIPT")
+    }
+
+    pub fn setactive(&mut self, name: &str) -> Result<(), SieveError> {
+        self.run(&command::setactive(name)).map(|_| ())
+    }
+
+    /// As `run_raw`, logging `label` in place of a script's bytes.
+    fn run_logged(&mut self, bytes: &[u8], label: &str) -> Result<(), SieveError> {
+        let started = Instant::now();
+        self.write_all(bytes)?;
+        let block = read_response(&mut self.reader)?;
+        self.logger.trace_cmd(
+            "SIEVE",
+            label,
+            &sieve_status(&block.status),
+            started.elapsed(),
+        );
+        finish_block(block, &mut self.closed).map(|_| ())
+    }
+
     pub fn noop(&mut self) -> Result<(), SieveError> {
         let _ = self.run(&command::noop())?;
         Ok(())

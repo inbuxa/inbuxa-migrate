@@ -1057,3 +1057,86 @@ fn transient_no_exhausting_max_retries_skips_script_and_followup_picks_it_up() {
     assert_eq!(count(&conn, "sieve_scripts"), 1);
     let _ = std::fs::remove_file(&archive);
 }
+
+/// The script a `PUTSCRIPT "<name>" {N+}` line announces, read off the wire.
+fn read_put(conn: &mut MockConn, name: &str) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let cmd = conn.read_line()?;
+    let prefix = format!("PUTSCRIPT \"{name}\" {{");
+    let size: usize = cmd
+        .strip_prefix(&prefix)
+        .and_then(|rest| rest.strip_suffix("+}"))
+        .unwrap_or_else(|| panic!("got {cmd}"))
+        .parse()
+        .unwrap();
+    let mut body = vec![0; size + 2];
+    conn.reader.read_exact(&mut body)?;
+    assert_eq!(&body[size..], b"\r\n");
+    body.truncate(size);
+    Ok(body)
+}
+
+#[test]
+fn export_writes_what_differs_and_moves_the_active_script() {
+    use inbuxa_migrate::db::{blobs, init};
+    use inbuxa_migrate::sync::export_managesieve::{self, ExportManageSieveConfig};
+
+    let archive = tempfile("export");
+    {
+        let conn = init::open(&archive).unwrap();
+        for (name, body, active) in [
+            ("bad", "nonsense", false),
+            ("new", "keep;", true),
+            ("same", "stop;", false),
+        ] {
+            let blob = blobs::intern_blob(&conn, body.as_bytes()).unwrap();
+            conn.execute(
+                "INSERT INTO sieve_scripts (name, is_active, blob_id) VALUES (?1, ?2, ?3)",
+                rusqlite::params![name, active, blob],
+            )
+            .unwrap();
+        }
+    }
+    let server = MockSieveServer::start(|conn| {
+        auth_then(conn, |c| {
+            assert_eq!(c.read_line()?, "LISTSCRIPTS");
+            c.write_line("\"same\" ACTIVE")?;
+            c.write_line("OK")?;
+
+            assert_eq!(read_put(c, "bad")?, b"nonsense");
+            c.write_line("NO \"line 1: unknown command\"")?;
+
+            assert_eq!(read_put(c, "new")?, b"keep;");
+            c.write_line("OK")?;
+
+            assert_eq!(c.read_line()?, "GETSCRIPT \"same\"");
+            c.write_line("{5}")?;
+            c.write_raw(b"stop;\r\n")?;
+            c.write_line("OK")?;
+
+            assert_eq!(c.read_line()?, "SETACTIVE \"new\"");
+            c.write_line("OK")?;
+            Ok(())
+        })
+    });
+    let common = CommonConfig {
+        archive: archive.clone(),
+        threads: 1,
+        dry_run: false,
+        max_retries: 1,
+        allow_invalid_certs: false,
+        logger: Logger::from_flags(true, 0),
+    };
+    let config = ExportManageSieveConfig {
+        url: server.url(),
+        auth: ManageSieveAuth::Basic {
+            user: "alice".to_owned(),
+            password: "p@ss".to_owned(),
+        },
+        allow_cleartext: true,
+    };
+    let summary = export_managesieve::run(common, config).expect("export");
+    let c = &summary.per_type[0].1;
+    assert_eq!((c.created, c.updated, c.skipped, c.failed), (1, 0, 1, 1));
+    let _ = std::fs::remove_file(&archive);
+}
