@@ -79,7 +79,8 @@ Imports one JMAP account, from inbuxa, Stalwart or any other JMAP server. `--obj
 ```
 inbuxa-migrate import imap \
   --url imap(s)://host[:port] \
-  (--auth-basic <USER> [--auth-password <PASS>] | --auth-bearer [TOKEN] --auth-user <USER>) \
+  (--auth-basic <USER> [--auth-password <PASS>] | --auth-bearer [TOKEN] --auth-user <USER> \
+   | --google-key <FILE> --auth-user <USER>) \
   [--include <REGEX>...] [--exclude <REGEX>...] [--exclude-special <ROLE>...] \
   [--folder <NAME>...] [--subscribed-only] [--noautomap] \
   [--include-deleted] [--allow-cleartext] [--compress] \
@@ -98,6 +99,23 @@ cap is fetched on its own. Each chunk is written to the archive as it
 arrives: an interrupted import keeps what it fetched, and the next run picks
 up from there. A message that can't be imported is reported with its folder
 and UID, and the rest of the folder carries on.
+
+**Gmail, a whole Google Workspace domain.** With `--google-key` the tool
+signs in as a Workspace service account acting for the user `--auth-user`
+names, so no one's password is needed. In a plan that is
+`--url imaps://imap.gmail.com --google-key key.json --auth-user {email}`.
+
+- In Google Cloud, create a service account and a JSON key for it.
+- In the Workspace Admin console, under domain-wide delegation, allow the
+  service account's client id the scope `https://mail.google.com/`.
+  IMAP has to be allowed for the users, in the Admin console's Gmail
+  settings.
+- The key file holds the account's private key and reaches every mailbox
+  in the domain: keep it readable by you alone, and delete the key in the
+  Cloud console once the move is done.
+
+Each connection signs in with a token for that user, and takes a new one
+when the last is close to running out.
 
 ### CalDAV
 
@@ -624,8 +642,9 @@ account, the state a later run resumes from, and the report.
   use a login that can act for each account. The example uses Dovecot's
   master user, `{email}*master`. Use the source's own form where it has
   one: Exchange impersonation through `--mailbox {email}`, a Graph app
-  with `--app-only --user {email}`, or an administrator on a JMAP source
-  with `--account-name {email}`.
+  with `--app-only --user {email}`, a Google service account with
+  `--google-key key.json --auth-user {email}`, or an administrator on a
+  JMAP source with `--account-name {email}`.
 - **One account at a time, several at once.** `--parallel` (default 4)
   sets how many accounts run at the same time. Each step runs as its own
   process. Its output goes to `<DIR>/<email>/<step>.log`, and one account
