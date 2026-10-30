@@ -226,12 +226,16 @@ fn reconcile_items_generic(
             ItemKind::ContactCard => tx
                 .execute("DELETE FROM contact_cards WHERE id = ?1", params![local_id])
                 .map(drop),
-            ItemKind::CalendarEvent => tx
-                .execute(
-                    "DELETE FROM calendar_events WHERE id = ?1",
-                    params![local_id],
+            ItemKind::CalendarEvent => {
+                occurrence_rows(&tx, pcc.run.source_id, pcc.container_local_id, local_id).and_then(
+                    |ids| {
+                        ids.iter().try_for_each(|id| {
+                            tx.execute("DELETE FROM calendar_events WHERE id = ?1", params![id])
+                                .map(drop)
+                        })
+                    },
                 )
-                .map(drop),
+            }
         };
         removed.map_err(|e| Error::Partial(e.to_string()))?;
         tx.commit().map_err(|e| Error::Partial(e.to_string()))?;
@@ -483,6 +487,7 @@ fn insert_or_update_tx(
     let local = match pcc.kind {
         ItemKind::CalendarEvent => insert_or_update_event(
             tx,
+            pcc.run.source_id,
             pcc.container_local_id,
             existing,
             raw,
@@ -511,63 +516,137 @@ fn insert_or_update_tx(
     Ok(())
 }
 
+/// One event row as the archive keeps it.
+struct EventRow {
+    is_draft: bool,
+    use_default_alerts: bool,
+    data: String,
+    data_type: &'static str,
+}
+
+/// One CalDAV resource holds one UID: a master event with its overrides,
+/// which is one row, or, when someone was invited to single occurrences of
+/// a series without the series itself, those occurrences, a row each. The
+/// first row is the one `sync_id_dav` names; the others are found by
+/// calendar and UID among rows no other server item names.
 fn insert_or_update_event(
     tx: &rusqlite::Transaction<'_>,
+    source_id: i64,
     calendar_local: i64,
     existing: Option<i64>,
     raw: &str,
     item_href: &str,
     logger: Logger,
 ) -> Result<i64, Error> {
-    let entries = calcard::ical_to_jscalendar_entries(raw)
+    let db = |e: rusqlite::Error| Error::Partial(e.to_string());
+    let mut entries = calcard::ical_to_jscalendar_entries(raw)
         .map_err(|e| Error::Partial(format!("iCalendar parse: {e}")))?;
-    if entries.len() > 1 && logger.enabled(crate::logging::LEVEL_DEFAULT) {
-        logger.warn(&format!(
-            "{item_href}: iCalendar resource has {} entries; storing the first ({}), \
-             others dropped (recurrence overrides on the master are preserved)",
-            entries.len(),
-            entries[0].data_type.as_column(),
-        ));
+    let uid_of = |v: &serde_json::Value| v.get("uid").and_then(|u| u.as_str()).map(str::to_owned);
+    let occurrences_only = entries.len() > 1
+        && entries.iter().all(|e| e.data.get("recurrenceId").is_some())
+        && entries
+            .iter()
+            .all(|e| uid_of(&e.data) == uid_of(&entries[0].data));
+    if entries.len() > 1 && !occurrences_only {
+        if logger.enabled(crate::logging::LEVEL_DEFAULT) {
+            logger.warn(&format!(
+                "{item_href}: iCalendar resource has {} entries; storing the first ({}), \
+                 others dropped (recurrence overrides on the master are preserved)",
+                entries.len(),
+                entries[0].data_type.as_column(),
+            ));
+        }
+        entries.truncate(1);
     }
-    let mut first = entries
+    let rows: Vec<EventRow> = entries
         .into_iter()
-        .next()
-        .ok_or_else(|| Error::Partial("iCalendar contained no parseable entries".to_owned()))?;
-    let (is_draft, use_default_alerts, _uid) =
-        calcard::strip_extracted_fields_from_event(&mut first.data);
-    let data_type = first.data_type.as_column();
+        .map(|mut entry| {
+            let (is_draft, use_default_alerts, _uid) =
+                calcard::strip_extracted_fields_from_event(&mut entry.data);
+            EventRow {
+                is_draft,
+                use_default_alerts,
+                data: entry.data.to_string(),
+                data_type: entry.data_type.as_column(),
+            }
+        })
+        .collect();
     let calendar_ids = format!("[{calendar_local}]");
-    if let Some(local) = existing {
-        tx.execute(
-            "UPDATE calendar_events SET calendar_ids = ?1, is_draft = ?2,
-                                          use_default_alerts = ?3, data = ?4, data_type = ?5
-             WHERE id = ?6",
-            params![
-                calendar_ids,
-                is_draft as i64,
-                use_default_alerts as i64,
-                first.data.to_string(),
-                data_type,
-                local,
-            ],
-        )
-        .map_err(|e| Error::Partial(e.to_string()))?;
-        Ok(local)
-    } else {
-        tx.execute(
-            "INSERT INTO calendar_events (calendar_ids, is_draft, use_default_alerts, data, data_type)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![
-                calendar_ids,
-                is_draft as i64,
-                use_default_alerts as i64,
-                first.data.to_string(),
-                data_type,
-            ],
-        )
-        .map_err(|e| Error::Partial(e.to_string()))?;
-        Ok(tx.last_insert_rowid())
+    let mut old = match existing {
+        Some(local) => occurrence_rows(tx, source_id, calendar_local, local).map_err(db)?,
+        None => Vec::new(),
     }
+    .into_iter();
+    let mut first = None;
+    for row in &rows {
+        let id = match old.next() {
+            Some(local) => {
+                tx.execute(
+                    "UPDATE calendar_events SET calendar_ids = ?1, is_draft = ?2,
+                                                  use_default_alerts = ?3, data = ?4, data_type = ?5
+                     WHERE id = ?6",
+                    params![
+                        calendar_ids,
+                        row.is_draft as i64,
+                        row.use_default_alerts as i64,
+                        row.data,
+                        row.data_type,
+                        local,
+                    ],
+                )
+                .map_err(db)?;
+                local
+            }
+            None => {
+                tx.execute(
+                    "INSERT INTO calendar_events (calendar_ids, is_draft, use_default_alerts, data, data_type)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![
+                        calendar_ids,
+                        row.is_draft as i64,
+                        row.use_default_alerts as i64,
+                        row.data,
+                        row.data_type,
+                    ],
+                )
+                .map_err(db)?;
+                tx.last_insert_rowid()
+            }
+        };
+        first.get_or_insert(id);
+    }
+    // Occurrences the resource no longer holds.
+    for gone in old {
+        tx.execute("DELETE FROM calendar_events WHERE id = ?1", params![gone])
+            .map_err(db)?;
+    }
+    first.ok_or_else(|| Error::Partial("iCalendar contained no parseable entries".to_owned()))
+}
+
+/// The rows one resource stands for: `local` first, then the other events
+/// in its calendar with its UID that no server item names.
+fn occurrence_rows(
+    conn: &Connection,
+    source_id: i64,
+    calendar_local: i64,
+    local: i64,
+) -> Result<Vec<i64>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT e.id FROM calendar_events e, calendar_events m
+         WHERE m.id = ?3
+           AND (e.id = ?3 OR (
+                 json_extract(e.data, '$.uid') = json_extract(m.data, '$.uid')
+                 AND EXISTS (SELECT 1 FROM json_each(e.calendar_ids) WHERE value = ?2)
+                 AND NOT EXISTS (
+                     SELECT 1 FROM sync_id_dav s
+                     WHERE s.source_id = ?1 AND s.type_name = 'calendarevent'
+                       AND s.local_id = e.id)))
+         ORDER BY e.id != ?3, e.id",
+    )?;
+    let ids = stmt
+        .query_map(params![source_id, calendar_local, local], |r| r.get(0))?
+        .collect::<Result<Vec<i64>, _>>()?;
+    Ok(ids)
 }
 
 fn insert_or_update_card(

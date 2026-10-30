@@ -21,7 +21,9 @@ use crate::dav::discover::{DavKind, discover_home};
 use crate::dav::href::{Href, absolute_url, normalise};
 use crate::dav::xml;
 use crate::error::Error;
-use crate::export_files::cards::{Collection, icalendar_text, read_collections, vcard_text};
+use crate::export_files::cards::{
+    Collection, icalendar_entries_text, icalendar_text, read_collections, vcard_text,
+};
 use crate::jmap::error::JmapError;
 use crate::jmap::http::RetryPolicy;
 use crate::logging::{LEVEL_PROGRESS, Logger};
@@ -77,6 +79,9 @@ struct Item {
     uid: String,
     text: String,
     collections: Vec<i64>,
+    /// An event's `(data, data type)`, for writing it with the other
+    /// occurrences that share its UID.
+    event: Option<(String, String)>,
 }
 
 /// id, uid (cards), collection ids, data, data type (events).
@@ -121,10 +126,12 @@ fn read_items(
             counts.failed += 1;
             continue;
         };
+        let event = data_type.map(|t| (data, t));
         out.push(Item {
             uid,
             text,
             collections: serde_json::from_str(&collections).unwrap_or_default(),
+            event,
         });
     }
     Ok(out)
@@ -412,7 +419,26 @@ pub fn run(common: CommonConfig, config: ExportDavConfig) -> Result<Summary, Err
                 items: HashMap::new(),
             }
         };
-        for item in mine {
+        for group in by_uid(&mine) {
+            let merged;
+            let item = match group.as_slice() {
+                [one] => *one,
+                many => {
+                    merged = occurrences(&conn, many);
+                    match &merged {
+                        Ok(item) => item,
+                        Err(reason) => {
+                            logger.warn(&format!(
+                                "{} {}: can't be converted: {reason}",
+                                kind.item_type, many[0].uid
+                            ));
+                            item_counts.failed += many.len() as u64;
+                            continue;
+                        }
+                    }
+                }
+            };
+            let before = item_counts.clone();
             write_item(
                 &client,
                 kind,
@@ -422,6 +448,8 @@ pub fn run(common: CommonConfig, config: ExportDavConfig) -> Result<Summary, Err
                 &mut item_counts,
                 logger,
             )?;
+            // Counted per row, as the archive holds them.
+            item_counts.repeat_last(&before, group.len() as u64 - 1);
         }
     }
 
@@ -435,6 +463,40 @@ pub fn run(common: CommonConfig, config: ExportDavConfig) -> Result<Summary, Err
         ],
         retries_observed: client.retries_observed(),
         retry_after_sleeps: client.retry_after_sleeps(),
+    })
+}
+
+/// Items in archive order, those sharing a UID together: one CalDAV
+/// resource holds every event with its UID.
+fn by_uid<'a>(items: &[&'a Item]) -> Vec<Vec<&'a Item>> {
+    let mut groups: Vec<Vec<&Item>> = Vec::new();
+    let mut at: HashMap<&str, usize> = HashMap::new();
+    for item in items {
+        match at.get(item.uid.as_str()) {
+            Some(&i) => groups[i].push(item),
+            None => {
+                at.insert(item.uid.as_str(), groups.len());
+                groups.push(vec![item]);
+            }
+        }
+    }
+    groups
+}
+
+/// Occurrences sharing a UID as one item.
+fn occurrences(conn: &Connection, many: &[&Item]) -> Result<Item, String> {
+    let entries: Vec<(&str, &str)> = many
+        .iter()
+        .filter_map(|i| i.event.as_ref().map(|(d, t)| (d.as_str(), t.as_str())))
+        .collect();
+    if entries.len() != many.len() {
+        return Err("two cards share a UID".to_owned());
+    }
+    Ok(Item {
+        uid: many[0].uid.clone(),
+        text: icalendar_entries_text(conn, &entries)?,
+        collections: Vec::new(),
+        event: None,
     })
 }
 

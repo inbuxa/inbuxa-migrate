@@ -88,6 +88,25 @@ pub struct TypeCounts {
     pub failed: u64,
 }
 
+impl TypeCounts {
+    /// Counts `extra` more of whatever moved since `before`: one write
+    /// that stood for several rows.
+    pub fn repeat_last(&mut self, before: &TypeCounts, extra: u64) {
+        for (now, was) in [
+            (&mut self.created, before.created),
+            (&mut self.fetched, before.fetched),
+            (&mut self.updated, before.updated),
+            (&mut self.deleted, before.deleted),
+            (&mut self.skipped, before.skipped),
+            (&mut self.failed, before.failed),
+        ] {
+            if *now > was {
+                *now += extra;
+            }
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct Summary {
     pub per_type: Vec<(&'static str, TypeCounts)>,

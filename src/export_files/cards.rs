@@ -233,6 +233,31 @@ pub(crate) fn icalendar_text(
     } else {
         json!({ "@type": "Group", "entries": [value] })
     };
+    group_text(group)
+}
+
+/// Several events as one iCalendar object, each `(data, data type)`: the
+/// occurrences of one series that were sent on their own, which a CalDAV
+/// resource holds together under their UID.
+pub(crate) fn icalendar_entries_text(
+    conn: &Connection,
+    entries: &[(&str, &str)],
+) -> Result<String, String> {
+    let mut values = Vec::with_capacity(entries.len());
+    for (data, data_type) in entries {
+        let mut value: Value = serde_json::from_str(data).map_err(|e| e.to_string())?;
+        value
+            .as_object_mut()
+            .ok_or("not a JSON object")?
+            .entry("@type")
+            .or_insert_with(|| json!(data_type));
+        inline_blobs(conn, &mut value, InlineShape::JsCalendarLink)?;
+        values.push(value);
+    }
+    group_text(json!({ "@type": "Group", "entries": values }))
+}
+
+fn group_text(group: Value) -> Result<String, String> {
     let json = group.to_string();
     let event = JSCalendar::<String, String>::parse(&json)?;
     Ok(event

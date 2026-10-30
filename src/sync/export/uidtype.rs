@@ -26,6 +26,16 @@ fn target_uid(v: &Value) -> Option<String> {
     v.get("uid").and_then(Value::as_str).map(str::to_owned)
 }
 
+/// What an object is matched by: its UID, and for one occurrence of a
+/// series sent on its own (no master event), which occurrence. Several
+/// such occurrences share a UID and are each their own object.
+fn match_key(uid: &str, v: &Value) -> String {
+    match v.get("recurrenceId").and_then(Value::as_str) {
+        Some(rid) => format!("{uid} {rid}"),
+        None => uid.to_owned(),
+    }
+}
+
 fn describe(ty: ObjectType, local: i64, uid: &str) -> String {
     let mut out = String::new();
     let _ = write!(out, "{} local {local}", ty.jmap_name());
@@ -44,10 +54,10 @@ pub fn reconcile(
     logger: &Logger,
 ) -> Result<Plan, Error> {
     let targets = target_query_get(net, ty, None).map_err(Error::from)?;
-    let mut by_uid: HashMap<String, (String, &Value)> = HashMap::new();
+    let mut by_key: HashMap<String, (String, &Value)> = HashMap::new();
     for t in &targets {
         if let (Some(uid), Some(id)) = (target_uid(t), jid(t)) {
-            by_uid.entry(uid).or_insert((id, t));
+            by_key.entry(match_key(&uid, t)).or_insert((id, t));
         }
     }
 
@@ -56,28 +66,32 @@ pub fn reconcile(
     } else {
         CALENDAR_EVENT_SELECT
     };
-    let rows: Vec<(i64, String)> = {
+    // Each row as (local id, match key, uid).
+    let rows: Vec<(i64, String, String)> = {
         let mut stmt = ctx
             .conn
             .prepare(select)
             .map_err(|e| Error::Partial(e.to_string()))?;
         stmt.query_map([], |r| {
             if ty == ObjectType::ContactCard {
-                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+                let uid: String = r.get(1)?;
+                Ok((r.get::<_, i64>(0)?, uid.clone(), uid))
             } else {
                 let data: String = r.get(4)?;
-                let uid = serde_json::from_str::<Value>(&data)
-                    .ok()
-                    .and_then(|v| v.get("uid").and_then(Value::as_str).map(str::to_owned))
-                    .unwrap_or_default();
-                Ok((r.get::<_, i64>(0)?, uid))
+                let value = serde_json::from_str::<Value>(&data).unwrap_or(Value::Null);
+                let uid = value
+                    .get("uid")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
+                Ok((r.get::<_, i64>(0)?, match_key(&uid, &value), uid))
             }
         })
         .and_then(|m| m.collect::<Result<Vec<_>, _>>())
         .map_err(|e| Error::Partial(e.to_string()))?
     };
 
-    let mut matched_uids: HashSet<String> = HashSet::new();
+    let mut matched_keys: HashSet<String> = HashSet::new();
     let mut updates: Vec<(String, Value)> = Vec::new();
     let blobs = Uploader::new(net, &ctx.conn);
     let mut progress = Progress::new(
@@ -85,11 +99,11 @@ pub fn reconcile(
         rows.len() as u64,
         logger,
     );
-    for (local, uid) in &rows {
+    for (local, key, uid) in &rows {
         progress.add(1);
-        if let Some((tid, existing)) = by_uid.get(uid) {
+        if let Some((tid, existing)) = by_key.get(key) {
             maps.insert(ty, *local, crate::jmap::wire::JmapId(tid.clone()));
-            matched_uids.insert(uid.clone());
+            matched_keys.insert(key.clone());
             match build_wire(ctx, ty, *local, maps, &blobs) {
                 Ok(wire) => match changed_properties(&wire, existing) {
                     Some(patch) => updates.push((tid.clone(), patch)),
@@ -149,10 +163,10 @@ pub fn reconcile(
         .iter()
         .filter_map(|t| {
             let id = jid(t)?;
-            let uid = target_uid(t);
+            let key = target_uid(t).map(|uid| match_key(&uid, t));
             Some(TargetObj {
                 id: id.clone(),
-                matched: uid.map(|u| matched_uids.contains(&u)).unwrap_or(false),
+                matched: key.map(|k| matched_keys.contains(&k)).unwrap_or(false),
                 protected: false,
                 may_delete: true,
                 parent: None,
@@ -229,6 +243,16 @@ fn changed_properties(wire: &Value, target: &Value) -> Option<Value> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn occurrences_sharing_a_uid_are_matched_apart() {
+        let week1 = json!({"uid": "s", "recurrenceId": "2024-03-04T09:00:00"});
+        let week2 = json!({"uid": "s", "recurrenceId": "2024-03-11T09:00:00"});
+        let series = json!({"uid": "s", "recurrenceRule": {"frequency": "weekly"}});
+        assert_ne!(match_key("s", &week1), match_key("s", &week2));
+        assert_ne!(match_key("s", &week1), match_key("s", &series));
+        assert_eq!(match_key("s", &series), "s");
+    }
 
     #[test]
     fn unchanged_object_needs_no_update() {

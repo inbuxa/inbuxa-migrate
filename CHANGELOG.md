@@ -15,6 +15,11 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
 - `import carddav` takes a card that is in two address books into both.
   It used to fail on that card on every run. Taking it out of one book, or
   deleting that book, now leaves it in the other.
+- `import caldav` keeps every occurrence of a series someone was invited to
+  one occurrence at a time, with no master event. It used to keep the first
+  and drop the rest. `export` now tells such occurrences apart instead of
+  writing them all onto one event, and `export-caldav` writes them as one
+  resource, as CalDAV keeps them.
 
 ## [27.1-rc.3]
 
