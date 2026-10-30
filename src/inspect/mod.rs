@@ -25,7 +25,7 @@ pub struct InspectConfig {
 }
 
 pub fn run(config: InspectConfig) -> Result<(), Error> {
-    let conn = init::open(&config.archive)?;
+    let conn = init::open_read_only(&config.archive)?;
     let stdout = io::stdout();
     let mut out = stdout.lock();
     dispatch(&conn, &config, &mut out)?;

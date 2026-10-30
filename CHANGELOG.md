@@ -7,6 +7,12 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
 
 ## [Unreleased]
 
+### Fixed
+- `inspect` opens the archive read-only. It used to create an empty archive
+  at a mistyped path and bring an older archive's layout up to date; now
+  the first is an error and the second is refused, and reading a closed
+  archive leaves no files beside it.
+
 ## [27.1-rc.3]
 
 The third release candidate of the 27.1 series: contacts, calendars and

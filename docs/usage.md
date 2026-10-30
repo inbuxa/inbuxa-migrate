@@ -508,7 +508,7 @@ registry and counts what it would write, and creates nothing.
 inbuxa-migrate inspect <ARCHIVE> [TYPE] [--limit <N>] [--offset <N>]
 ```
 
-Read-only dump of a local archive. This command never opens a network connection and never writes to the archive.
+Read-only dump of a local archive. This command never opens a network connection and never writes to the archive: a path with no archive is an error rather than a new, empty one, and an archive from an older release is shown as it is or refused, never upgraded. While another run holds the archive, it says the archive is in use instead of reading it.
 
 - Omit `TYPE` for a per-type summary (counts of every object kind plus blob storage stats).
 - Pass an object type to dump it: `mailbox`, `email`, `identity`, `sievescript`, `addressbook`, `contactcard`, `calendar`, `calendarevent`, `participantidentity`, `filenode`.
