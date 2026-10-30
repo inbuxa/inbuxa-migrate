@@ -7,6 +7,11 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
 
 ## [Unreleased]
 
+## [27.1-rc.3]
+
+The third release candidate of the 27.1 series: contacts, calendars and
+filters go straight into another server, as mail already could.
+
 ### Added
 - `export-managesieve` writes an archive's Sieve scripts into any
   ManageSieve server and makes the archive's active script the active one.
@@ -18,6 +23,11 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
   found from the server's root, collections are matched by name or made,
   and each event or card is written only when it's missing or differs, under
   its etag, so running it again writes nothing. Nothing is deleted.
+
+### Changed
+- `export-files` names its layout in `manifest.json` by the address of its
+  specification, `https://coffeylabs.org/specs/account-export/`, instead of
+  `inbuxa-migrate-files`. The layout itself is unchanged (`formatVersion` 1).
 
 ## [27.1-rc.2]
 
