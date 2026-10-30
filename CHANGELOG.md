@@ -7,6 +7,12 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
 
 ## [Unreleased]
 
+## [27.1-rc.4]
+
+The fourth release candidate of the 27.1 series: a whole domain moves with
+one plan file, set up on inbuxa from an exported directory and exported
+account by account with one administrator's key.
+
 ### Added
 - `import-directory` sets up on an inbuxa server what `export-directory`
   wrote: tenants, roles, domains, groups, users and mailing lists, with
