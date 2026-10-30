@@ -7,7 +7,11 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
 
 ## [Unreleased]
 
-Upstream's 1.0.12 and 1.0.13 are merged in.
+## [27.1-rc.7]
+
+The seventh release candidate of the 27.1 series: upstream's 1.0.12 and
+1.0.13 merged in, with out-of-office replies, `--replace-source`, and files
+kept working with inbuxa.
 
 ### Added
 - The out-of-office reply comes across: imported from a server's
