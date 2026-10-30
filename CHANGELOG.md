@@ -13,6 +13,11 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
   Like `export-imap`, it writes only what's missing or differs, so running
   it again writes nothing. A script the server refuses is counted and the
   rest go on; `--dry-run` checks each one with `CHECKSCRIPT`.
+- `export-caldav` and `export-carddav` write an archive's calendars and
+  address books into any CalDAV or CardDAV server. The account's home is
+  found from the server's root, collections are matched by name or made,
+  and each event or card is written only when it's missing or differs, under
+  its etag, so running it again writes nothing. Nothing is deleted.
 
 ## [27.1-rc.2]
 

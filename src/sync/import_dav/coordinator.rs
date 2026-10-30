@@ -524,7 +524,7 @@ fn run_gc(conn: &Connection) -> Result<(), Error> {
     Ok(())
 }
 
-fn enforce_tls_policy(url: &str, allow_cleartext: bool) -> Result<(), Error> {
+pub(crate) fn enforce_tls_policy(url: &str, allow_cleartext: bool) -> Result<(), Error> {
     let parsed =
         url::Url::parse(url).map_err(|e| Error::Usage(format!("invalid --url {url:?}: {e}")))?;
     match parsed.scheme() {

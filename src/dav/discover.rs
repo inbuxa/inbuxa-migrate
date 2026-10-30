@@ -118,6 +118,32 @@ pub fn discover(
     })
 }
 
+/// Where new collections go, for an export: the home set the server names
+/// for the signed-in principal, even when it holds nothing yet, which on a
+/// fresh account is the usual case. Only when no principal can be found is
+/// a URL that already holds collections taken as the home itself.
+pub fn discover_home(
+    client: &DavClient,
+    kind: DavKind,
+    user_url: &str,
+) -> Result<Discovery, DiscoveryError> {
+    if let Some(disc) = try_via_principal_with(client, kind, user_url, true)? {
+        return Ok(disc);
+    }
+    if let Some(well_known) = kind.well_known_uri() {
+        let absolute = absolute_url(user_url, &Href::from_normalised(well_known.to_owned()))?;
+        if let Some(disc) = try_via_principal_with(client, kind, &absolute, true)? {
+            return Ok(disc);
+        }
+    }
+    if let Some(disc) = try_treat_url_as_home_or_collection(client, kind, user_url)? {
+        return Ok(disc);
+    }
+    Err(DiscoveryError::NotFound {
+        url: user_url.to_owned(),
+    })
+}
+
 fn try_treat_url_as_home_or_collection(
     client: &DavClient,
     kind: DavKind,
@@ -182,6 +208,15 @@ fn try_via_principal(
     kind: DavKind,
     url: &str,
 ) -> Result<Option<Discovery>, DiscoveryError> {
+    try_via_principal_with(client, kind, url, false)
+}
+
+fn try_via_principal_with(
+    client: &DavClient,
+    kind: DavKind,
+    url: &str,
+    allow_empty: bool,
+) -> Result<Option<Discovery>, DiscoveryError> {
     let Some(combined_body) = kind.principal_and_home_set_body() else {
         return Ok(None);
     };
@@ -243,7 +278,7 @@ fn try_via_principal(
     };
     let listing_body = kind.collection_listing_body();
     let collections = propfind_collections(client, kind, &home_set_url, &listing_body)?;
-    if collections.is_empty() {
+    if collections.is_empty() && !allow_empty {
         return Ok(None);
     }
     Ok(Some(Discovery {

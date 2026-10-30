@@ -166,6 +166,51 @@ pub fn addressbook_multiget(hrefs: &[Href]) -> String {
     out
 }
 
+/// The properties a new calendar is made with (RFC 4791, section 5.3.1).
+pub fn mkcalendar(name: &str, description: Option<&str>, color: Option<&str>) -> String {
+    let mut out = String::from(
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+         <c:mkcalendar xmlns:d=\"DAV:\" xmlns:c=\"urn:ietf:params:xml:ns:caldav\" \
+           xmlns:a=\"http://apple.com/ns/ical/\">\
+         <d:set><d:prop>",
+    );
+    push_element(&mut out, "d:displayname", name);
+    if let Some(description) = description {
+        push_element(&mut out, "c:calendar-description", description);
+    }
+    if let Some(color) = color {
+        push_element(&mut out, "a:calendar-color", color);
+    }
+    out.push_str("</d:prop></d:set></c:mkcalendar>");
+    out
+}
+
+/// An extended MKCOL that makes an address book (RFC 5689, RFC 6352).
+pub fn mkcol_addressbook(name: &str, description: Option<&str>) -> String {
+    let mut out = String::from(
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+         <d:mkcol xmlns:d=\"DAV:\" xmlns:c=\"urn:ietf:params:xml:ns:carddav\">\
+         <d:set><d:prop>\
+         <d:resourcetype><d:collection/><c:addressbook/></d:resourcetype>",
+    );
+    push_element(&mut out, "d:displayname", name);
+    if let Some(description) = description {
+        push_element(&mut out, "c:addressbook-description", description);
+    }
+    out.push_str("</d:prop></d:set></d:mkcol>");
+    out
+}
+
+fn push_element(out: &mut String, tag: &str, text: &str) {
+    out.push('<');
+    out.push_str(tag);
+    out.push('>');
+    write_escaped(out, text);
+    out.push_str("</");
+    out.push_str(tag);
+    out.push('>');
+}
+
 fn write_href_element(out: &mut String, h: &Href) {
     out.push_str("<d:href>");
     write_escaped(out, h.as_str());
@@ -231,6 +276,18 @@ mod tests {
         let body = addressbook_multiget(&hrefs);
         assert!(body.contains("<c:address-data/>"));
         assert!(body.contains("<d:href>/dav/card/u/d/a.vcf</d:href>"));
+    }
+
+    #[test]
+    fn new_collections_carry_their_names_escaped() {
+        let body = mkcalendar("Work & <home>", Some("Shifts"), Some("#FF0000FF"));
+        assert!(body.contains("<d:displayname>Work &amp; &lt;home&gt;</d:displayname>"));
+        assert!(body.contains("<c:calendar-description>Shifts</c:calendar-description>"));
+        assert!(body.contains("<a:calendar-color>#FF0000FF</a:calendar-color>"));
+        let body = mkcol_addressbook("Family", None);
+        assert!(body.contains("<c:addressbook/></d:resourcetype>"));
+        assert!(body.contains("<d:displayname>Family</d:displayname>"));
+        assert!(!body.contains("addressbook-description"));
     }
 
     #[test]
