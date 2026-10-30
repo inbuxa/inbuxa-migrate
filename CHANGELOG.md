@@ -7,6 +7,12 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
 
 ## [Unreleased]
 
+## [27.1-rc.5]
+
+The fifth release candidate of the 27.1 series: the guided mode. A move
+into inbuxa can now be walked through in the browser, from the source to the
+final pass.
+
 ### Added
 - `guide` walks through a move into inbuxa in the browser. It serves a page
   on 127.0.0.1 that asks for the source (IMAP with a master user, JMAP with
