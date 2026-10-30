@@ -41,6 +41,7 @@ quick-xml = "0.42"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 chrono-tz = { version = "0.10", default-features = false }
 psl = "2.1.226"
+getrandom = "0.3.4"
 
 [dev-dependencies]
 mockito = "1.7.2"

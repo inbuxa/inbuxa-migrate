@@ -7,6 +7,14 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
 
 ## [Unreleased]
 
+### Added
+- `import-directory` sets up on an inbuxa server what `export-directory`
+  wrote: tenants, roles, domains, groups, users and mailing lists, with
+  their aliases, quotas, roles and memberships. What the server already has
+  is left as it is, so running it again creates nothing. Each user created
+  gets a generated password, written to a new file readable by its owner
+  only.
+
 ### Fixed
 - `inspect` opens the archive read-only. It used to create an empty archive
   at a mistyped path and bring an older archive's layout up to date; now

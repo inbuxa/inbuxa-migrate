@@ -10,7 +10,7 @@ use clap::Parser;
 use inbuxa_migrate::cli::{Action, Cli};
 use inbuxa_migrate::error::Error;
 use inbuxa_migrate::sync::{self, RunOutcome, Summary};
-use inbuxa_migrate::{export_directory, export_files, inspect};
+use inbuxa_migrate::{export_directory, export_files, import_directory, inspect};
 
 fn main() {
     let code = run();
@@ -32,6 +32,7 @@ fn run() -> i32 {
     };
 
     let mut quiet_report = false;
+    let mut partial = "some objects failed; the archive is consistent and resumable";
     let (outcome, logger) = match action {
         Action::Import(common, config) => {
             let logger = common.logger;
@@ -108,6 +109,15 @@ fn run() -> i32 {
                 logger,
             )
         }
+        Action::ImportDirectory(config) => {
+            let logger = config.logger;
+            partial = "some objects were not created; fix what the warnings name and run \
+                       again, with a new --passwords file";
+            (
+                RunOutcome::from_result(import_directory::run(config)),
+                logger,
+            )
+        }
         Action::ExportImap(common, config) => {
             let logger = common.logger;
             (
@@ -130,7 +140,7 @@ fn run() -> i32 {
         Some(err) => fail(&err),
         None => {
             if outcome.summary.any_failed() {
-                logger.error("some objects failed; the archive is consistent and resumable");
+                logger.error(partial);
                 5
             } else {
                 0

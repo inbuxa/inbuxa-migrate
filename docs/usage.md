@@ -13,7 +13,7 @@ and how to install it.
 ## Commands and global flags
 
 ```
-inbuxa-migrate <import|export|export-imap|export-managesieve|export-caldav|export-carddav|export-files|export-directory|inspect> [args...]
+inbuxa-migrate <import|export|export-imap|export-managesieve|export-caldav|export-carddav|export-files|export-directory|import-directory|inspect> [args...]
 ```
 
 Every command takes a few global flags -- verbosity, worker pool size, retry
@@ -477,7 +477,8 @@ the rest of each account's data move with `import` and the exports above.
 Nothing secret is written, because nothing secret is asked for: every read
 names the fields it wants, and credentials, app passwords, OTP seeds, API
 keys, encryption keys and DKIM keys are not among them. Each new server
-sets its own passwords and DKIM keys.
+sets its own passwords and DKIM keys; `import-directory`, below, does that
+on inbuxa.
 
 ```
 DIR/
@@ -508,6 +509,47 @@ other domains are still listed by address. `DIR` must be new or empty, and
 is made readable by its owner only. `directory.json` is written last, so a
 directory without one was interrupted. With `--dry-run` it reads the
 registry and counts what it would write, and creates nothing.
+
+## Import a directory
+
+```
+inbuxa-migrate import-directory \
+  --url <URL> \
+  (--auth-basic <USER> [--auth-password <PASS>] | --auth-bearer [TOKEN]) \
+  --passwords <FILE> [--domain <NAME>]... [--dry-run] \
+  <DIR>
+```
+
+Sets up on an inbuxa server what `export-directory` wrote: tenants, roles,
+domains, groups, users and mailing lists, with their aliases, quotas, roles
+and group memberships. It works through the server's registry, so the
+login must be an administrator's. Each kind is made before the ones that
+point at it, so a user finds its domain, its groups and its roles.
+
+- **What's already there stays as it is.** A domain, tenant or role with
+  the same name, or an account or list with the same address, is counted
+  as skipped and not changed. So a second run creates nothing, and a run
+  that stopped is finished by running it again. It also means an account
+  made on a run where one of its alias domains was refused keeps no alias
+  there: add that alias by hand.
+- **Passwords.** Each user it creates gets a generated password: 24
+  letters and digits, with look-alikes such as `0` and `O` left out. The
+  passwords go into `--passwords FILE` as `email,password` rows, written as
+  each batch of accounts is made. The file must not exist yet and is made
+  readable by its owner only. Hand the passwords out, then delete the file.
+  Accounts that were already there get no password and aren't listed, so
+  each run needs a new file.
+- **DKIM.** A new domain gets inbuxa's defaults: DKIM keys are made for
+  it, and DNS and certificates are left to you.
+- Anything the server refuses is counted as failed, with the server's
+  reason, and the rest are still made. An alias or custom role that isn't
+  on the server is left off with a warning. Creates are sent once and not
+  retried, so a lost reply never makes an account twice; run again to pick
+  up what didn't land.
+
+`--domain` keeps it to the domains named. With `--dry-run` it reads the
+server and counts what it would create, sends nothing and writes no file;
+`--passwords` isn't needed then.
 
 ## Inspect
 
