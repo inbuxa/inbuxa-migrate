@@ -13,7 +13,7 @@ and how to install it.
 ## Commands and global flags
 
 ```
-inbuxa-migrate <import|export|inspect> [args...]
+inbuxa-migrate <import|export|export-files|inspect> [args...]
 ```
 
 Every command takes a few global flags -- verbosity, worker pool size, retry
@@ -259,7 +259,8 @@ type ends with a line of what was created, updated, left unchanged and
 failed.
 
 `--prune` also deletes what is on the target and not in the archive. It asks
-first; `--yes` answers for it, for scripts. Export speaks JMAP only.
+first; `--yes` answers for it, for scripts. Export speaks JMAP only; for
+anything else, see [Export to files](#export-to-files).
 
 With `--dry-run`, export reads the target and writes nothing to the account.
 It prints the plan in plain words: for each type, how much would be
@@ -279,6 +280,59 @@ catches in advance the failures a real run would hit:
 The plan lists each predicted failure and its reason. When anything would
 fail, the dry run exits 5, as the real run would, so a script can stop
 before it starts.
+
+## Export to files
+
+```
+inbuxa-migrate export-files [--objects <list>] [--dry-run] <ARCHIVE> <DIR>
+```
+
+Writes `ARCHIVE` out as plain files in open formats, for a server or app
+that doesn't speak JMAP, or to keep a copy that needs no tool to read. It
+never opens a network connection. `DIR` must be new or empty, and is made
+readable by its owner only, like the archive.
+
+```
+DIR/
+  mail/            Maildir++: the inbox here, other folders as .Parent.Child
+  contacts/*.vcf   one file per address book
+  calendars/*.ics  one file per calendar
+  sieve/*.sieve    one file per script
+  files/           the file tree
+  manifest.json    what the formats above don't hold
+```
+
+- **Mail** is laid out as Dovecot and Courier keep it, so either can serve
+  it as it is, and `import maildir` reads it back. Folder names are in
+  modified UTF-7. A `.` or `/` inside a folder's name becomes `_` on disk,
+  since Maildir++ uses the dot between levels. A message kept in several
+  folders is written to each. Read, answered, flagged, draft, forwarded and
+  deleted are the standard Maildir flags; other keywords (Junk, labels) are
+  the letters `a` to `z`, named in each folder's `dovecot-keywords`, up to
+  26 per folder. Each file is dated when the message arrived.
+- **Contacts** are vCard 4.0, and a card in two address books is in both
+  files. **Calendars** are iCalendar, one VCALENDAR each, named by
+  `X-WR-CALNAME`, with each time zone once. Photos and attachments the
+  archive holds go inside as `data:` URIs, as `export` sends them.
+  `import takeout` reads both back.
+- **Sieve scripts** are written as they are; the manifest says which is
+  active.
+- **Files** keep their names and dates. Links are listed in the manifest
+  and never made, since the source chose where they point.
+
+Every name comes from the source, so none is used as a path as it stands:
+separators and names Windows refuses become `_`, and names that clash, even
+only by case, are numbered.
+
+`manifest.json` records the source account, every folder's real name,
+path, role and message count, each address book and calendar with its
+file, color and time zone, which Sieve script is active, the identities,
+and the links. It is written last: a tree without one was interrupted, and
+the way to finish it is to run again into an empty directory.
+
+`--objects` takes the same types as `export`; naming a folder or a message
+type writes all of mail, and the same for contacts and calendars. With
+`--dry-run` it counts what it would write and creates nothing.
 
 ## Inspect
 

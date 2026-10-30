@@ -14,6 +14,7 @@ use crate::error::Error;
 use crate::exchange_ews::oauth::OAuthFlow;
 use crate::exchange_ews::types::MailboxKind;
 use crate::exchange_graph::types::{EventBodyFormat, MailboxKind as GraphMailboxKind, Surfaces};
+use crate::export_files::ExportFilesConfig;
 use crate::inspect::InspectConfig;
 use crate::jmap::account::AccountSelector;
 use crate::jmap::http::Auth;
@@ -49,6 +50,11 @@ enum Command {
     },
     #[command(about = "Push a local archive into a target JMAP server")]
     Export(Box<ExportArgs>),
+    #[command(
+        about = "Write a local archive out as plain files: Maildir, vCard, iCalendar, Sieve",
+        name = "export-files"
+    )]
+    ExportFiles(Box<ExportFilesArgs>),
     #[command(about = "Show the contents of a local archive (read-only)")]
     Inspect(Box<InspectArgs>),
 }
@@ -360,6 +366,31 @@ struct ExportArgs {
 }
 
 #[derive(Args)]
+struct ExportFilesArgs {
+    #[arg(
+        long,
+        value_name = "LIST",
+        help = "Types to write (default: everything in the archive)"
+    )]
+    objects: Option<String>,
+
+    #[arg(long, help = "Count what would be written; write nothing")]
+    dry_run: bool,
+
+    #[arg(short = 'v', long, action = ArgAction::Count, conflicts_with = "quiet", help = "Increase log verbosity")]
+    verbose: u8,
+
+    #[arg(short = 'q', long, help = "Quiet: warnings and errors only")]
+    quiet: bool,
+
+    #[arg(value_name = "ARCHIVE", help = "Local SQLite archive")]
+    archive: PathBuf,
+
+    #[arg(value_name = "DIR", help = "Directory to write, new or empty")]
+    dir: PathBuf,
+}
+
+#[derive(Args)]
 struct InspectArgs {
     #[arg(value_name = "ARCHIVE", help = "Local SQLite archive")]
     archive: PathBuf,
@@ -396,6 +427,7 @@ pub enum Action {
     ImportExchangeEws(CommonConfig, EwsImportConfig),
     ImportExchangeGraph(CommonConfig, GraphImportConfig),
     Export(CommonConfig, ExportConfig),
+    ExportFiles(ExportFilesConfig),
     Inspect(InspectConfig),
 }
 
@@ -521,6 +553,7 @@ impl Cli {
         match self.command {
             Command::Import { source } => resolve_import(source),
             Command::Export(args) => resolve_export(*args),
+            Command::ExportFiles(args) => resolve_export_files(*args),
             Command::Inspect(args) => resolve_inspect(*args),
         }
     }
@@ -897,6 +930,17 @@ fn resolve_export(args: ExportArgs) -> Result<Action, Error> {
             yes: args.yes,
         },
     ))
+}
+
+fn resolve_export_files(args: ExportFilesArgs) -> Result<Action, Error> {
+    let objects = args.objects.as_deref().map(parse_object_list).transpose()?;
+    Ok(Action::ExportFiles(ExportFilesConfig {
+        archive: args.archive,
+        dir: args.dir,
+        objects,
+        dry_run: args.dry_run,
+        logger: Logger::from_flags(args.quiet, args.verbose),
+    }))
 }
 
 fn resolve_inspect(args: InspectArgs) -> Result<Action, Error> {
