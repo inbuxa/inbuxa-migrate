@@ -10,13 +10,15 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStdout, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
 pub struct Guide {
     child: Child,
+    /// Kept open: the guide may still be printing.
+    _out: Option<BufReader<ChildStdout>>,
     pub host: String,
     pub token: String,
 }
@@ -37,9 +39,8 @@ pub fn start(bin: &str, dir: &Path) -> Guide {
         .spawn()
         .unwrap();
     let mut line = String::new();
-    BufReader::new(child.stdout.take().unwrap())
-        .read_line(&mut line)
-        .unwrap();
+    let mut out = BufReader::new(child.stdout.take().unwrap());
+    out.read_line(&mut line).unwrap();
     let url = line
         .trim()
         .strip_prefix("The guide is at http://")
@@ -49,6 +50,26 @@ pub fn start(bin: &str, dir: &Path) -> Guide {
         host: host.to_owned(),
         token: token.to_owned(),
         child,
+        _out: Some(out),
+    }
+}
+
+/// A guide whose stdout is closed before it prints anything, on `port`;
+/// the token is read from nowhere, so only its refusals can be checked.
+pub fn start_unheard(bin: &str, dir: &Path, port: u16) -> Guide {
+    let (reader, writer) = std::io::pipe().unwrap();
+    drop(reader);
+    let child = Command::new(bin)
+        .args(["guide", "--no-open", "--port", &port.to_string()])
+        .arg(dir)
+        .stdout(writer)
+        .spawn()
+        .unwrap();
+    Guide {
+        host: format!("127.0.0.1:{port}"),
+        token: String::new(),
+        child,
+        _out: None,
     }
 }
 

@@ -16,7 +16,7 @@ pub mod form;
 mod http;
 
 use std::fs;
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -134,10 +134,14 @@ pub fn run(config: GuideConfig) -> Result<(), Error> {
     });
 
     let url = format!("http://127.0.0.1:{port}/{}/", guide.token);
-    println!("The guide is at {url}");
-    println!("Keep this running while you use it. Ctrl-C ends it.");
+    // Said, not needed: with stdout closed the guide still serves.
+    let say = |line: &str| {
+        let _ = writeln!(std::io::stdout(), "{line}");
+    };
+    say(&format!("The guide is at {url}"));
+    say("Keep this running while you use it. Ctrl-C ends it.");
     if config.open && !open_browser(&url) {
-        println!("Open that address in a browser on this machine.");
+        say("Open that address in a browser on this machine.");
     }
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };

@@ -13,7 +13,7 @@ mod integration;
 
 use std::fs;
 
-use integration::guide::{get, post, send, settled, start};
+use integration::guide::{get, post, send, settled, start, start_unheard};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -143,4 +143,26 @@ fn a_maildir_move_previews_runs_and_reports() {
     let saved: Value =
         serde_json::from_str(&fs::read_to_string(root.join("guide.json")).unwrap()).unwrap();
     assert_eq!(saved["form"]["target"]["url"], "http://127.0.0.1:9");
+}
+
+#[test]
+fn a_closed_stdout_doesnt_end_the_guide() {
+    let dir = TempDir::new().unwrap();
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let guide = start_unheard(BIN, dir.path(), port);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while std::net::TcpStream::connect(&guide.host).is_err() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the guide never listened"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let head = format!("GET /x/ HTTP/1.1\r\nHost: {}", guide.host);
+    assert_eq!(send(&guide, &head, "").0, 404);
 }
