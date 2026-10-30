@@ -5,7 +5,10 @@ inbuxa suite: a series (`27.1`), its patches (`27.1.3`) and release
 candidates before a series ships (`27.1-rc.1`). The tag is the version with a
 `v`. Releases before 27.1 were dates (`v2026.9.30`).
 
-## [Unreleased]
+## [27.1-rc.2]
+
+The second release candidate of the 27.1 series: three ways out of an
+archive or a server that need no vendor's store format.
 
 ### Added
 - `export-files` writes an archive out as plain files in open formats: mail
