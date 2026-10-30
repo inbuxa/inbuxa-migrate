@@ -243,6 +243,25 @@ impl Session {
             .find(|urn| self.capabilities.contains_key(*urn))
     }
 
+    /// The account to send registry (`x:`) calls to, with the capability
+    /// to name for them. Servers advertise the registry per account, on the
+    /// accounts whose credentials may administer it; a session-wide one is
+    /// taken with the first account when no account lists it.
+    pub fn registry_account(&self) -> Option<(&str, &'static str)> {
+        for urn in [URN_INBUXA_REGISTRY, URN_STALWART_REGISTRY] {
+            if let Some((id, _)) = self
+                .accounts
+                .iter()
+                .find(|(_, a)| a.account_capabilities.contains_key(urn))
+            {
+                return Some((id.as_str(), urn));
+            }
+        }
+        let urn = self.registry_urn()?;
+        let (id, _) = self.accounts.first()?;
+        Some((id.as_str(), urn))
+    }
+
     pub fn account(&self, account_id: &str) -> Option<&Account> {
         self.accounts.get(account_id)
     }
@@ -351,6 +370,26 @@ mod tests {
             session_with(&[URN_STALWART_REGISTRY]).registry_urn(),
             Some(URN_STALWART_REGISTRY)
         );
+    }
+
+    #[test]
+    fn registry_account_is_the_account_that_lists_it() {
+        let mut v: serde_json::Value = serde_json::from_str(raw_session()).unwrap();
+        v["accounts"]["a"] = serde_json::json!({
+            "name": "admin",
+            "accountCapabilities": { URN_INBUXA_REGISTRY: {} }
+        });
+        let session: Session = serde_json::from_value(v).unwrap();
+        assert_eq!(session.registry_account(), Some(("a", URN_INBUXA_REGISTRY)));
+    }
+
+    #[test]
+    fn registry_account_falls_back_to_a_session_capability() {
+        assert_eq!(
+            session_with(&[URN_STALWART_REGISTRY]).registry_account(),
+            Some(("w", URN_STALWART_REGISTRY))
+        );
+        assert_eq!(session_with(&[]).registry_account(), None);
     }
 
     #[test]

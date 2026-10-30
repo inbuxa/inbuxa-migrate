@@ -18,6 +18,11 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
   archive), flags, keywords where the folder keeps them, and arrival times.
   Like `export`, it matches what is already there, so running it again
   writes only what changed.
+- `export-directory` writes who is on a server: its domains, users, groups,
+  mailing lists, aliases, quotas, tenants and roles, read from the registry
+  with an administrator's login, as `directory.json` and CSV files that
+  another server can be set up from. Credentials, OTP seeds, API keys and
+  DKIM keys are never asked for. `--domain` keeps it to some domains.
 
 ### Changed
 - `import maildir` reads folder names in modified UTF-7, as Dovecot and

@@ -10,7 +10,7 @@ use clap::Parser;
 use inbuxa_migrate::cli::{Action, Cli};
 use inbuxa_migrate::error::Error;
 use inbuxa_migrate::sync::{self, RunOutcome, Summary};
-use inbuxa_migrate::{export_files, inspect};
+use inbuxa_migrate::{export_directory, export_files, inspect};
 
 fn main() {
     let code = run();
@@ -86,6 +86,13 @@ fn run() -> i32 {
         Action::ExportFiles(config) => {
             let logger = config.logger;
             (RunOutcome::from_result(export_files::run(config)), logger)
+        }
+        Action::ExportDirectory(config) => {
+            let logger = config.logger;
+            (
+                RunOutcome::from_result(export_directory::run(config)),
+                logger,
+            )
         }
         Action::ExportImap(common, config) => {
             let logger = common.logger;

@@ -13,7 +13,7 @@ and how to install it.
 ## Commands and global flags
 
 ```
-inbuxa-migrate <import|export|export-imap|export-files|inspect> [args...]
+inbuxa-migrate <import|export|export-imap|export-files|export-directory|inspect> [args...]
 ```
 
 Every command takes a few global flags -- verbosity, worker pool size, retry
@@ -374,6 +374,57 @@ the way to finish it is to run again into an empty directory.
 `--objects` takes the same types as `export`; naming a folder or a message
 type writes all of mail, and the same for contacts and calendars. With
 `--dry-run` it counts what it would write and creates nothing.
+
+## Export a directory
+
+```
+inbuxa-migrate export-directory \
+  --url <URL> \
+  (--auth-basic <USER> [--auth-password <PASS>] | --auth-bearer [TOKEN]) \
+  [--domain <NAME>]... [--dry-run] \
+  <DIR>
+```
+
+Writes who has an address on a server, so the same accounts can be set up
+on another one: domains, users, groups, mailing lists, their aliases and
+quotas, and the tenants and roles they belong to. It reads inbuxa's
+registry, or Stalwart's, so the login must be an administrator's. Mail and
+the rest of each account's data move with `import` and the exports above.
+
+Nothing secret is written, because nothing secret is asked for: every read
+names the fields it wants, and credentials, app passwords, OTP seeds, API
+keys, encryption keys and DKIM keys are not among them. Each new server
+sets its own passwords and DKIM keys.
+
+```
+DIR/
+  directory.json   everything below, exactly, with roles and tenants
+  domains.csv      name, enabled, aliases, catch-all, sub-addressing, tenant
+  users.csv        address, description, roles, groups, aliases, disk quota
+  groups.csv       address, members, aliases, disk quota
+  lists.csv        address, recipients, aliases
+  aliases.csv      each alias with the address it delivers to
+```
+
+- Accounts, groups and lists are named by address, and roles and tenants by
+  name, never by the server's ids. A group lists its members, a user the
+  groups it is in.
+- Roles are `user`, `admin` or `default`, or the custom roles by name;
+  `permissions` holds what an account adds to its roles (`merge`) or has in
+  their place (`replace`).
+- Quotas are by name, in bytes or counts (`maxDiskQuota` and the rest); the
+  CSV files show `maxDiskQuota` as `disk_quota`.
+- In the CSV files, a cell with several values joins them with `;`. The
+  text comes from the server and these files are made to be opened in a
+  spreadsheet, so a cell that one would run as a formula starts with `'`.
+  `directory.json` keeps every value as it is.
+
+`--domain` keeps the export to the domains named, with what they use:
+their tenants and the roles their accounts hold. A group's members on
+other domains are still listed by address. `DIR` must be new or empty, and
+is made readable by its owner only. `directory.json` is written last, so a
+directory without one was interrupted. With `--dry-run` it reads the
+registry and counts what it would write, and creates nothing.
 
 ## Inspect
 

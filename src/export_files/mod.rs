@@ -128,7 +128,7 @@ pub fn run(config: ExportFilesConfig) -> Result<Summary, Error> {
 
 /// Only a new or empty directory: what is written must be exactly the
 /// archive, with nothing of an earlier run mixed in.
-fn check_target(dir: &Path) -> Result<(), Error> {
+pub(crate) fn check_target(dir: &Path) -> Result<(), Error> {
     match fs::read_dir(dir) {
         Ok(mut entries) => {
             if entries.next().is_some() {
@@ -150,7 +150,7 @@ fn check_target(dir: &Path) -> Result<(), Error> {
 
 /// Mail, contacts and calendars are as private as the archive they came
 /// from.
-fn make_private_dir(dir: &Path) -> Result<(), Error> {
+pub(crate) fn make_private_dir(dir: &Path) -> Result<(), Error> {
     fs::create_dir_all(dir)?;
     #[cfg(unix)]
     {

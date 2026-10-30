@@ -14,6 +14,7 @@ use crate::error::Error;
 use crate::exchange_ews::oauth::OAuthFlow;
 use crate::exchange_ews::types::MailboxKind;
 use crate::exchange_graph::types::{EventBodyFormat, MailboxKind as GraphMailboxKind, Surfaces};
+use crate::export_directory::ExportDirectoryConfig;
 use crate::export_files::ExportFilesConfig;
 use crate::inspect::InspectConfig;
 use crate::jmap::account::AccountSelector;
@@ -61,6 +62,11 @@ enum Command {
         name = "export-imap"
     )]
     ExportImap(Box<ExportImapArgs>),
+    #[command(
+        about = "Write a server's domains, accounts, groups, lists and aliases as JSON and CSV, without secrets",
+        name = "export-directory"
+    )]
+    ExportDirectory(Box<ExportDirectoryArgs>),
     #[command(about = "Show the contents of a local archive (read-only)")]
     Inspect(Box<InspectArgs>),
 }
@@ -446,6 +452,64 @@ struct ExportFilesArgs {
 }
 
 #[derive(Args)]
+#[command(group(clap::ArgGroup::new("auth").required(true).args(["auth_basic", "auth_bearer"])))]
+struct ExportDirectoryArgs {
+    #[arg(long, value_name = "URL", help = "Base URL or full JMAP session URL")]
+    url: String,
+
+    #[arg(long, value_name = "USER", help = "HTTP Basic user (an administrator)")]
+    auth_basic: Option<String>,
+
+    #[arg(
+        long,
+        value_name = "PASS",
+        help = "Basic password (prefer $INBUXA_MIGRATE_PASSWORD or prompt)"
+    )]
+    auth_password: Option<String>,
+
+    #[arg(
+        long,
+        value_name = "TOKEN",
+        num_args = 0..=1,
+        help = "API key or bearer token (value optional: falls back to $INBUXA_MIGRATE_API_KEY or prompt)"
+    )]
+    auth_bearer: Option<Option<String>>,
+
+    #[arg(
+        long,
+        value_name = "NAME",
+        help = "Only this domain (repeatable; default: every domain)"
+    )]
+    domain: Vec<String>,
+
+    #[arg(long, help = "Count what would be written; write nothing")]
+    dry_run: bool,
+
+    #[arg(
+        long,
+        value_name = "N",
+        default_value_t = 5,
+        help = "Max retry attempts per request on transient failures"
+    )]
+    max_retries: u32,
+
+    #[arg(
+        long,
+        help = "Accept an invalid TLS certificate from the --url host only; sign-in endpoints are always verified"
+    )]
+    allow_invalid_certs: bool,
+
+    #[arg(short = 'v', long, action = ArgAction::Count, conflicts_with = "quiet", help = "Increase log verbosity")]
+    verbose: u8,
+
+    #[arg(short = 'q', long, help = "Quiet: warnings and errors only")]
+    quiet: bool,
+
+    #[arg(value_name = "DIR", help = "Directory to write, new or empty")]
+    dir: PathBuf,
+}
+
+#[derive(Args)]
 struct InspectArgs {
     #[arg(value_name = "ARCHIVE", help = "Local SQLite archive")]
     archive: PathBuf,
@@ -483,6 +547,7 @@ pub enum Action {
     ImportExchangeGraph(CommonConfig, GraphImportConfig),
     Export(CommonConfig, ExportConfig),
     ExportFiles(ExportFilesConfig),
+    ExportDirectory(ExportDirectoryConfig),
     ExportImap(CommonConfig, ExportImapConfig),
     Inspect(InspectConfig),
 }
@@ -610,6 +675,7 @@ impl Cli {
             Command::Import { source } => resolve_import(source),
             Command::Export(args) => resolve_export(*args),
             Command::ExportFiles(args) => resolve_export_files(*args),
+            Command::ExportDirectory(args) => resolve_export_directory(*args),
             Command::ExportImap(args) => resolve_export_imap(*args),
             Command::Inspect(args) => resolve_inspect(*args),
         }
@@ -1014,6 +1080,24 @@ fn resolve_export_files(args: ExportFilesArgs) -> Result<Action, Error> {
         dir: args.dir,
         objects,
         dry_run: args.dry_run,
+        logger: Logger::from_flags(args.quiet, args.verbose),
+    }))
+}
+
+fn resolve_export_directory(args: ExportDirectoryArgs) -> Result<Action, Error> {
+    let auth = resolve_auth(
+        args.auth_basic.as_deref(),
+        args.auth_password.as_deref(),
+        args.auth_bearer.as_ref(),
+    )?;
+    Ok(Action::ExportDirectory(ExportDirectoryConfig {
+        url: args.url,
+        auth,
+        dir: args.dir,
+        domains: args.domain,
+        dry_run: args.dry_run,
+        max_retries: args.max_retries,
+        allow_invalid_certs: args.allow_invalid_certs,
         logger: Logger::from_flags(args.quiet, args.verbose),
     }))
 }
