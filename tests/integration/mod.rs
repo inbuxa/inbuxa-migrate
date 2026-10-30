@@ -14,6 +14,7 @@ pub mod dav_client;
 pub mod dovecot;
 pub mod error;
 pub mod imap_client;
+pub mod inbuxa;
 pub mod layouts;
 pub mod radicale;
 pub mod sieve_client;

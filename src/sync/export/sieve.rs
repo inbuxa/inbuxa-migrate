@@ -15,7 +15,7 @@ use super::{Maps, Net, Plan, Uploader};
 use crate::error::Error;
 use crate::jmap::blobxfer;
 use crate::jmap::error::JmapError;
-use crate::jmap::request::{Request, check_method_error};
+use crate::jmap::request::{Request, URN_INBUXA, check_method_error};
 use crate::logging::{LEVEL_DEFAULT, Logger};
 use crate::sync::import_jmap::mapping::BlobBytes;
 use crate::sync::import_jmap::mapping::{SIEVE_SELECT, row_to_sieve_script};
@@ -66,7 +66,10 @@ pub fn reconcile(
     let mut active_target: Option<String> = None;
     let mut deactivate = false;
     let mut uploader = Uploader::new(net, &ctx.conn);
-    let rename_vendor = sieve_names::target_uses_inbuxa_names(&target_sieve_extensions(net));
+    let rename_vendor = sieve_names::target_uses_inbuxa_names(
+        net.session.capabilities.contains_key(URN_INBUXA),
+        &target_sieve_extensions(net),
+    );
     let wanted_active = locals
         .iter()
         .find(|(_, _, a, _)| *a)
