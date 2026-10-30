@@ -21,6 +21,7 @@ use crate::jmap::account::AccountSelector;
 use crate::jmap::http::Auth;
 use crate::logging::Logger;
 use crate::secret;
+use crate::sync::export_dav::ExportDavConfig;
 use crate::sync::export_imap::ExportImapConfig;
 use crate::sync::export_managesieve::ExportManageSieveConfig;
 use crate::sync::import_dav::{DavAuth, DavImportConfig, DavKindArg};
@@ -68,6 +69,16 @@ enum Command {
         name = "export-managesieve"
     )]
     ExportManageSieve(Box<ExportManageSieveArgs>),
+    #[command(
+        about = "Write a local archive's calendars into a CalDAV server",
+        name = "export-caldav"
+    )]
+    ExportCaldav(Box<ExportDavArgs>),
+    #[command(
+        about = "Write a local archive's address books into a CardDAV server",
+        name = "export-carddav"
+    )]
+    ExportCarddav(Box<ExportDavArgs>),
     #[command(
         about = "Write a server's domains, accounts, groups, lists and aliases as JSON and CSV, without secrets",
         name = "export-directory"
@@ -482,6 +493,40 @@ struct ExportManageSieveArgs {
 }
 
 #[derive(Args)]
+#[command(group(clap::ArgGroup::new("auth").required(true).args(["auth_basic", "auth_bearer"])))]
+struct ExportDavArgs {
+    #[arg(long, value_name = "URL", help = "http(s)://host[:port][/path]")]
+    url: String,
+
+    #[arg(long, value_name = "USER", help = "HTTP Basic user")]
+    auth_basic: Option<String>,
+
+    #[arg(
+        long,
+        value_name = "PASS",
+        help = "Basic password (prefer $INBUXA_MIGRATE_PASSWORD or prompt)"
+    )]
+    auth_password: Option<String>,
+
+    #[arg(
+        long,
+        value_name = "TOKEN",
+        num_args = 0..=1,
+        help = "Bearer token (value optional: falls back to $INBUXA_MIGRATE_API_KEY or prompt)"
+    )]
+    auth_bearer: Option<Option<String>>,
+
+    #[arg(long, help = "Permit credentials on http:// URLs")]
+    allow_cleartext: bool,
+
+    #[command(flatten)]
+    global: GlobalArgs,
+
+    #[arg(value_name = "ARCHIVE", help = "Local SQLite archive")]
+    archive: PathBuf,
+}
+
+#[derive(Args)]
 struct ExportFilesArgs {
     #[arg(
         long,
@@ -605,6 +650,7 @@ pub enum Action {
     ExportDirectory(ExportDirectoryConfig),
     ExportImap(CommonConfig, ExportImapConfig),
     ExportManageSieve(CommonConfig, ExportManageSieveConfig),
+    ExportDav(CommonConfig, ExportDavConfig),
     Inspect(InspectConfig),
 }
 
@@ -734,6 +780,8 @@ impl Cli {
             Command::ExportDirectory(args) => resolve_export_directory(*args),
             Command::ExportImap(args) => resolve_export_imap(*args),
             Command::ExportManageSieve(args) => resolve_export_managesieve(*args),
+            Command::ExportCaldav(args) => resolve_export_dav(*args, DavKindArg::Caldav),
+            Command::ExportCarddav(args) => resolve_export_dav(*args, DavKindArg::Carddav),
             Command::Inspect(args) => resolve_inspect(*args),
         }
     }
@@ -1141,6 +1189,24 @@ fn resolve_export_managesieve(args: ExportManageSieveArgs) -> Result<Action, Err
     Ok(Action::ExportManageSieve(
         common,
         ExportManageSieveConfig {
+            url: args.url,
+            auth,
+            allow_cleartext: args.allow_cleartext,
+        },
+    ))
+}
+
+fn resolve_export_dav(args: ExportDavArgs, kind: DavKindArg) -> Result<Action, Error> {
+    let common = common_config(&args.global, args.archive);
+    let auth = resolve_dav_auth(
+        args.auth_basic.as_deref(),
+        args.auth_password.as_deref(),
+        args.auth_bearer.as_ref(),
+    )?;
+    Ok(Action::ExportDav(
+        common,
+        ExportDavConfig {
+            kind,
             url: args.url,
             auth,
             allow_cleartext: args.allow_cleartext,

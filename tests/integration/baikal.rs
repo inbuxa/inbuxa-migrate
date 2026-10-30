@@ -24,9 +24,10 @@ const HTTP_PORT: u16 = 80;
 const REALM: &str = "BaikalDAV";
 
 const ADMIN_PASSWORD_HASH: &str = "004b53ae84286ba6003b34e8ef404826";
-const DIGEST_USER1: &str = "b7a47e657a4a966d0d844b1211416024";
-const DIGEST_USER2: &str = "9fc67834c5a099f0a2eccea3f6918169";
-const DIGEST_USER3: &str = "e1b30b108dad01b323a999b0bb1252ab";
+// md5("<user>:BaikalDAV:<layouts::PASSWORD>"), as sabre/dav keeps them.
+const DIGEST_USER1: &str = "e261d7451ec401d35a58d199de18d546";
+const DIGEST_USER2: &str = "138bff05db3d74685ec3b0e2d529b5b1";
+const DIGEST_USER3: &str = "e2d37cbb475478f646369e86f93f2866";
 
 const SCHEMA: &str = include_str!("baikal_schema.sql");
 

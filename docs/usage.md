@@ -13,7 +13,7 @@ and how to install it.
 ## Commands and global flags
 
 ```
-inbuxa-migrate <import|export|export-imap|export-managesieve|export-files|export-directory|inspect> [args...]
+inbuxa-migrate <import|export|export-imap|export-managesieve|export-caldav|export-carddav|export-files|export-directory|inspect> [args...]
 ```
 
 Every command takes a few global flags -- verbosity, worker pool size, retry
@@ -296,7 +296,7 @@ Writes an archive's mail into an account on any IMAP server, for a target
 that doesn't speak JMAP. It signs in the way `import imap` does, with the
 same flags. Contacts, calendars and filters don't go over IMAP; write the
 filters with `export-managesieve`, and contacts and calendars with
-`export-files`.
+`export-carddav` and `export-caldav`.
 
 Like `export`, it keeps no state. Each run reads the target folder first,
 matching messages by Message-ID, or without one by sender, subject, date and
@@ -351,6 +351,48 @@ With `--dry-run` it signs in, lists and compares, and checks each script it
 would write with `CHECKSCRIPT`, so a script the server would refuse is
 counted as failed before anything is written. A server without
 `CHECKSCRIPT` (one that advertises no `VERSION`) gets the comparison only.
+
+## Export to CalDAV and CardDAV
+
+```
+inbuxa-migrate export-caldav \
+  --url <http(s)://host[:port][/path]> \
+  (--auth-basic <USER> [--auth-password <PASS>] | --auth-bearer [TOKEN]) \
+  [--allow-cleartext] [--dry-run] \
+  <ARCHIVE>
+
+inbuxa-migrate export-carddav …same flags… <ARCHIVE>
+```
+
+Writes an archive's calendars into any CalDAV server, or its address books
+into any CardDAV server, with the flags `import caldav` and `import carddav`
+take. `--url` can be the server's root: the account's home is found from
+the signed-in user's principal, through `/.well-known/caldav` or
+`/.well-known/carddav` if need be, so a fresh account with nothing in it
+works. Like the other exports it keeps no state, and a second run writes
+nothing.
+
+- **Collections.** A calendar or address book is matched to the target's
+  by its display name. One that isn't there is made with `MKCALENDAR` or
+  an extended `MKCOL`, with its name, description and (for a calendar)
+  color, at a path made from the name that nothing in the home uses yet.
+- **Items.** Each event or card goes to `<UID>.ics` or `<UID>.vcf` in its
+  collection; a UID that isn't a plain name is hashed instead. A new item
+  is written with `If-None-Match: *`. One that is there is read and
+  compared, and written again with `If-Match` on its etag only when it
+  differs. The comparison leaves out what servers rewrite on their own:
+  line folding, the order and case of parameters, `PRODID`, `DTSTAMP` and
+  `REV`. A card's `N` and `ADR` are compared on the parts vCard 3 has,
+  since some servers drop the rest; a change only in those newer parts is
+  not sent.
+- An item in two collections is written to both. An item, or a
+  collection, the server refuses is counted as failed with the reason, and
+  the run goes on; a collection that can't be made has its items counted
+  as failed too. An item whose server gives no etag isn't overwritten.
+- Nothing is deleted from the target.
+
+With `--dry-run` it signs in, finds the home, reads and compares what is
+there, and counts what it would create and update, without writing.
 
 ## Export to files
 
@@ -503,6 +545,7 @@ cargo test --test integration_dovecot  -- --ignored --test-threads=1
 cargo test --test integration_cyrus    -- --ignored --test-threads=1
 cargo test --test integration_export_imap        -- --ignored --test-threads=1
 cargo test --test integration_export_managesieve -- --ignored --test-threads=1
+cargo test --test integration_export_dav         -- --ignored --test-threads=1
 
 # Slow tests
 cargo test --test mock_jmap -- --ignored

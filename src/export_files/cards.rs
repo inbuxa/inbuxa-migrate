@@ -32,13 +32,13 @@ pub struct Outcome {
     pub manifest: Value,
 }
 
-struct Collection {
-    id: i64,
-    name: String,
-    description: Option<String>,
-    color: Option<String>,
-    time_zone: Option<String>,
-    is_default: bool,
+pub(crate) struct Collection {
+    pub(crate) id: i64,
+    pub(crate) name: String,
+    pub(crate) description: Option<String>,
+    pub(crate) color: Option<String>,
+    pub(crate) time_zone: Option<String>,
+    pub(crate) is_default: bool,
 }
 
 pub fn write_contacts(
@@ -186,7 +186,7 @@ pub fn write_calendars(
     })
 }
 
-fn read_collections(conn: &Connection, sql: &str) -> Result<Vec<Collection>, Error> {
+pub(crate) fn read_collections(conn: &Connection, sql: &str) -> Result<Vec<Collection>, Error> {
     let mut stmt = conn.prepare(sql)?;
     let rows = stmt.query_map([], |row| {
         Ok(Collection {
@@ -203,7 +203,7 @@ fn read_collections(conn: &Connection, sql: &str) -> Result<Vec<Collection>, Err
 
 /// The archive keeps a card's uid beside its JSContact, and photos and
 /// other media as blobs; the vCard needs both back inside.
-fn vcard_text(conn: &Connection, uid: &str, data: &str) -> Result<String, String> {
+pub(crate) fn vcard_text(conn: &Connection, uid: &str, data: &str) -> Result<String, String> {
     let mut value: Value = serde_json::from_str(data).map_err(|e| e.to_string())?;
     let map = value.as_object_mut().ok_or("not a JSON object")?;
     map.insert("uid".to_owned(), Value::String(uid.to_owned()));
@@ -216,7 +216,11 @@ fn vcard_text(conn: &Connection, uid: &str, data: &str) -> Result<String, String
 
 /// calcard writes a VCALENDAR from a Group, so each event goes in one, with
 /// its attachments inlined from the archive's blobs.
-fn icalendar_text(conn: &Connection, data: &str, data_type: &str) -> Result<String, String> {
+pub(crate) fn icalendar_text(
+    conn: &Connection,
+    data: &str,
+    data_type: &str,
+) -> Result<String, String> {
     let mut value: Value = serde_json::from_str(data).map_err(|e| e.to_string())?;
     value
         .as_object_mut()

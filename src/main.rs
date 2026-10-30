@@ -87,6 +87,13 @@ fn run() -> i32 {
             let logger = config.logger;
             (RunOutcome::from_result(export_files::run(config)), logger)
         }
+        Action::ExportDav(common, config) => {
+            let logger = common.logger;
+            (
+                RunOutcome::from_result(sync::export_dav::run(common, config)),
+                logger,
+            )
+        }
         Action::ExportManageSieve(common, config) => {
             let logger = common.logger;
             (

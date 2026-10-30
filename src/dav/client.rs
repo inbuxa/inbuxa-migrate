@@ -136,6 +136,7 @@ impl DavClient {
             Some("application/xml; charset=utf-8"),
             Some(depth),
             ACCEPT_DAV,
+            None,
         )
     }
 
@@ -147,11 +148,54 @@ impl DavClient {
             Some("application/xml; charset=utf-8"),
             Some(depth),
             ACCEPT_DAV,
+            None,
         )
     }
 
     pub fn get(&self, url: &str) -> Result<DavHttpResponse, JmapError> {
-        self.execute("GET", url, None, None, None, ACCEPT_BINARY)
+        self.execute("GET", url, None, None, None, ACCEPT_BINARY, None)
+    }
+
+    /// A PUT that only lands as the caller expects: `If-None-Match: *` to
+    /// create (never overwrite), or `If-Match` with the etag last seen.
+    pub fn put(
+        &self,
+        url: &str,
+        body: &[u8],
+        content_type: &str,
+        condition: PutCondition<'_>,
+    ) -> Result<DavHttpResponse, JmapError> {
+        let header = match condition {
+            PutCondition::Create => ("If-None-Match", "*"),
+            PutCondition::Replace(etag) => ("If-Match", etag),
+        };
+        self.execute(
+            "PUT",
+            url,
+            Some(body),
+            Some(content_type),
+            None,
+            ACCEPT_BINARY,
+            Some(header),
+        )
+    }
+
+    /// `MKCALENDAR` or an extended `MKCOL`, with the XML that names it.
+    pub fn make_collection(
+        &self,
+        method: &str,
+        url: &str,
+        body: &str,
+    ) -> Result<DavHttpResponse, JmapError> {
+        self.execute(
+            method,
+            url,
+            Some(body.as_bytes()),
+            Some("application/xml; charset=utf-8"),
+            None,
+            ACCEPT_DAV,
+            None,
+        )
     }
 
     pub fn propfind_responses(
@@ -263,6 +307,7 @@ impl DavClient {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn execute(
         &self,
         method: &str,
@@ -271,6 +316,7 @@ impl DavClient {
         content_type: Option<&str>,
         depth: Option<u8>,
         accept: &str,
+        header: Option<(&str, &str)>,
     ) -> Result<DavHttpResponse, JmapError> {
         let logger = self.logger();
         let policy = self.inner.retry;
@@ -289,6 +335,7 @@ impl DavClient {
                 depth,
                 accept,
                 include_auth,
+                header,
             });
             match outcome {
                 Attempt::Ok {
@@ -445,6 +492,7 @@ impl DavClient {
                 depth: Some(depth),
                 accept: ACCEPT_DAV,
                 include_auth,
+                header: None,
             });
             match send {
                 Ok(mut resp) => {
@@ -768,6 +816,7 @@ impl DavClient {
             depth: None,
             accept: ACCEPT_BINARY,
             include_auth,
+            header: None,
         };
         let logger = self.logger();
         let started = Instant::now();
@@ -831,6 +880,9 @@ impl DavClient {
         if let Some(ct) = req.content_type {
             builder = builder.header("Content-Type", ct);
         }
+        if let Some((name, value)) = req.header {
+            builder = builder.header(name, value);
+        }
         let payload: &[u8] = req.body.unwrap_or(&[]);
         let request = builder
             .body(payload)
@@ -847,6 +899,13 @@ struct WireRequest<'a> {
     depth: Option<u8>,
     accept: &'a str,
     include_auth: bool,
+    header: Option<(&'a str, &'a str)>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum PutCondition<'a> {
+    Create,
+    Replace(&'a str),
 }
 
 pub struct DavStream {
