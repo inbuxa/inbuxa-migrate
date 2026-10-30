@@ -358,6 +358,28 @@ impl Guide {
                 "ok": true,
                 "message": "The preview signs in for each account and shows any that fail.",
             }),
+            SourceKind::Microsoft => check_microsoft(f),
+            SourceKind::Google => self.check_google(f),
+        }
+    }
+
+    /// Asks Google for a token for the first account, as each run will.
+    fn check_google(&self, f: &Form) -> Value {
+        use crate::google::{MAIL_SCOPE, ServiceAccount};
+        let path = self.dir.join(f.source.key_file.trim());
+        let account = match ServiceAccount::load(&path) {
+            Ok(a) => a,
+            Err(e) => return json!({ "ok": false, "message": e.to_string() }),
+        };
+        let Some(first) = f.accounts.first() else {
+            return json!({ "ok": false, "message": format!(
+                "The key is {}'s. List the accounts, and the guide will try the first.",
+                account.client_email()) });
+        };
+        match account.token_for(first, MAIL_SCOPE) {
+            Ok(_) => json!({ "ok": true, "message": format!(
+                "Google lets {} act for {first}.", account.client_email()) }),
+            Err(e) => json!({ "ok": false, "message": e.to_string() }),
         }
     }
 
@@ -599,6 +621,51 @@ fn check_target(f: &Form) -> Value {
                 ),
             }),
         },
+    }
+}
+
+/// Signs the app in: what it can read shows in its token's roles.
+fn check_microsoft(f: &Form) -> Value {
+    use crate::exchange_graph::oauth;
+    let s = &f.source;
+    if s.tenant.trim().is_empty() || s.client_id.trim().is_empty() || s.secret.is_empty() {
+        return json!({ "ok": false,
+            "message": "Give the tenant, the app's client id and its client secret." });
+    }
+    let authority = oauth::default_authority(s.tenant.trim());
+    match oauth::client_credentials(&authority, s.client_id.trim(), &s.secret) {
+        Err(e) => json!({ "ok": false, "message": format!("The app couldn't sign in: {e}") }),
+        Ok(token) => {
+            let roles = oauth::decode_jwt_claims(&token.access_token)
+                .map(|c| c.roles)
+                .unwrap_or_default();
+            // Each need, and the permissions that cover it.
+            let needs: [(&str, &[&str]); 2] = [
+                (
+                    "User.Read.All",
+                    &[
+                        "User.Read.All",
+                        "User.ReadWrite.All",
+                        "Directory.Read.All",
+                        "Directory.ReadWrite.All",
+                    ],
+                ),
+                ("Mail.Read", &["Mail.Read", "Mail.ReadWrite"]),
+            ];
+            let missing: Vec<&str> = needs
+                .iter()
+                .filter(|(_, any)| !roles.iter().any(|have| any.contains(&have.as_str())))
+                .map(|(need, _)| *need)
+                .collect();
+            if missing.is_empty() {
+                json!({ "ok": true, "message": format!(
+                    "The app signed in to {} and may read: {}.", s.tenant.trim(), roles.join(", ")) })
+            } else {
+                json!({ "ok": false, "message": format!(
+                    "The app signed in, but it hasn't been granted {}. Add them as application \
+                     permissions and grant admin consent.", missing.join(" and ")) })
+            }
+        }
     }
 }
 

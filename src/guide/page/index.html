@@ -26,6 +26,8 @@
     <label><input type="radio" name="kind" value="imap" checked> An IMAP server</label>
     <label><input type="radio" name="kind" value="jmap"> A JMAP server (Stalwart or inbuxa)</label>
     <label><input type="radio" name="kind" value="maildir"> Maildir folders on this machine</label>
+    <label><input type="radio" name="kind" value="microsoft"> Microsoft 365</label>
+    <label><input type="radio" name="kind" value="google"> Google Workspace (Gmail)</label>
   </fieldset>
 
   <div data-kind="imap jmap">
@@ -44,9 +46,25 @@
     <p class="note">An administrator can read the account list and act for each account.
       Leave this empty to sign in with an API key instead of a password.</p>
   </div>
-  <div data-kind="imap jmap">
-    <label>Password or API key <input id="src-secret" type="password" autocomplete="off"></label>
+  <div data-kind="microsoft">
+    <label>Tenant <input id="src-tenant" placeholder="contoso.onmicrosoft.com" autocomplete="off"></label>
+    <label>App (client) id <input id="src-client-id" autocomplete="off"></label>
+    <p class="note">An app registered in Microsoft Entra reads every mailbox, so no one signs in.
+      Give it a client secret and these Microsoft Graph <em>application</em> permissions, with
+      admin consent: <code>User.Read.All</code>, <code>Mail.Read</code>,
+      <code>MailboxSettings.Read</code>, <code>Calendars.Read</code> and <code>Contacts.Read</code>.
+      Check tells you if any are missing.</p>
+  </div>
+  <div data-kind="imap jmap microsoft">
+    <label><span id="src-secret-label">Password or API key</span> <input id="src-secret" type="password" autocomplete="off"></label>
     <p class="note" id="src-secret-kept" hidden>Already given; leave empty to keep it.</p>
+  </div>
+  <div data-kind="google">
+    <label>Service account's key file <input id="src-key-file" placeholder="/home/me/sa-key.json" autocomplete="off"></label>
+    <p class="note">A service account acts for each user, so no one hands over a password.
+      Create one and a JSON key for it in Google Cloud, then in the Admin console allow its
+      client id domain-wide delegation for <code>https://mail.google.com/</code>. Keep the key
+      file to yourself, and delete the key once the move is done. This moves the mail.</p>
   </div>
   <div data-kind="maildir">
     <label>Each account's folder <input id="src-path" value="/var/vmail/{domain}/{local}/Maildir" autocomplete="off"></label>
