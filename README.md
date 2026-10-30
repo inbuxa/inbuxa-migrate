@@ -19,6 +19,7 @@ contacts, identities, Sieve scripts and files.
     inbuxa-migrate export … alice.sqlite         the archive into inbuxa
     inbuxa-migrate export-files alice.sqlite out the archive as plain files
     inbuxa-migrate export-imap … alice.sqlite    its mail into any IMAP server
+    inbuxa-migrate export-managesieve … alice.sqlite  its filters, likewise
     inbuxa-migrate export-directory … out        a server's accounts, no secrets
 
 Between the two sides sits an archive: one SQLite file holding one account.
@@ -37,7 +38,8 @@ and refuses a different one unless told otherwise.
 
 Export speaks JMAP only. It writes into inbuxa, or into any JMAP server that
 advertises the types being written. `export-imap` writes the mail into any
-IMAP server, and `export-files` is the way out to everything else: it writes
+IMAP server, `export-managesieve` the Sieve filters into any ManageSieve
+server, and `export-files` is the way out to everything else: it writes
 the archive as a Maildir++ tree, vCard, iCalendar and Sieve files that other
 servers and mail, calendar and contacts apps open, with no network and no
 store format in the way. For a whole server, `export-directory` writes the

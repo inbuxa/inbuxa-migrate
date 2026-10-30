@@ -13,7 +13,7 @@ and how to install it.
 ## Commands and global flags
 
 ```
-inbuxa-migrate <import|export|export-imap|export-files|export-directory|inspect> [args...]
+inbuxa-migrate <import|export|export-imap|export-managesieve|export-files|export-directory|inspect> [args...]
 ```
 
 Every command takes a few global flags -- verbosity, worker pool size, retry
@@ -294,8 +294,9 @@ inbuxa-migrate export-imap \
 
 Writes an archive's mail into an account on any IMAP server, for a target
 that doesn't speak JMAP. It signs in the way `import imap` does, with the
-same flags. Contacts, calendars and filters don't go over IMAP; write those
-with `export-files`.
+same flags. Contacts, calendars and filters don't go over IMAP; write the
+filters with `export-managesieve`, and contacts and calendars with
+`export-files`.
 
 Like `export`, it keeps no state. Each run reads the target folder first,
 matching messages by Message-ID, or without one by sender, subject, date and
@@ -321,6 +322,35 @@ connection dropped is found, not doubled.
 
 With `--dry-run` it signs in, reads the target with `EXAMINE`, and counts
 what it would create, append and update, without writing anything.
+
+## Export to ManageSieve
+
+```
+inbuxa-migrate export-managesieve \
+  --url <sieve://host[:port]|sieves://host[:port]> \
+  (--auth-basic <USER> [--auth-password <PASS>] | --auth-bearer [TOKEN] --auth-user <USER>) \
+  [--allow-cleartext] [--dry-run] \
+  <ARCHIVE>
+```
+
+Writes an archive's Sieve scripts into an account on any ManageSieve server
+(RFC 5804), with the flags `import managesieve` takes. It keeps no state:
+each run lists the target's scripts, writes each one that is missing or
+differs with `PUTSCRIPT`, and leaves alone the ones that match, so a second
+run writes nothing. A script with no name is written as `script-<id>`.
+
+- The archive's active script is made active on the target. If no script
+  in the archive is active, the target's active script stays as it is.
+- A script the server refuses, for instance one using an extension it
+  lacks, is counted as failed with the server's reason, and the run goes
+  on. If the active script is refused, it is not made active.
+- Scripts are never deleted from the target, and names that match are
+  overwritten only when their content differs.
+
+With `--dry-run` it signs in, lists and compares, and checks each script it
+would write with `CHECKSCRIPT`, so a script the server would refuse is
+counted as failed before anything is written. A server without
+`CHECKSCRIPT` (one that advertises no `VERSION`) gets the comparison only.
 
 ## Export to files
 
@@ -471,6 +501,8 @@ cargo test --test integration_baikal   -- --ignored --test-threads=1
 cargo test --test integration_webdav   -- --ignored --test-threads=1
 cargo test --test integration_dovecot  -- --ignored --test-threads=1
 cargo test --test integration_cyrus    -- --ignored --test-threads=1
+cargo test --test integration_export_imap        -- --ignored --test-threads=1
+cargo test --test integration_export_managesieve -- --ignored --test-threads=1
 
 # Slow tests
 cargo test --test mock_jmap -- --ignored

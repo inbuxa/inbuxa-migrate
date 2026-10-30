@@ -41,10 +41,10 @@ pub enum ManageSieveAuth {
 }
 
 #[derive(Debug, Clone)]
-struct Endpoint {
-    host: String,
-    port: u16,
-    implicit_tls: bool,
+pub(crate) struct Endpoint {
+    pub(crate) host: String,
+    pub(crate) port: u16,
+    pub(crate) implicit_tls: bool,
 }
 
 struct ControlCtx {
@@ -378,7 +378,7 @@ fn build_dry_run_summary(
     })
 }
 
-fn parse_endpoint(url: &str) -> Result<Endpoint, Error> {
+pub(crate) fn parse_endpoint(url: &str) -> Result<Endpoint, Error> {
     let parsed =
         Url::parse(url).map_err(|e| Error::Usage(format!("invalid --url {url:?}: {e}")))?;
     let scheme = parsed.scheme();
@@ -403,7 +403,10 @@ fn parse_endpoint(url: &str) -> Result<Endpoint, Error> {
     })
 }
 
-fn authenticate(client: &mut SieveClient, auth: &ManageSieveAuth) -> Result<String, Error> {
+pub(crate) fn authenticate(
+    client: &mut SieveClient,
+    auth: &ManageSieveAuth,
+) -> Result<String, Error> {
     do_authenticate(client, auth).map_err(|e| match e {
         SieveAuthError::TerminallyRefused(text) => {
             Error::Connection(format!("auth failed: {text}"))
