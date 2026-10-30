@@ -7,6 +7,17 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
 
 ## [Unreleased]
 
+### Added
+- `guide` walks through a move into inbuxa in the browser. It serves a page
+  on 127.0.0.1 that asks for the source (IMAP with a master user, JMAP with
+  an administrator, or Maildir folders), the accounts (pasted, from a CSV,
+  or read from the source) and the inbuxa server. It can create the missing
+  accounts, previews with a dry run, then moves the mail with live progress
+  and runs a final pass. It writes an ordinary plan and runs it with
+  `migrate`, so the same move can be finished from a terminal. Secrets stay
+  in memory, and only the browser given the address, with its random
+  token, gets an answer.
+
 ## [27.1-rc.4]
 
 The fourth release candidate of the 27.1 series: a whole domain moves with

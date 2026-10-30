@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<!--
+  SPDX-FileCopyrightText: 2026 Coffey Labs LLC <legal@coffeylabs.org>
+  SPDX-License-Identifier: Apache-2.0 OR MIT
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Move to inbuxa</title>
+<link rel="stylesheet" href="guide.css">
+<script src="guide.js" defer></script>
+</head>
+<body>
+<header>
+  <h1>Move to inbuxa</h1>
+  <p>Answer each step, preview, then run. Everything is saved in <code id="dir"></code>,
+     and the guide can be closed and started again at any point.</p>
+</header>
+
+<main>
+<section id="step-source">
+  <h2><span class="n">1</span> Where is the mail now?</h2>
+  <fieldset class="choices">
+    <label><input type="radio" name="kind" value="imap" checked> An IMAP server</label>
+    <label><input type="radio" name="kind" value="jmap"> A JMAP server (Stalwart or inbuxa)</label>
+    <label><input type="radio" name="kind" value="maildir"> Maildir folders on this machine</label>
+  </fieldset>
+
+  <div data-kind="imap jmap">
+    <label>Server address <input id="src-url" placeholder="imaps://mail.example.org" autocomplete="off"></label>
+  </div>
+  <div data-kind="imap">
+    <label>Login for each account <input id="src-imap-login" value="{email}*master" autocomplete="off"></label>
+    <p class="note">One login that can open every mailbox. Dovecot calls this a master user:
+      the account's address, then <code>*</code>, then the master user's name. Other servers
+      have their own form; <code>{email}</code>, <code>{local}</code> and <code>{domain}</code>
+      stand for each account.</p>
+    <label class="check"><input type="checkbox" id="src-cleartext"> The server has no encryption (a test server)</label>
+  </div>
+  <div data-kind="jmap">
+    <label>Administrator <input id="src-jmap-login" placeholder="admin" autocomplete="off"></label>
+    <p class="note">An administrator can read the account list and act for each account.
+      Leave this empty to sign in with an API key instead of a password.</p>
+  </div>
+  <div data-kind="imap jmap">
+    <label>Password or API key <input id="src-secret" type="password" autocomplete="off"></label>
+    <p class="note" id="src-secret-kept" hidden>Already given; leave empty to keep it.</p>
+  </div>
+  <div data-kind="maildir">
+    <label>Each account's folder <input id="src-path" value="/var/vmail/{domain}/{local}/Maildir" autocomplete="off"></label>
+    <p class="note">Dovecot keeps one Maildir per account. <code>{domain}</code> and
+      <code>{local}</code> are the two halves of the address.</p>
+  </div>
+  <button id="check-source">Check</button>
+  <p class="status" id="source-status"></p>
+</section>
+
+<section id="step-accounts">
+  <h2><span class="n">2</span> Which accounts?</h2>
+  <p>One address per line, or paste a CSV: the first address on each line counts.</p>
+  <textarea id="accounts" rows="8" spellcheck="false" placeholder="ann@example.org&#10;bob@example.org"></textarea>
+  <div class="row">
+    <button id="read-accounts">Check the list</button>
+    <button id="read-directory" data-kind="jmap" class="secondary">Read the list from the server</button>
+  </div>
+  <p class="status" id="accounts-status"></p>
+</section>
+
+<section id="step-target">
+  <h2><span class="n">3</span> Where to?</h2>
+  <label>inbuxa server <input id="dst-url" placeholder="https://mail.example.org" autocomplete="off"></label>
+  <label>Administrator's API key <input id="dst-token" type="password" autocomplete="off"></label>
+  <p class="note">Make one in INBUXA Admin under your account's API keys. With it the guide
+    writes into each account, so no one has to hand over a password.</p>
+  <p class="note" id="dst-token-kept" hidden>Already given; leave empty to keep it.</p>
+  <label class="check"><input type="checkbox" id="create" checked> Create the accounts inbuxa doesn't have yet</label>
+  <p class="note">Each new account gets a generated password, written to a file only you can read.</p>
+  <label class="short">Accounts at once <input id="parallel" type="number" min="1" max="32" value="4"></label>
+  <button id="check-target">Check</button>
+  <p class="status" id="target-status"></p>
+</section>
+
+<section id="step-preview">
+  <h2><span class="n">4</span> Preview</h2>
+  <p>Signs in for each account and counts what it would move, without moving anything.</p>
+  <button id="preview">Preview</button>
+  <div class="job" id="preview-job"></div>
+</section>
+
+<section id="step-run">
+  <h2><span class="n">5</span> Move</h2>
+  <p>People can keep working on the old server while this runs. A second start picks up
+    where it stopped.</p>
+  <button id="run">Start</button>
+  <div class="job" id="run-job"></div>
+  <h3>The final pass</h3>
+  <p>Once the old server stops taking mail, run this. It moves only what changed since.</p>
+  <button id="final" class="secondary">Final pass</button>
+  <details>
+    <summary>The same from a terminal</summary>
+    <pre id="command"></pre>
+  </details>
+</section>
+</main>
+</body>
+</html>

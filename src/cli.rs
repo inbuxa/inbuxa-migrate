@@ -16,6 +16,7 @@ use crate::exchange_ews::types::MailboxKind;
 use crate::exchange_graph::types::{EventBodyFormat, MailboxKind as GraphMailboxKind, Surfaces};
 use crate::export_directory::ExportDirectoryConfig;
 use crate::export_files::ExportFilesConfig;
+use crate::guide::GuideConfig;
 use crate::import_directory::ImportDirectoryConfig;
 use crate::inspect::InspectConfig;
 use crate::jmap::account::AccountSelector;
@@ -95,6 +96,10 @@ enum Command {
         about = "Move many accounts by a plan file: the same steps for each, several at once, resumable"
     )]
     Migrate(Box<MigrateArgs>),
+    #[command(
+        about = "Walk through a move to inbuxa in the browser: a page on this machine writes the plan and runs it"
+    )]
+    Guide(Box<GuideArgs>),
     #[command(about = "Show the contents of a local archive (read-only)")]
     Inspect(Box<InspectArgs>),
 }
@@ -734,6 +739,26 @@ struct MigrateArgs {
 }
 
 #[derive(Args)]
+struct GuideArgs {
+    #[arg(
+        long,
+        value_name = "PORT",
+        default_value_t = 0,
+        help = "Port on 127.0.0.1 (default: any free one)"
+    )]
+    port: u16,
+
+    #[arg(long, help = "Print the page's address instead of opening a browser")]
+    no_open: bool,
+
+    #[arg(
+        value_name = "DIR",
+        help = "Where the plan, the archives, the logs and the report go"
+    )]
+    dir: PathBuf,
+}
+
+#[derive(Args)]
 struct InspectArgs {
     #[arg(value_name = "ARCHIVE", help = "Local SQLite archive")]
     archive: PathBuf,
@@ -774,6 +799,7 @@ pub enum Action {
     ExportDirectory(ExportDirectoryConfig),
     ImportDirectory(ImportDirectoryConfig),
     Migrate(MigrateConfig),
+    Guide(GuideConfig),
     ExportImap(CommonConfig, ExportImapConfig),
     ExportManageSieve(CommonConfig, ExportManageSieveConfig),
     ExportDav(CommonConfig, ExportDavConfig),
@@ -906,6 +932,12 @@ impl Cli {
             Command::ExportDirectory(args) => resolve_export_directory(*args),
             Command::ImportDirectory(args) => resolve_import_directory(*args),
             Command::Migrate(args) => resolve_migrate(*args),
+            Command::Guide(args) => Ok(Action::Guide(GuideConfig {
+                dir: args.dir,
+                port: args.port,
+                open: !args.no_open,
+                program: std::env::current_exe()?,
+            })),
             Command::ExportImap(args) => resolve_export_imap(*args),
             Command::ExportManageSieve(args) => resolve_export_managesieve(*args),
             Command::ExportCaldav(args) => resolve_export_dav(*args, DavKindArg::Caldav),

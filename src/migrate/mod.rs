@@ -222,7 +222,7 @@ fn chosen(plan: &Plan, only: &[String]) -> Result<Vec<String>, Error> {
 }
 
 /// The work directory holds whole mailboxes: readable by its owner only.
-fn private_dir(path: &Path) -> Result<(), Error> {
+pub(crate) fn private_dir(path: &Path) -> Result<(), Error> {
     if path.is_dir() {
         return Ok(());
     }
