@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 Coffey Labs LLC <legal@coffeylabs.org>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -233,8 +234,8 @@ fn merge_container_id(
 fn parse_calendar_metadata(text: &str) -> CalendarMetadata {
     let mut out = CalendarMetadata::default();
     let mut inside_vevent = false;
-    for raw_line in text.lines() {
-        let line = raw_line.trim_end_matches('\r');
+    for line in unfolded_lines(text) {
+        let line = line.as_str();
         if line.starts_with("BEGIN:VEVENT")
             || line.starts_with("BEGIN:VTODO")
             || line.starts_with("BEGIN:VJOURNAL")
@@ -253,11 +254,42 @@ fn parse_calendar_metadata(text: &str) -> CalendarMetadata {
             continue;
         }
         if let Some(rest) = line.strip_prefix("X-WR-CALNAME:") {
-            out.x_wr_calname = Some(rest.trim().to_owned());
+            out.x_wr_calname = Some(unescape_text(rest.trim()));
         } else if let Some(rest) = line.strip_prefix("X-WR-CALDESC:") {
-            out.x_wr_caldesc = Some(rest.trim().to_owned());
+            out.x_wr_caldesc = Some(unescape_text(rest.trim()));
         } else if let Some(rest) = line.strip_prefix("X-WR-TIMEZONE:") {
             out.x_wr_timezone = Some(rest.trim().to_owned());
+        }
+    }
+    out
+}
+
+/// Content lines with RFC 5545 folding undone.
+fn unfolded_lines(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for raw in text.lines() {
+        let line = raw.trim_end_matches('\r');
+        match (line.strip_prefix([' ', '\t']), out.last_mut()) {
+            (Some(rest), Some(last)) => last.push_str(rest),
+            _ => out.push(line.to_owned()),
+        }
+    }
+    out
+}
+
+/// An iCalendar TEXT value with its `\\`, `\;`, `\,` and `\n` escapes undone.
+fn unescape_text(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut chars = value.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n' | 'N') => out.push('\n'),
+            Some(other) => out.push(other),
+            None => out.push('\\'),
         }
     }
     out
@@ -266,6 +298,16 @@ fn parse_calendar_metadata(text: &str) -> CalendarMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_metadata_unfolds_and_unescapes() {
+        let meta = parse_calendar_metadata(
+            "BEGIN:VCALENDAR\r\nX-WR-CALNAME:Team\\, Berlin\\; o\r\n ps\r\n\
+             X-WR-CALDESC:one\\ntwo\\\\three\r\nEND:VCALENDAR\r\n",
+        );
+        assert_eq!(meta.x_wr_calname.as_deref(), Some("Team, Berlin; ops"));
+        assert_eq!(meta.x_wr_caldesc.as_deref(), Some("one\ntwo\\three"));
+    }
 
     #[test]
     fn parse_metadata_finds_xwr_fields() {

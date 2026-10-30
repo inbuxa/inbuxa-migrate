@@ -20,7 +20,10 @@ use crate::sync::TypeCounts;
 use crate::sync::emailmeta::email_meta_from_blob;
 use crate::sync::keys::index_to_json;
 
-use super::keywords::{Translation, flags_from_filename, translate_flags, unique_id_from_filename};
+use super::keywords::{
+    Translation, custom_keywords_from_filename, flags_from_filename, read_keyword_names,
+    translate_flags, unique_id_from_filename, with_custom,
+};
 
 #[derive(Debug, Clone)]
 pub struct DiskEntry {
@@ -28,6 +31,9 @@ pub struct DiskEntry {
     pub filename: String,
     pub path: PathBuf,
     pub flags: Vec<Flag>,
+    /// Keywords beyond the standard flags, from the folder's
+    /// `dovecot-keywords`.
+    pub keywords: Vec<String>,
     pub mtime_unix: u64,
 }
 
@@ -40,6 +46,7 @@ pub struct DiskListing {
 pub fn list_folder(folder_path: &Path) -> std::io::Result<DiskListing> {
     let mut out = DiskListing::default();
     let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let keyword_names = read_keyword_names(folder_path);
     for sub in ["cur", "new"] {
         let dir = folder_path.join(sub);
         if !dir.is_dir() {
@@ -80,6 +87,7 @@ pub fn list_folder(folder_path: &Path) -> std::io::Result<DiskListing> {
                 continue;
             }
             let flags = flags_from_filename(&filename);
+            let keywords = custom_keywords_from_filename(&filename, &keyword_names);
             let mtime_unix = match entry.metadata().and_then(|m| m.modified()).and_then(|t| {
                 t.duration_since(UNIX_EPOCH).map_err(|e| {
                     std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
@@ -94,6 +102,7 @@ pub fn list_folder(folder_path: &Path) -> std::io::Result<DiskListing> {
                 filename,
                 path,
                 flags,
+                keywords,
                 mtime_unix,
             });
         }
@@ -146,7 +155,10 @@ pub fn insert_new(
     entry: &DiskEntry,
 ) -> Result<Option<i64>, InsertError> {
     let bytes = std::fs::read(&entry.path).map_err(InsertError::Io)?;
-    let translation = translate_flags(&entry.flags, ctx.include_deleted);
+    let translation = with_custom(
+        translate_flags(&entry.flags, ctx.include_deleted),
+        &entry.keywords,
+    );
     if translation.has_trashed_flag && !ctx.include_deleted {
         return Ok(None);
     }
@@ -219,7 +231,10 @@ pub fn refresh_flags(
     stored_keywords: &str,
     include_deleted: bool,
 ) -> Result<PresentOutcome, rusqlite::Error> {
-    let translation = translate_flags(&entry.flags, include_deleted);
+    let translation = with_custom(
+        translate_flags(&entry.flags, include_deleted),
+        &entry.keywords,
+    );
     if translation.has_trashed_flag && !include_deleted {
         return Ok(PresentOutcome::DeleteRequested);
     }
@@ -554,6 +569,7 @@ mod tests {
                 filename: "a".into(),
                 path: PathBuf::new(),
                 flags: vec![],
+                keywords: vec![],
                 mtime_unix: 0,
             },
             DiskEntry {
@@ -561,6 +577,7 @@ mod tests {
                 filename: "b".into(),
                 path: PathBuf::new(),
                 flags: vec![],
+                keywords: vec![],
                 mtime_unix: 0,
             },
         ];

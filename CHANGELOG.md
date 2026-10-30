@@ -5,6 +5,22 @@ inbuxa suite: a series (`27.1`), its patches (`27.1.3`) and release
 candidates before a series ships (`27.1-rc.1`). The tag is the version with a
 `v`. Releases before 27.1 were dates (`v2026.9.30`).
 
+## [Unreleased]
+
+### Added
+- `export-files` writes an archive out as plain files in open formats: mail
+  as a Maildir++ tree, each address book as a `.vcf`, each calendar as an
+  `.ics`, Sieve scripts, the file tree, and a `manifest.json` with what those
+  formats don't hold. It needs no network, writes only into a new or empty
+  directory, and keeps the directory private to its owner.
+
+### Changed
+- `import maildir` reads folder names in modified UTF-7, as Dovecot and
+  Courier write them, and the custom keywords in each folder's
+  `dovecot-keywords` file (Junk, labels).
+- `import takeout` unfolds and unescapes a calendar's `X-WR-CALNAME` and
+  `X-WR-CALDESC`, so a long name or one with a comma reads back whole.
+
 ## [27.1-rc.1]
 
 The first release candidate of the 27.1 series, with the rest of the suite.

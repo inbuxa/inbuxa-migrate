@@ -1,8 +1,11 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 Coffey Labs LLC <legal@coffeylabs.org>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
+
+use std::path::Path;
 
 use mail_parser::mailbox::maildir::Flag;
 
@@ -35,6 +38,53 @@ pub fn translate_flags(flags: &[Flag], include_deleted: bool) -> Translation {
         keywords: out,
         has_trashed_flag: has_trashed,
     }
+}
+
+/// The translation with a message's own keywords added: those Dovecot
+/// keeps as the letters `a` to `z`.
+pub fn with_custom(mut translation: Translation, custom: &[String]) -> Translation {
+    for k in custom {
+        push_unique(&mut translation.keywords, k);
+    }
+    translation.keywords.sort();
+    translation
+}
+
+/// What the keyword letters `a` to `z` stand for in one folder, from its
+/// `dovecot-keywords` file: a line `0 $Junk` names `a`, `1 work` names `b`.
+pub fn read_keyword_names(folder_path: &Path) -> Vec<Option<String>> {
+    let mut names = vec![None; 26];
+    let Ok(text) = std::fs::read_to_string(folder_path.join("dovecot-keywords")) else {
+        return names;
+    };
+    for line in text.lines() {
+        let Some((index, name)) = line.split_once(' ') else {
+            continue;
+        };
+        let name = name.trim();
+        if let Ok(i) = index.parse::<usize>()
+            && i < names.len()
+            && !name.is_empty()
+        {
+            names[i] = Some(name.to_owned());
+        }
+    }
+    names
+}
+
+pub fn custom_keywords_from_filename(filename: &str, names: &[Option<String>]) -> Vec<String> {
+    let Some(part) = filename.rsplit_once("2,").map(|(_, s)| s) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for ch in part.bytes().take_while(u8::is_ascii_alphanumeric) {
+        if ch.is_ascii_lowercase()
+            && let Some(Some(name)) = names.get((ch - b'a') as usize)
+        {
+            push_unique(&mut out, name);
+        }
+    }
+    out
 }
 
 fn push_unique(out: &mut Vec<String>, k: &str) {
@@ -76,6 +126,32 @@ pub fn unique_id_from_filename(filename: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dovecot_keyword_letters_name_keywords() {
+        let td = tempfile::tempdir().unwrap();
+        std::fs::write(
+            td.path().join("dovecot-keywords"),
+            "0 $Junk\n1 project-x\nbad\n30 x\n",
+        )
+        .unwrap();
+        let names = read_keyword_names(td.path());
+        assert_eq!(names[0].as_deref(), Some("$Junk"));
+        assert_eq!(names[1].as_deref(), Some("project-x"));
+        assert_eq!(
+            custom_keywords_from_filename("1.M1.h,S=10:2,FSab", &names),
+            vec!["$Junk", "project-x"]
+        );
+        assert!(custom_keywords_from_filename("1.M1.h:2,Sc", &names).is_empty());
+        let t = with_custom(translate_flags(&[Flag::Seen], false), &["$Junk".to_owned()]);
+        assert_eq!(t.keywords, vec!["$Junk", "$seen"]);
+    }
+
+    #[test]
+    fn a_folder_without_dovecot_keywords_names_none() {
+        let td = tempfile::tempdir().unwrap();
+        assert!(read_keyword_names(td.path()).iter().all(Option::is_none));
+    }
 
     #[test]
     fn empty_flags_yields_empty_keywords() {

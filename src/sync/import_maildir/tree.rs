@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 Coffey Labs LLC <legal@coffeylabs.org>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -104,7 +105,7 @@ pub fn discover(root: &Path, automap_enabled: bool) -> Result<Vec<ResolvedFolder
         };
         folders.push(ResolvedFolder {
             name: canonical.clone(),
-            leaf: leaf.to_owned(),
+            leaf: display_leaf(leaf),
             parent_path,
             path,
             role,
@@ -125,7 +126,7 @@ fn ensure_ephemeral_parents(
         if known.iter().any(|n| n == &ancestor) {
             continue;
         }
-        let leaf = leaf_of(&ancestor).to_owned();
+        let leaf = display_leaf(leaf_of(&ancestor));
         let parent_path = split_parent(&ancestor);
         folders.push(ResolvedFolder {
             name: ancestor.clone(),
@@ -156,6 +157,13 @@ fn split_parent(name: &str) -> Option<String> {
     name.rfind('.').map(|i| name[..i].to_owned())
 }
 
+/// A folder's name as shown: Maildir++ keeps names in modified UTF-7, as
+/// Dovecot and Courier write them. A name that isn't valid modified UTF-7 is
+/// shown as it is on disk.
+fn display_leaf(raw: &str) -> String {
+    crate::imap::name::decode_mailbox_name(raw).unwrap_or_else(|_| raw.to_owned())
+}
+
 fn leaf_of(name: &str) -> &str {
     match name.rfind('.') {
         Some(i) => &name[i + 1..],
@@ -179,7 +187,7 @@ pub fn restore_ephemeral_parents(folders: &mut Vec<ResolvedFolder>, root: &Path)
                 if known.contains(&ancestor) || to_add.iter().any(|x| x.name == ancestor) {
                     continue;
                 }
-                let leaf = leaf_of(&ancestor).to_owned();
+                let leaf = display_leaf(leaf_of(&ancestor));
                 let parent_path = split_parent(&ancestor);
                 to_add.push(ResolvedFolder {
                     name: ancestor,
@@ -378,6 +386,9 @@ mod tests {
     fn leaf_and_split_handle_root_and_nested() {
         assert_eq!(leaf_of("INBOX"), "INBOX");
         assert_eq!(leaf_of("Archive.2025"), "2025");
+        assert_eq!(display_leaf("&AMk-quipe &- co"), "Équipe & co");
+        assert_eq!(display_leaf("Plain"), "Plain");
+        assert_eq!(display_leaf("Équipe"), "Équipe");
         assert_eq!(split_parent("INBOX"), None);
         assert_eq!(split_parent("Archive.2025"), Some("Archive".to_owned()));
     }
