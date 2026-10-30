@@ -208,7 +208,7 @@ For Exchange Online, use `exchange-graph` instead. Microsoft is retiring EWS in 
 
 ```
 inbuxa-migrate import exchange-graph \
-  (--client-id <UUID> [--tenant <ID>] | --access-token [TOKEN]) \
+  (--client-id <UUID> [--tenant <ID>] [--app-only] | --access-token [TOKEN]) \
   [--user <UPN|UUID>] \
   [--mailbox-kind primary|archive] \
   [--objects mail,calendar,contacts] \
@@ -219,6 +219,24 @@ inbuxa-migrate import exchange-graph \
 
 Imports a mailbox from Exchange Online through Microsoft Graph. Without
 `--access-token` it signs in with the interactive device-code flow. `public-folders` is rejected here: Graph does not expose public folders, so they can only be imported with `exchange-ews`, which for Exchange Online is subject to the retirement described above.
+
+With `--app-only` the app signs in as itself, with its client secret, and
+reads the mailbox `--user` names. No one signs in, so a whole tenant moves
+with one app, in a [plan](#migrate-many-accounts) with `--user {email}`.
+
+- **The app.** Register it in Microsoft Entra, add a client secret, and
+  grant it these Microsoft Graph *application* permissions with admin
+  consent: `User.Read.All`, `Mail.Read`, `MailboxSettings.Read`,
+  `Calendars.Read` and `Contacts.Read`, and `Files.Read.All` for files.
+  To keep it to some mailboxes, scope it with Exchange Online's RBAC for
+  Applications or an application access policy.
+- **The tenant.** `--tenant` names it, as its id or
+  `name.onmicrosoft.com`; the shared `common` and `organizations` are
+  refused.
+- **The secret** is read from `$INBUXA_MIGRATE_CLIENT_SECRET`, or asked
+  for. In a plan, the step names it as `clientSecret`.
+- Its token lasts about an hour and is renewed the same way before it
+  runs out.
 
 ## Export
 
@@ -598,15 +616,16 @@ account, the state a later run resumes from, and the report.
   for the users that `export-directory` wrote.
 - **Secrets stay out of the plan.** A step names the environment variable
   that holds each secret it needs: `password`, `token`, `clientSecret`
-  (EWS) or `graphToken`. A step sees only the secrets it names. A plan that
+  (EWS, or Graph with `--app-only`) or `graphToken`. A step sees only the secrets it names. A plan that
   writes a password or token into `args` is refused. A step that needs a
   secret it doesn't name fails at once instead of waiting for a prompt.
 - **Signing in for each account.** Each step signs in the way its command
   does, so the plan decides how. To avoid collecting every user's password,
   use a login that can act for each account. The example uses Dovecot's
   master user, `{email}*master`. Use the source's own form where it has
-  one: Exchange impersonation through `--mailbox {email}`, or an
-  administrator on a JMAP source with `--account-name {email}`.
+  one: Exchange impersonation through `--mailbox {email}`, a Graph app
+  with `--app-only --user {email}`, or an administrator on a JMAP source
+  with `--account-name {email}`.
 - **One account at a time, several at once.** `--parallel` (default 4)
   sets how many accounts run at the same time. Each step runs as its own
   process. Its output goes to `<DIR>/<email>/<step>.log`, and one account

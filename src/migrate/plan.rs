@@ -28,6 +28,7 @@ pub const SECRET_VARS: &[&str] = &[
     "INBUXA_MIGRATE_API_KEY",
     "INBUXA_MIGRATE_TOKEN",
     "INBUXA_MIGRATE_EWS_CLIENT_SECRET",
+    "INBUXA_MIGRATE_CLIENT_SECRET",
     "INBUXA_MIGRATE_GRAPH_TOKEN",
 ];
 
@@ -218,6 +219,14 @@ fn step_of(raw: RawStep, per_account: bool, names: &mut HashSet<String>) -> Resu
             }
         }
     }
+    // A client secret is EWS's or Graph's, by the step's command; each
+    // reads its own variable.
+    if let Some((_, value)) = env
+        .iter()
+        .find(|(var, _)| *var == "INBUXA_MIGRATE_EWS_CLIENT_SECRET")
+    {
+        env.push(("INBUXA_MIGRATE_CLIENT_SECRET", value.clone()));
+    }
     Ok(Step {
         name,
         args: raw.args,
@@ -367,6 +376,35 @@ mod tests {
             true,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn a_client_secret_reaches_ews_and_graph_alike() {
+        unsafe { std::env::set_var("PLAN_TEST_CLIENT_SECRET", "cs") };
+        let raw = RawStep {
+            name: "mail".into(),
+            args: args(&[
+                "import",
+                "exchange-graph",
+                "--app-only",
+                "--user",
+                "{email}",
+                "{archive}",
+            ]),
+            secrets: Secrets {
+                client_secret: Some("PLAN_TEST_CLIENT_SECRET".into()),
+                ..Secrets::default()
+            },
+        };
+        let step = step_of(raw, true, &mut HashSet::new()).unwrap();
+        let vars: Vec<_> = step.env.iter().map(|(v, s)| (*v, s.as_str())).collect();
+        assert_eq!(
+            vars,
+            [
+                ("INBUXA_MIGRATE_EWS_CLIENT_SECRET", "cs"),
+                ("INBUXA_MIGRATE_CLIENT_SECRET", "cs")
+            ]
+        );
     }
 
     #[test]

@@ -18,6 +18,9 @@ use crate::net::{tls, with_timeouts};
 pub const SCOPES: &str =
     "offline_access User.Read Mail.Read MailboxSettings.Read Calendars.Read Contacts.Read";
 
+/// App-only: the application permissions an administrator granted the app.
+pub const APP_ONLY_SCOPE: &str = "https://graph.microsoft.com/.default";
+
 const JWT_SEGMENT: Base64 = URL_SAFE.with_padding(Padding::Optional).any_alphabet();
 
 pub fn default_authority(tenant: &str) -> String {
@@ -40,6 +43,11 @@ pub enum OAuthFlow {
     DeviceCode {
         authority: String,
         client_id: String,
+    },
+    ClientCredentials {
+        authority: String,
+        client_id: String,
+        client_secret: String,
     },
 }
 
@@ -96,6 +104,11 @@ pub fn acquire(flow: &OAuthFlow) -> Result<AcquiredToken, GraphError> {
             authority,
             client_id,
         } => device_code_flow(authority, client_id),
+        OAuthFlow::ClientCredentials {
+            authority,
+            client_id,
+            client_secret,
+        } => client_credentials(authority, client_id, client_secret),
     }
 }
 
@@ -286,20 +299,40 @@ pub fn refresh_access_token(
     client_id: &str,
     refresh_token: &str,
 ) -> Result<AcquiredToken, GraphError> {
-    let agent = build_agent();
     let body = form_encode(&[
         ("client_id", client_id),
         ("grant_type", "refresh_token"),
         ("refresh_token", refresh_token),
         ("scope", SCOPES),
     ]);
-    let endpoint = token_endpoint(authority);
+    token_request(&token_endpoint(authority), &body, "refresh")
+}
+
+/// A token for the app itself, from its client secret. It carries no
+/// refresh token: a new one is asked for the same way before it expires.
+pub fn client_credentials(
+    authority: &str,
+    client_id: &str,
+    client_secret: &str,
+) -> Result<AcquiredToken, GraphError> {
+    let body = form_encode(&[
+        ("client_id", client_id),
+        ("client_secret", client_secret),
+        ("grant_type", "client_credentials"),
+        ("scope", APP_ONLY_SCOPE),
+    ]);
+    token_request(&token_endpoint(authority), &body, "app-only sign-in")
+}
+
+/// POSTs a token request, retrying a dropped connection or a 5xx.
+fn token_request(endpoint: &str, body: &str, what: &str) -> Result<AcquiredToken, GraphError> {
+    let agent = build_agent();
     let mut delay = Duration::from_millis(500);
     let mut attempts: u32 = 0;
     loop {
         attempts += 1;
         let send = agent
-            .post(&endpoint)
+            .post(endpoint)
             .header("Content-Type", "application/x-www-form-urlencoded")
             .send(body.as_bytes());
         let mut resp = match send {
@@ -307,10 +340,10 @@ pub fn refresh_access_token(
             Err(e) if attempts < 4 => {
                 std::thread::sleep(delay);
                 delay = (delay * 2).min(Duration::from_secs(8));
-                eprintln!("graph token refresh transport error: {e}; retrying");
+                eprintln!("graph {what} transport error: {e}; retrying");
                 continue;
             }
-            Err(e) => return Err(GraphError::OAuth(format!("refresh endpoint: {e}"))),
+            Err(e) => return Err(GraphError::OAuth(format!("{what} endpoint: {e}"))),
         };
         let status = resp.status().as_u16();
         let payload: Value = resp.body_mut().read_json().unwrap_or(Value::Null);
@@ -321,8 +354,11 @@ pub fn refresh_access_token(
         }
         return match parse_token_response(status, &payload) {
             TokenResponse::Ok(t) => Ok(t),
+            TokenResponse::Other { error, description } => Err(GraphError::OAuth(format!(
+                "{what} failed (http {status}): {error}: {description}"
+            ))),
             other => Err(GraphError::OAuth(format!(
-                "refresh failed (http {status}): {other:?}"
+                "{what} failed (http {status}): {other:?}"
             ))),
         };
     }
