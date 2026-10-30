@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 Coffey Labs LLC <legal@coffeylabs.org>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -439,6 +440,87 @@ impl ImapClient {
                         "unexpected continuation outside AUTHENTICATE".into(),
                     ));
                 }
+            }
+        }
+    }
+
+    /// APPEND one message. With LITERAL+ the message goes straight after the
+    /// command; otherwise it waits for the server's go-ahead, and a NO
+    /// before that (too large, over quota) ends the command without sending
+    /// it.
+    pub fn append(
+        &mut self,
+        mailbox: &str,
+        flags: &[String],
+        internal_date: Option<&str>,
+        message: &[u8],
+    ) -> Result<StatusLine, ImapError> {
+        let head = command::append_head(mailbox, flags, internal_date);
+        if command::contains_literal(head.as_bytes())
+            && !self.has_capability("LITERAL+")
+            && !self.has_capability("LITERAL-")
+        {
+            return Err(ImapError::Unsupported(
+                "mailbox name needs a literal but server does not advertise LITERAL+ or LITERAL-"
+                    .into(),
+            ));
+        }
+        let non_sync = self.has_capability("LITERAL+");
+        let tag = self.tags.next_tag();
+        let started = Instant::now();
+        let mut out = format!(
+            "{tag} {head} {{{}{}}}\r\n",
+            message.len(),
+            if non_sync { "+" } else { "" }
+        )
+        .into_bytes();
+        if non_sync {
+            out.extend_from_slice(message);
+            out.extend_from_slice(b"\r\n");
+        }
+        self.write_all(&out)?;
+        let mut sent = non_sync;
+        loop {
+            match parse_response(&mut self.reader)? {
+                Response::Continuation(_) if !sent => {
+                    let mut body = Vec::with_capacity(message.len() + 2);
+                    body.extend_from_slice(message);
+                    body.extend_from_slice(b"\r\n");
+                    self.write_all(&body)?;
+                    sent = true;
+                }
+                Response::Continuation(_) => {
+                    return Err(ImapError::Protocol(
+                        "unexpected second continuation during APPEND".into(),
+                    ));
+                }
+                Response::Tagged { tag: t, line } if t == tag => {
+                    self.logger.trace_cmd(
+                        "IMAP",
+                        &head,
+                        &format!("{} {}", status_word(&line.status), line.text),
+                        started.elapsed(),
+                    );
+                    return match line.status {
+                        Status::Ok => Ok(line),
+                        Status::No => Err(ImapError::No(line.into_no_error())),
+                        Status::Bad => Err(ImapError::Bad(line.text)),
+                        Status::Bye => Err(ImapError::Bye(line.text)),
+                        Status::PreAuth => Err(ImapError::Protocol(
+                            "unexpected PREAUTH on tagged response".into(),
+                        )),
+                    };
+                }
+                Response::Tagged { tag: other, .. } => {
+                    return Err(ImapError::Protocol(format!(
+                        "expected tag {tag}, got {other}"
+                    )));
+                }
+                Response::Untagged(Untagged::Bye(text)) => {
+                    self.closed = true;
+                    return Err(ImapError::Bye(text));
+                }
+                Response::Untagged(_) => {}
             }
         }
     }

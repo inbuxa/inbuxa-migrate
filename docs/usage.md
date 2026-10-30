@@ -13,7 +13,7 @@ and how to install it.
 ## Commands and global flags
 
 ```
-inbuxa-migrate <import|export|export-files|inspect> [args...]
+inbuxa-migrate <import|export|export-imap|export-files|inspect> [args...]
 ```
 
 Every command takes a few global flags -- verbosity, worker pool size, retry
@@ -260,7 +260,8 @@ failed.
 
 `--prune` also deletes what is on the target and not in the archive. It asks
 first; `--yes` answers for it, for scripts. Export speaks JMAP only; for
-anything else, see [Export to files](#export-to-files).
+other servers, see [Export to IMAP](#export-to-imap) and
+[Export to files](#export-to-files).
 
 With `--dry-run`, export reads the target and writes nothing to the account.
 It prints the plan in plain words: for each type, how much would be
@@ -280,6 +281,46 @@ catches in advance the failures a real run would hit:
 The plan lists each predicted failure and its reason. When anything would
 fail, the dry run exits 5, as the real run would, so a script can stop
 before it starts.
+
+## Export to IMAP
+
+```
+inbuxa-migrate export-imap \
+  --url <imap://host[:port]|imaps://host[:port]> \
+  (--auth-basic <USER> [--auth-password <PASS>] | --auth-bearer [TOKEN] --auth-user <USER>) \
+  [--allow-cleartext] [--dry-run] \
+  <ARCHIVE>
+```
+
+Writes an archive's mail into an account on any IMAP server, for a target
+that doesn't speak JMAP. It signs in the way `import imap` does, with the
+same flags. Contacts, calendars and filters don't go over IMAP; write those
+with `export-files`.
+
+Like `export`, it keeps no state. Each run reads the target folder first,
+matching messages by Message-ID, or without one by sender, subject, date and
+recipients, with size deciding between equals. What's missing is appended,
+with its flags and the time it arrived; what's there gets the archive's
+flags if they differ. So a second run writes nothing, and an interrupted run
+is finished by running it again: a message that landed before the
+connection dropped is found, not doubled.
+
+- **Folders.** The inbox goes to INBOX. A sent, drafts, trash, junk or
+  archive folder goes to the one the server marks for it with SPECIAL-USE,
+  such as Gmail's `[Gmail]/Sent Mail`, and is created with that mark when the
+  server allows it. Every other folder is created under the account's
+  personal namespace with its path, using the server's separator; that
+  separator inside a name becomes `_`. Names go as UTF-8 to a server that
+  accepts it, in modified UTF-7 otherwise.
+- **Flags.** Read, answered, flagged and draft are IMAP's own. Other keywords
+  (Junk, labels) go along where the folder keeps keywords, and the run says
+  how many were left off where it doesn't. Deleted isn't carried, so the
+  next client to expunge removes nothing that was written.
+- A message the server refuses (too large, over quota) is counted as failed
+  and the run goes on; a dropped connection ends the run.
+
+With `--dry-run` it signs in, reads the target with `EXAMINE`, and counts
+what it would create, append and update, without writing anything.
 
 ## Export to files
 

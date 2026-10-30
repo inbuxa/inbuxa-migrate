@@ -2221,3 +2221,90 @@ fn a_chunk_larger_than_the_event_queue_completes() {
     let summary = run_import(&server, "alice", archive, |_| {}).expect("import");
     assert_eq!(email_counts(&summary).created, 10, "summary={summary:?}");
 }
+
+fn append_greeting(conn: &mut MockConn, caps: &str) -> std::io::Result<()> {
+    conn.write_line("* OK ready")?;
+    let (tag, _) = conn.read_command()?;
+    conn.write_line(&format!("* CAPABILITY {caps}"))?;
+    conn.write_line(&format!("{tag} OK done"))
+}
+
+fn literal_len(cmd: &str) -> usize {
+    let open = cmd.rfind('{').expect("literal");
+    cmd[open + 1..cmd.len() - 1]
+        .trim_end_matches('+')
+        .parse()
+        .expect("length")
+}
+
+#[test]
+fn append_waits_for_the_go_ahead_without_literal_plus() {
+    let message: &'static [u8] = b"Subject: hi\r\n\r\nbody\r\n";
+    let server = MockImap::start(move |conn| {
+        use std::io::Read;
+        append_greeting(conn, "IMAP4rev1 AUTH=PLAIN")?;
+        let (tag, cmd) = conn.read_command()?;
+        assert!(
+            cmd.starts_with("APPEND \"INBOX\" (\\Seen) \" 1-Mar-2024 12:00:00 +0000\" {"),
+            "{cmd}"
+        );
+        assert!(cmd.ends_with('}') && !cmd.ends_with("+}"), "{cmd}");
+        let mut body = vec![0u8; literal_len(&cmd) + 2];
+        conn.write_line("+ go ahead")?;
+        conn.reader.read_exact(&mut body)?;
+        assert_eq!(&body[..body.len() - 2], message);
+        assert_eq!(&body[body.len() - 2..], b"\r\n");
+        conn.write_line(&format!("{tag} OK [APPENDUID 1 5] done"))?;
+        drain_until_close(conn);
+        Ok(())
+    });
+    let mut client = connect_mock(&server).expect("connect");
+    let line = client
+        .append(
+            "INBOX",
+            &["\\Seen".to_owned()],
+            Some(" 1-Mar-2024 12:00:00 +0000"),
+            message,
+        )
+        .expect("append");
+    assert_eq!(line.code.as_deref(), Some("APPENDUID"));
+}
+
+#[test]
+fn append_sends_at_once_with_literal_plus() {
+    let message: &'static [u8] = b"Subject: hi\r\n\r\nbody\r\n";
+    let server = MockImap::start(move |conn| {
+        use std::io::Read;
+        append_greeting(conn, "IMAP4rev1 LITERAL+")?;
+        let (tag, cmd) = conn.read_command()?;
+        assert!(cmd.ends_with("+}"), "{cmd}");
+        let mut body = vec![0u8; literal_len(&cmd) + 2];
+        conn.reader.read_exact(&mut body)?;
+        assert_eq!(&body[..body.len() - 2], message);
+        conn.write_line(&format!("{tag} OK done"))?;
+        drain_until_close(conn);
+        Ok(())
+    });
+    let mut client = connect_mock(&server).expect("connect");
+    client.append("INBOX", &[], None, message).expect("append");
+}
+
+#[test]
+fn append_refused_before_the_go_ahead_sends_nothing_and_keeps_the_session() {
+    let server = MockImap::start(|conn| {
+        append_greeting(conn, "IMAP4rev1")?;
+        let (tag, _) = conn.read_command()?;
+        conn.write_line(&format!("{tag} NO [TOOBIG] message too large"))?;
+        let (tag, cmd) = conn.read_command()?;
+        assert_eq!(cmd, "NOOP", "the literal must not follow a NO");
+        conn.write_line(&format!("{tag} OK noop"))?;
+        drain_until_close(conn);
+        Ok(())
+    });
+    let mut client = connect_mock(&server).expect("connect");
+    match client.append("INBOX", &[], None, b"x\r\n") {
+        Err(ImapError::No(no)) => assert!(no.text.contains("too large"), "{no:?}"),
+        other => panic!("expected NO, got {other:?}"),
+    }
+    client.noop().expect("session still usable");
+}

@@ -8,6 +8,7 @@
 pub mod batch;
 pub mod emailmeta;
 pub mod export;
+pub mod export_imap;
 pub mod import_dav;
 pub mod import_exchange_ews;
 pub mod import_exchange_graph;

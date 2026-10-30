@@ -312,7 +312,7 @@ fn flags_for(keywords: &[String], folder: &mut Folder, logger: Logger) -> String
 
 /// When the message arrived, as Unix seconds: the archive's received time,
 /// else its Date header, else now.
-fn delivery_secs(received_at: &str, message: &[u8]) -> i64 {
+pub(crate) fn delivery_secs(received_at: &str, message: &[u8]) -> i64 {
     let parsed = OffsetDateTime::parse(received_at, &Rfc3339)
         .or_else(|_| OffsetDateTime::parse(received_at, &Rfc2822))
         .map(|t| t.unix_timestamp())

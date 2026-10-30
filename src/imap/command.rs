@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 Coffey Labs LLC <legal@coffeylabs.org>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -205,6 +206,31 @@ pub fn select(mailbox: &str) -> String {
     format!("SELECT {}", quote_astring(mailbox))
 }
 
+/// `APPEND mailbox (flags) "date"`, without the literal that follows.
+pub fn append_head(mailbox: &str, flags: &[String], internal_date: Option<&str>) -> String {
+    let mut out = format!("APPEND {} ({})", quote_astring(mailbox), flags.join(" "));
+    if let Some(date) = internal_date {
+        out.push_str(&format!(" \"{date}\""));
+    }
+    out
+}
+
+pub fn create(mailbox: &str, special_use: Option<&str>) -> String {
+    match special_use {
+        Some(attr) => format!("CREATE {} (USE ({attr}))", quote_astring(mailbox)),
+        None => format!("CREATE {}", quote_astring(mailbox)),
+    }
+}
+
+pub fn subscribe(mailbox: &str) -> String {
+    format!("SUBSCRIBE {}", quote_astring(mailbox))
+}
+
+/// Replace a message's flags, without the untagged FETCH echo.
+pub fn uid_store_flags(uid: u32, flags: &[String]) -> String {
+    format!("UID STORE {uid} FLAGS.SILENT ({})", flags.join(" "))
+}
+
 pub fn examine(mailbox: &str) -> String {
     format!("EXAMINE {}", quote_astring(mailbox))
 }
@@ -331,6 +357,26 @@ mod tests {
     fn quote_astring_quotes_safe_text() {
         assert_eq!(quote_astring("hello"), "\"hello\"");
         assert_eq!(quote_astring("INBOX"), "\"INBOX\"");
+    }
+
+    #[test]
+    fn write_commands_are_shaped_as_rfc_9051_says() {
+        let flags = vec!["\\Seen".to_owned(), "$Junk".to_owned()];
+        assert_eq!(
+            append_head("Archive/2024", &flags, Some(" 1-Mar-2024 12:00:00 +0000")),
+            "APPEND \"Archive/2024\" (\\Seen $Junk) \" 1-Mar-2024 12:00:00 +0000\""
+        );
+        assert_eq!(append_head("INBOX", &[], None), "APPEND \"INBOX\" ()");
+        assert_eq!(
+            create("Sent", Some("\\Sent")),
+            "CREATE \"Sent\" (USE (\\Sent))"
+        );
+        assert_eq!(create("a", None), "CREATE \"a\"");
+        assert_eq!(subscribe("a"), "SUBSCRIBE \"a\"");
+        assert_eq!(
+            uid_store_flags(7, &flags),
+            "UID STORE 7 FLAGS.SILENT (\\Seen $Junk)"
+        );
     }
 
     #[test]

@@ -13,11 +13,18 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
   `.ics`, Sieve scripts, the file tree, and a `manifest.json` with what those
   formats don't hold. It needs no network, writes only into a new or empty
   directory, and keeps the directory private to its owner.
+- `export-imap` writes an archive's mail into any IMAP server: folders in the
+  server's own layout (SPECIAL-USE folders for sent, drafts, trash, junk and
+  archive), flags, keywords where the folder keeps them, and arrival times.
+  Like `export`, it matches what is already there, so running it again
+  writes only what changed.
 
 ### Changed
 - `import maildir` reads folder names in modified UTF-7, as Dovecot and
   Courier write them, and the custom keywords in each folder's
   `dovecot-keywords` file (Junk, labels).
+- A FETCH section with a header list, such as
+  `BODY[HEADER.FIELDS (MESSAGE-ID)]`, is read as one item.
 - `import takeout` unfolds and unescapes a calendar's `X-WR-CALNAME` and
   `X-WR-CALDESC`, so a long name or one with a comma reads back whole.
 

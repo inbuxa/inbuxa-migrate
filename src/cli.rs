@@ -20,6 +20,7 @@ use crate::jmap::account::AccountSelector;
 use crate::jmap::http::Auth;
 use crate::logging::Logger;
 use crate::secret;
+use crate::sync::export_imap::ExportImapConfig;
 use crate::sync::import_dav::{DavAuth, DavImportConfig, DavKindArg};
 use crate::sync::import_exchange_ews::{EwsAuth, EwsImportConfig};
 use crate::sync::import_exchange_graph::{GraphAuth, GraphImportConfig};
@@ -55,6 +56,11 @@ enum Command {
         name = "export-files"
     )]
     ExportFiles(Box<ExportFilesArgs>),
+    #[command(
+        about = "Write a local archive's mail into an IMAP server",
+        name = "export-imap"
+    )]
+    ExportImap(Box<ExportImapArgs>),
     #[command(about = "Show the contents of a local archive (read-only)")]
     Inspect(Box<InspectArgs>),
 }
@@ -366,6 +372,55 @@ struct ExportArgs {
 }
 
 #[derive(Args)]
+#[command(group(clap::ArgGroup::new("auth").required(true).args(["auth_basic", "auth_bearer"])))]
+struct ExportImapArgs {
+    #[arg(
+        long,
+        value_name = "URL",
+        help = "imap://host[:port] or imaps://host[:port]"
+    )]
+    url: String,
+
+    #[arg(
+        long,
+        value_name = "USER",
+        help = "PLAIN (preferred) with LOGIN fallback"
+    )]
+    auth_basic: Option<String>,
+
+    #[arg(
+        long,
+        value_name = "PASS",
+        help = "Basic password (prefer $INBUXA_MIGRATE_PASSWORD or prompt)"
+    )]
+    auth_password: Option<String>,
+
+    #[arg(
+        long,
+        value_name = "TOKEN",
+        num_args = 0..=1,
+        help = "Bearer token for XOAUTH2 (value optional: falls back to $INBUXA_MIGRATE_API_KEY or prompt)"
+    )]
+    auth_bearer: Option<Option<String>>,
+
+    #[arg(
+        long,
+        value_name = "USER",
+        help = "XOAUTH2 identity (required with --auth-bearer)"
+    )]
+    auth_user: Option<String>,
+
+    #[arg(long, help = "Permit credentials on imap:// without STARTTLS")]
+    allow_cleartext: bool,
+
+    #[command(flatten)]
+    global: GlobalArgs,
+
+    #[arg(value_name = "ARCHIVE", help = "Local SQLite archive")]
+    archive: PathBuf,
+}
+
+#[derive(Args)]
 struct ExportFilesArgs {
     #[arg(
         long,
@@ -428,6 +483,7 @@ pub enum Action {
     ImportExchangeGraph(CommonConfig, GraphImportConfig),
     Export(CommonConfig, ExportConfig),
     ExportFiles(ExportFilesConfig),
+    ExportImap(CommonConfig, ExportImapConfig),
     Inspect(InspectConfig),
 }
 
@@ -554,6 +610,7 @@ impl Cli {
             Command::Import { source } => resolve_import(source),
             Command::Export(args) => resolve_export(*args),
             Command::ExportFiles(args) => resolve_export_files(*args),
+            Command::ExportImap(args) => resolve_export_imap(*args),
             Command::Inspect(args) => resolve_inspect(*args),
         }
     }
@@ -928,6 +985,24 @@ fn resolve_export(args: ExportArgs) -> Result<Action, Error> {
             objects,
             prune: args.prune,
             yes: args.yes,
+        },
+    ))
+}
+
+fn resolve_export_imap(args: ExportImapArgs) -> Result<Action, Error> {
+    let common = common_config(&args.global, args.archive);
+    let auth = resolve_imap_auth(
+        args.auth_basic.as_deref(),
+        args.auth_password.as_deref(),
+        args.auth_bearer.as_ref(),
+        args.auth_user.as_deref(),
+    )?;
+    Ok(Action::ExportImap(
+        common,
+        ExportImapConfig {
+            url: args.url,
+            auth,
+            allow_cleartext: args.allow_cleartext,
         },
     ))
 }

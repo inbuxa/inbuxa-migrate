@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 Coffey Labs LLC <legal@coffeylabs.org>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -420,11 +421,18 @@ impl<'r, R: BufRead> Parser<'r, R> {
 
     fn read_fetch_item_name(&mut self) -> Result<String, ImapError> {
         let start = self.pos;
+        // A section such as `BODY[HEADER.FIELDS (MESSAGE-ID)]` is one name,
+        // spaces and parentheses included.
+        let mut depth = 0usize;
         while let Some(b) = self.peek() {
             match b {
-                b' ' | b'\r' | b'\n' | b')' | b'(' => break,
-                _ => self.bump(),
+                b'[' => depth += 1,
+                b']' => depth = depth.saturating_sub(1),
+                b'\r' | b'\n' => break,
+                b' ' | b')' | b'(' if depth == 0 => break,
+                _ => {}
             }
+            self.bump();
         }
         let bytes = &self.buf[start..self.pos];
         std::str::from_utf8(bytes)
@@ -1051,6 +1059,22 @@ mod tests {
                 assert_eq!(internaldate.1.as_str(), Some("17-Jul-1996 02:44:25 -0700"));
             }
             _ => panic!("expected Fetch"),
+        }
+    }
+
+    #[test]
+    fn fetch_section_with_a_header_list_is_one_item() {
+        let input = b"* 3 FETCH (UID 9 BODY[HEADER.FIELDS (MESSAGE-ID DATE)] {22}\r\nMessage-ID: <a@b>\r\n\r\n FLAGS (\\Seen))\r\n";
+        let mut reader = std::io::BufReader::new(&input[..]);
+        match parse_response(&mut reader).unwrap() {
+            Response::Untagged(Untagged::Fetch { items, .. }) => {
+                let names: Vec<&str> = items.iter().map(|(n, _)| n.as_str()).collect();
+                assert_eq!(
+                    names,
+                    ["UID", "BODY[HEADER.FIELDS (MESSAGE-ID DATE)]", "FLAGS"]
+                );
+            }
+            other => panic!("unexpected {other:?}"),
         }
     }
 

@@ -484,7 +484,7 @@ pub struct Endpoint {
     pub implicit_tls: bool,
 }
 
-fn parse_endpoint(url: &str) -> Result<Endpoint, Error> {
+pub(crate) fn parse_endpoint(url: &str) -> Result<Endpoint, Error> {
     let parsed =
         Url::parse(url).map_err(|e| Error::Usage(format!("invalid --url {url:?}: {e}")))?;
     let scheme = parsed.scheme();
@@ -515,7 +515,7 @@ pub(super) fn authenticate_client(client: &mut ImapClient, auth: &ImapAuth) -> R
     authenticate(client, auth).map(|_| ())
 }
 
-fn authenticate(client: &mut ImapClient, auth: &ImapAuth) -> Result<String, Error> {
+pub(crate) fn authenticate(client: &mut ImapClient, auth: &ImapAuth) -> Result<String, Error> {
     match auth {
         ImapAuth::Basic { user, password } => {
             if client.has_capability("AUTH=PLAIN") {
@@ -568,7 +568,7 @@ fn is_auth_failed(e: &ImapError) -> bool {
     }
 }
 
-fn discover_namespace(client: &mut ImapClient, logger: Logger) -> Result<String, Error> {
+pub(crate) fn discover_namespace(client: &mut ImapClient, logger: Logger) -> Result<String, Error> {
     if !client.has_capability("NAMESPACE") {
         return Ok(String::new());
     }
