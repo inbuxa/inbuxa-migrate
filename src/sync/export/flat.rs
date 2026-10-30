@@ -12,7 +12,7 @@ use super::common::{create_batch, jid, target_get_all};
 use super::{Maps, Net, Plan};
 use crate::error::Error;
 use crate::jmap::wire::JmapId;
-use crate::logging::Logger;
+use crate::logging::{LEVEL_PROGRESS, Logger};
 use crate::sync::import_jmap::mapping::{
     ADDRESS_BOOK_SELECT, CALENDAR_SELECT, row_to_address_book, row_to_calendar,
 };
@@ -83,7 +83,16 @@ pub fn reconcile(
                     Ok(if ty == ObjectType::AddressBook {
                         row_to_address_book(row).map(|w| serde_json::to_value(&w))
                     } else {
-                        row_to_calendar(row).map(|w| serde_json::to_value(&w))
+                        row_to_calendar(row).map(|mut w| {
+                            if let Some(dropped) = w.normalize_color()
+                                && logger.enabled(LEVEL_PROGRESS)
+                            {
+                                eprintln!(
+                                    "Calendar {local}: dropping color {dropped:?}, not a CSS color name or #RGB/#RRGGBB value"
+                                );
+                            }
+                            serde_json::to_value(&w)
+                        })
                     })
                 })
                 .map_err(|e| Error::Partial(e.to_string()))?

@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 Coffey Labs LLC <legal@coffeylabs.org>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -29,12 +30,8 @@ pub fn resolve_any(
     if let Some(value) = flag_value {
         return Ok(value.to_owned());
     }
-    for env_var in env_vars {
-        if let Ok(value) = std::env::var(env_var)
-            && !value.is_empty()
-        {
-            return Ok(value);
-        }
+    if let Some(value) = from_env(env_vars) {
+        return Ok(value);
     }
     if std::io::stdin().is_terminal() {
         return prompt_no_echo(prompt_label);
@@ -43,6 +40,13 @@ pub fn resolve_any(
         "no {prompt_label} provided: pass the flag, set ${}, or run on a TTY for an interactive prompt",
         env_vars[0]
     )))
+}
+
+/// The first of `env_vars` that is set and not empty.
+pub fn from_env(env_vars: &[&str]) -> Option<String> {
+    env_vars
+        .iter()
+        .find_map(|var| std::env::var(var).ok().filter(|v| !v.is_empty()))
 }
 
 fn prompt_no_echo(label: &str) -> Result<String, Error> {

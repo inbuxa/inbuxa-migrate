@@ -18,7 +18,7 @@ use integration::{Account, Endpoint};
 
 use inbuxa_migrate::error::Error;
 use inbuxa_migrate::sync::import_dav;
-use inbuxa_migrate::sync::import_dav::{DavAuth, DavImportConfig, DavKindArg};
+use inbuxa_migrate::sync::import_dav::{DavAuth, DavImportConfig, DavKindArg, SourceChange};
 
 fn webdav_config(account: &Account, http: &Endpoint) -> DavImportConfig {
     DavImportConfig {
@@ -31,7 +31,7 @@ fn webdav_config(account: &Account, http: &Endpoint) -> DavImportConfig {
         allow_cleartext: true,
         dav_connections: 2,
         multiget_batch: 25,
-        allow_source_change: false,
+        source_change: SourceChange::Reject,
     }
 }
 

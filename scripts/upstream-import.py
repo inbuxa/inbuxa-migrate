@@ -22,12 +22,13 @@
 #
 # --first starts the branch. Give it the upstream commit the fork was made
 # from; the snapshot's parent is that commit. Merge it into main once with
-# `git merge -s ours upstream`, which records that main already has it, and
-# later imports merge cleanly against it.
+# `git merge -s ours refs/heads/upstream`, which records that main already
+# has it, and later imports merge cleanly against it. Name the branch in
+# full: plain `upstream` is also the remote.
 #
 # After an import:
 #   git switch -c import/upstream-REF origin/main
-#   git merge upstream
+#   git merge refs/heads/upstream
 #   (resolve; for Cargo.lock take main's and let `cargo build` add what's new)
 # then the usual checks and a PR. Push `upstream` to origin only once that PR
 # has landed. The upstream-watch workflow reads the imported release from the

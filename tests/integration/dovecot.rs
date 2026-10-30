@@ -359,6 +359,23 @@ impl Dovecot {
         Ok(())
     }
 
+    pub fn create_leaves_without_parents(
+        &self,
+        account: &Account,
+        leaves: &[&str],
+        message: &[u8],
+    ) -> ContainerResult<Vec<String>> {
+        let mut client = ImapSeed::connect(&self.imap.host, self.imap.port)?;
+        client.login(&account.username, &account.password)?;
+        for name in leaves {
+            client.create(name)?;
+            client.append_with_flags(name, &[], message)?;
+        }
+        let listed = client.list_raw()?;
+        client.logout()?;
+        Ok(listed)
+    }
+
     pub fn delete_first_inbox_message(&self, account: &Account) -> ContainerResult<()> {
         let mut client = ImapSeed::connect(&self.imap.host, self.imap.port)?;
         client.login(&account.username, &account.password)?;

@@ -12,10 +12,12 @@ use serde_json::{Value, json};
 use super::common::{create_batch, jid, retry_if_blob_missing, target_get_all, update_batch};
 use super::sieve_names;
 use super::{Maps, Net, Plan, Uploader};
+use crate::db;
 use crate::error::Error;
 use crate::jmap::blobxfer;
 use crate::jmap::error::JmapError;
-use crate::jmap::request::{Request, URN_INBUXA, check_method_error};
+use crate::jmap::request::{Request, URN_INBUXA, URN_VACATION_RESPONSE, check_method_error};
+use crate::jmap::wire::vacation_response::VacationResponse;
 use crate::logging::{LEVEL_DEFAULT, Logger};
 use crate::sync::import_jmap::mapping::BlobBytes;
 use crate::sync::import_jmap::mapping::{SIEVE_SELECT, row_to_sieve_script};
@@ -44,7 +46,11 @@ pub fn reconcile(
         target_by_name.insert(name.to_owned(), id);
     }
 
-    let locals: Vec<(i64, Option<String>, bool, i64)> = {
+    let target_has_vacation = net.session.may_support(&net.account, URN_VACATION_RESPONSE);
+    let vacation_exported = target_has_vacation
+        && db::vacation_response::exists(&ctx.conn).map_err(|e| Error::Partial(e.to_string()))?;
+
+    let mut locals: Vec<(i64, Option<String>, bool, i64)> = {
         let mut stmt = ctx
             .conn
             .prepare(SIEVE_SELECT)
@@ -62,6 +68,16 @@ pub fn reconcile(
         })
         .collect::<Result<_, Error>>()?
     };
+
+    if vacation_exported {
+        let before = locals.len();
+        locals.retain(|(_, name, _, _)| {
+            !name
+                .as_deref()
+                .is_some_and(VacationResponse::is_reserved_script_name)
+        });
+        counts.skipped += (before - locals.len()) as u64;
+    }
 
     let mut active_target: Option<String> = None;
     let mut deactivate = false;
@@ -222,6 +238,9 @@ pub fn reconcile(
     let mut prune_candidates: Vec<String> = target_by_name
         .iter()
         .filter(|(name, _)| !local_names.contains(*name))
+        .filter(|(name, _)| {
+            !(target_has_vacation && VacationResponse::is_reserved_script_name(name))
+        })
         .map(|(_, id)| id.clone())
         .collect();
     prune_candidates.sort();

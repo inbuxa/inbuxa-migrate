@@ -70,10 +70,17 @@ pub fn open_read_only(path: &std::path::Path) -> Result<Connection, OpenError> {
     let missing: Vec<&str> = schema_tables()
         .filter(|t| !present.iter().any(|p| p == t))
         .collect();
-    let has_data_type = conn
-        .prepare("SELECT 1 FROM pragma_table_info('calendar_events') WHERE name = 'data_type'")?
-        .exists([])?;
-    if !missing.is_empty() || !has_data_type {
+    // Columns added to tables older archives already have.
+    let mut has_columns = true;
+    for (table, column) in [
+        ("calendar_events", "data_type"),
+        ("file_nodes", "executable"),
+    ] {
+        has_columns &= conn
+            .prepare("SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2")?
+            .exists([table, column])?;
+    }
+    if !missing.is_empty() || !has_columns {
         return Err(OpenError::NotAnArchive(format!(
             "{} was written by an older inbuxa-migrate and lacks part of today's layout; \
              the next import into it brings it up to date",
@@ -122,6 +129,7 @@ pub fn apply_schema(conn: &Connection) -> Result<(), OpenError> {
     let tx = conn.unchecked_transaction()?;
     tx.execute_batch(SCHEMA_SQL)?;
     ensure_calendar_events_data_type(&tx)?;
+    ensure_file_nodes_executable(&tx)?;
     ensure_graph_ids_accept_file_nodes(&tx)?;
     ensure_dav_ids_share_local_rows(&tx)?;
     tx.commit()?;
@@ -129,14 +137,34 @@ pub fn apply_schema(conn: &Connection) -> Result<(), OpenError> {
 }
 
 fn ensure_calendar_events_data_type(conn: &Connection) -> Result<(), OpenError> {
-    let mut stmt = conn.prepare("PRAGMA table_info(calendar_events)")?;
+    ensure_column(
+        conn,
+        "calendar_events",
+        "data_type",
+        "ALTER TABLE calendar_events ADD COLUMN data_type TEXT NOT NULL DEFAULT 'Event'",
+    )
+}
+
+fn ensure_file_nodes_executable(conn: &Connection) -> Result<(), OpenError> {
+    ensure_column(
+        conn,
+        "file_nodes",
+        "executable",
+        "ALTER TABLE file_nodes ADD COLUMN executable INTEGER NOT NULL DEFAULT 0",
+    )
+}
+
+fn ensure_column(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    alter: &str,
+) -> Result<(), OpenError> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
     let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
-    let has_column = rows.filter_map(|r| r.ok()).any(|name| name == "data_type");
+    let has_column = rows.filter_map(|r| r.ok()).any(|name| name == column);
     if !has_column {
-        conn.execute(
-            "ALTER TABLE calendar_events ADD COLUMN data_type TEXT NOT NULL DEFAULT 'Event'",
-            [],
-        )?;
+        conn.execute(alter, [])?;
     }
     Ok(())
 }

@@ -377,16 +377,28 @@ fn graph_import_survives_a_full_export_to_stalwart() {
         .find(|c| c["name"]["full"] == "Graph Contact")
         .expect("the imported card reached the target");
 
-    let uri = card["media"]
+    let photo = card["media"]
         .as_object()
         .and_then(|m| m.values().next())
-        .and_then(|m| m["uri"].as_str())
         .expect("the contact photo survived as a Media resource");
-    assert!(
-        uri.starts_with("data:image/png;base64,"),
+    let media_type = match photo["uri"].as_str() {
+        Some(uri) => uri
+            .strip_prefix("data:")
+            .and_then(|rest| rest.split_once(';'))
+            .map(|(mt, _)| mt),
+        None => {
+            assert!(
+                photo["blobId"].is_string(),
+                "the photo is either an inline data URI or an embedded blob: {photo}"
+            );
+            photo["mediaType"].as_str()
+        }
+    };
+    assert_eq!(
+        media_type,
+        Some("image/png"),
         "Graph reports image/jpeg for every contact photo, so the media type must come \
-         from the bytes; got {}",
-        &uri[..uri.len().min(40)]
+         from the bytes; got {photo}"
     );
     assert_eq!(card["keywords"]["work"], true, "categories became keywords");
     assert_eq!(
@@ -409,16 +421,24 @@ fn graph_import_survives_a_full_export_to_stalwart() {
         .iter()
         .find(|e| e["title"] == "Event with an enclosure")
         .expect("the event with an attachment reached the target");
-    let href = enclosure["links"]
+    let link = enclosure["links"]
         .as_object()
         .and_then(|m| m.values().next())
-        .and_then(|l| l["href"].as_str())
         .expect("the attachment survived as a Link");
-    assert!(
-        href.starts_with("data:text/plain;base64,"),
-        "got {}",
-        &href[..href.len().min(40)]
-    );
+    match link["href"].as_str() {
+        Some(href) => assert!(
+            href.starts_with("data:text/plain;base64,"),
+            "got {}",
+            &href[..href.len().min(40)]
+        ),
+        None => {
+            assert!(
+                link["blobId"].is_string(),
+                "the attachment is either an inline data URI or an embedded blob: {link}"
+            );
+            assert_eq!(link["contentType"], "text/plain", "got {link}");
+        }
+    }
 
     let series = events
         .iter()
@@ -449,7 +469,7 @@ fn graph_import_survives_a_full_export_to_stalwart() {
     assert!(
         files
             .iter()
-            .any(|f| f["name"] == "report.txt" && f["blobId"].is_string()),
+            .any(|f| f["name"] == "report.txt" && f["@type"] == "File" && f["blobId"].is_string()),
         "the drive file reached the target with a blob"
     );
     assert!(

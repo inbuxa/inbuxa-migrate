@@ -20,22 +20,24 @@ use crate::jmap::blobxfer;
 use crate::jmap::connect::{self, Connected};
 use crate::jmap::error::JmapError;
 use crate::jmap::http::HttpClient;
-use crate::jmap::request::{Request, SetRequest, get_all, get_objects, query_all_ids, set_call};
+use crate::jmap::request::{
+    Request, SetRequest, URN_VACATION_RESPONSE, get_all, get_objects, query_all_ids, set_call,
+};
 use crate::jmap::session::{Limits, Session};
 use crate::jmap::wire::JmapId;
+use crate::jmap::wire::vacation_response;
 use crate::logging::{LEVEL_DEFAULT, Logger};
 use crate::sync::import_jmap::mapping::{BlobBytes, TargetResolver};
 use crate::sync::{CommonConfig, Context, ExportConfig, Summary, TypeCounts};
 use crate::types::ObjectType;
 
-const EXPORT_ORDER: [ObjectType; 10] = [
+const EXPORT_ORDER: [ObjectType; 9] = [
     ObjectType::Mailbox,
     ObjectType::AddressBook,
     ObjectType::Calendar,
     ObjectType::FileNode,
     ObjectType::Identity,
     ObjectType::SieveScript,
-    ObjectType::ParticipantIdentity,
     ObjectType::Email,
     ObjectType::ContactCard,
     ObjectType::CalendarEvent,
@@ -417,6 +419,35 @@ pub fn run(common: CommonConfig, config: ExportConfig) -> Result<Summary, Error>
         }
     }
 
+    if config
+        .objects
+        .as_ref()
+        .is_none_or(|s| s.contains(&ObjectType::SieveScript))
+        && net.session.may_support(&net.account, URN_VACATION_RESPONSE)
+    {
+        let mut counts = TypeCounts::default();
+        let present = match vacation::reconcile(&ctx, &net, &mut counts, &logger) {
+            Ok(present) => present,
+            Err(e) if e.aborts_run() => return Err(e),
+            Err(e) => {
+                logger.warn(&format!(
+                    "type {} aborted: {e}",
+                    vacation_response::TYPE_NAME
+                ));
+                counts.failed += 1;
+                true
+            }
+        };
+        if present {
+            if ctx.dry_run() {
+                dry_rows.push((vacation_response::TYPE_NAME, counts.updated, 0, 0));
+            }
+            summary
+                .per_type
+                .push((vacation_response::TYPE_NAME, counts));
+        }
+    }
+
     if ctx.dry_run() {
         let would_fail = net.would_fail.lock().expect("would-fail list").clone();
         print_plan(&summary, &dry_rows, &would_fail, config.prune);
@@ -487,6 +518,16 @@ fn work_list(
     logger: &Logger,
 ) -> Vec<ObjectType> {
     let selected = config.objects.as_ref();
+    let participant = ObjectType::ParticipantIdentity;
+    if selected.is_none_or(|s| s.contains(&participant))
+        && has_rows(conn, participant)
+        && logger.enabled(LEVEL_DEFAULT)
+    {
+        eprintln!(
+            "export: {} not exported; the target creates participant identities from the account's addresses",
+            participant.jmap_name()
+        );
+    }
     EXPORT_ORDER
         .into_iter()
         .filter(|ty| selected.map(|s| s.contains(ty)).unwrap_or(true))
@@ -523,9 +564,7 @@ fn reconcile_type(
             flat::reconcile(ctx, net, ty, maps, counts, logger)
         }
         ObjectType::Identity => keyed::reconcile_identity(ctx, net, maps, counts, logger),
-        ObjectType::ParticipantIdentity => {
-            keyed::reconcile_participant(ctx, net, maps, counts, logger)
-        }
+        ObjectType::ParticipantIdentity => Ok(Plan::default()),
         ObjectType::SieveScript => sieve::reconcile(ctx, net, maps, counts, logger),
         ObjectType::ContactCard | ObjectType::CalendarEvent => {
             uidtype::reconcile(ctx, net, ty, maps, counts, logger)
@@ -552,7 +591,7 @@ pub struct Plan {
 }
 
 fn do_destroy(net: &Net, ty: ObjectType, plan: &Plan, logger: &Logger, counts: &mut TypeCounts) {
-    if ty == ObjectType::SieveScript {
+    if ty == ObjectType::SieveScript && plan.active_sieve_target.is_none() {
         deactivate_active_sieve_script(net, logger);
     }
     let destroy = Value::Array(
@@ -700,6 +739,7 @@ mod keyed;
 mod sieve;
 
 mod sieve_names;
+mod vacation;
 
 mod uidtype;
 

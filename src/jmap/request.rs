@@ -18,6 +18,8 @@ use crate::logging::Logger;
 
 pub const URN_CORE: &str = "urn:ietf:params:jmap:core";
 
+pub const URN_VACATION_RESPONSE: &str = "urn:ietf:params:jmap:vacationresponse";
+
 /// The session capability every inbuxa server has.
 pub const URN_INBUXA: &str = "urn:inbuxa:jmap";
 
@@ -50,6 +52,7 @@ pub fn using_urn(method: &str, registry: Option<&'static str>) -> Result<&'stati
         "Calendar" | "CalendarEvent" | "ParticipantIdentity" => "urn:ietf:params:jmap:calendars",
         "FileNode" => "urn:ietf:params:jmap:filenode",
         "Principal" => "urn:ietf:params:jmap:principals",
+        "VacationResponse" => URN_VACATION_RESPONSE,
         _ => URN_CORE,
     })
 }

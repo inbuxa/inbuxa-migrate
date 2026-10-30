@@ -2394,3 +2394,248 @@ fn coordinator_signs_in_to_gmail_as_a_service_account_acting_for_the_user() {
     // Both connections signed in on the one token.
     _token.assert();
 }
+
+const NOSELECT_LIST: &[&str] = &[
+    "* LIST (\\HasChildren) \"/\" \"INBOX\"",
+    "* LIST (\\Noselect \\HasChildren) \"/\" \"INBOX/Projects\"",
+    "* LIST (\\HasNoChildren) \"/\" \"INBOX/Projects/Invoices\"",
+    "* LIST (\\Noselect \\HasChildren) \"/\" \"A\"",
+    "* LIST (\\HasNoChildren) \"/\" \"A/B/Reports\"",
+    "* LIST (\\Noselect \\HasChildren) \"/\" \"Clients \"",
+    "* LIST (\\HasNoChildren) \"/\" \"Clients /Reports\"",
+    "* LIST (\\HasChildren) \"/\" \"Clients\"",
+    "* LIST (\\HasNoChildren) \"/\" \"Clients/Reports\"",
+];
+
+const NOSELECT_SELECTABLE: &[&str] = &[
+    "INBOX",
+    "INBOX/Projects/Invoices",
+    "A/B/Reports",
+    "Clients /Reports",
+    "Clients",
+    "Clients/Reports",
+];
+
+fn noselect_control_script(selected: std::sync::Arc<Mutex<Vec<String>>>) -> Script {
+    Box::new(move |conn: &mut MockConn| -> std::io::Result<()> {
+        auth_preamble(conn, "IMAP4rev2 LITERAL+ AUTH=PLAIN")?;
+        while let Ok((tag, cmd)) = conn.read_command() {
+            if cmd.starts_with("LIST") {
+                for line in NOSELECT_LIST {
+                    conn.write_line(line)?;
+                }
+                conn.write_line(&format!("{tag} OK LIST done"))?;
+            } else if let Some(name) = cmd
+                .strip_prefix("SELECT ")
+                .or_else(|| cmd.strip_prefix("EXAMINE "))
+            {
+                selected
+                    .lock()
+                    .expect("selected")
+                    .push(name.trim_matches('"').to_owned());
+                write_select(conn, &tag, 7, 1, 0)?;
+            } else if cmd.starts_with("UID SEARCH") {
+                conn.write_line("* SEARCH")?;
+                conn.write_line(&format!("{tag} OK SEARCH done"))?;
+            } else if cmd.starts_with("LOGOUT") {
+                conn.write_line("* BYE bye")?;
+                conn.write_line(&format!("{tag} OK"))?;
+                break;
+            } else {
+                assert!(
+                    !cmd.starts_with("STATUS") && !cmd.contains("FETCH"),
+                    "unexpected {cmd}"
+                );
+                conn.write_line(&format!("{tag} OK"))?;
+            }
+        }
+        Ok(())
+    })
+}
+
+fn mailbox_tree(conn: &Connection) -> Vec<(i64, String, Option<String>)> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT m.id, s.folder, p.name FROM mailboxes m
+             JOIN sync_id_imap s ON s.local_id = m.id AND s.type_name = 'mailbox'
+             LEFT JOIN mailboxes p ON p.id = m.parent_id
+             ORDER BY s.folder",
+        )
+        .unwrap();
+    stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+}
+
+fn assert_noselect_tree(conn: &Connection) {
+    let tree = mailbox_tree(conn);
+    let pairs: Vec<(&str, Option<&str>)> = tree
+        .iter()
+        .map(|(_, f, p)| (f.as_str(), p.as_deref()))
+        .collect();
+    assert_eq!(
+        pairs,
+        [
+            ("A", None),
+            ("A/B", Some("A")),
+            ("A/B/Reports", Some("B")),
+            ("Clients", None),
+            ("Clients ", None),
+            ("Clients /Reports", Some("Clients ")),
+            ("Clients/Reports", Some("Clients")),
+            ("INBOX", None),
+            ("INBOX/Projects", Some("INBOX")),
+            ("INBOX/Projects/Invoices", Some("Projects")),
+        ]
+    );
+    let roles: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM mailboxes WHERE role IS NOT NULL AND name IN ('Projects', 'A', 'B', 'Clients ')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(roles, 0);
+}
+
+fn assert_only_selectable_selected(selected: &Mutex<Vec<String>>) {
+    let mut got = selected.lock().expect("selected").clone();
+    got.sort_unstable();
+    let mut want: Vec<String> = NOSELECT_SELECTABLE
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+    want.sort_unstable();
+    assert_eq!(got, want);
+}
+
+#[test]
+fn coordinator_keeps_noselect_ancestors_and_never_selects_them() {
+    let first = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let second = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let server = MockImap::start_scripts(vec![
+        noselect_control_script(first.clone()),
+        noselect_control_script(second.clone()),
+    ]);
+    let archive = tempfile("noselect");
+    let summary = run_import(&server, "alice", archive.clone(), |_| {}).expect("import");
+    let mailbox = summary
+        .per_type
+        .iter()
+        .find(|(k, _)| *k == "mailbox")
+        .unwrap();
+    assert_eq!(mailbox.1.created, 10);
+    assert_eq!(mailbox.1.failed, 0);
+    assert_only_selectable_selected(&first);
+    let before = {
+        let conn = Connection::open(&archive).unwrap();
+        assert_noselect_tree(&conn);
+        mailbox_tree(&conn)
+    };
+
+    let summary = run_import(&server, "alice", archive.clone(), |_| {}).expect("reimport");
+    let mailbox = summary
+        .per_type
+        .iter()
+        .find(|(k, _)| *k == "mailbox")
+        .unwrap();
+    assert_eq!((mailbox.1.created, mailbox.1.deleted), (0, 0));
+    assert_only_selectable_selected(&second);
+    let conn = Connection::open(&archive).unwrap();
+    assert_eq!(mailbox_tree(&conn), before);
+}
+
+#[test]
+fn coordinator_heals_archive_missing_noselect_parents() {
+    let first = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let second = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let server = MockImap::start_scripts(vec![
+        noselect_control_script(first),
+        noselect_control_script(second),
+    ]);
+    let archive = tempfile("noselect_heal");
+    run_import(&server, "alice", archive.clone(), |_| {}).expect("import");
+    let child_id = {
+        let conn = Connection::open(&archive).unwrap();
+        let tree = mailbox_tree(&conn);
+        let child = tree
+            .iter()
+            .find(|(_, f, _)| f == "INBOX/Projects/Invoices")
+            .unwrap()
+            .0;
+        // simulate an archive written before structural parents were kept
+        conn.execute(
+            "UPDATE mailboxes SET parent_id = NULL WHERE id = ?1",
+            [child],
+        )
+        .unwrap();
+        let parent: i64 = conn
+            .query_row(
+                "SELECT local_id FROM sync_id_imap WHERE type_name = 'mailbox' AND folder = 'INBOX/Projects'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        conn.execute(
+            "DELETE FROM sync_id_imap WHERE type_name = 'mailbox' AND folder = 'INBOX/Projects'",
+            [],
+        )
+        .unwrap();
+        conn.execute("DELETE FROM mailboxes WHERE id = ?1", [parent])
+            .unwrap();
+        child
+    };
+    run_import(&server, "alice", archive.clone(), |_| {}).expect("reimport");
+    let conn = Connection::open(&archive).unwrap();
+    assert_noselect_tree(&conn);
+    let healed = mailbox_tree(&conn)
+        .into_iter()
+        .find(|(_, f, _)| f == "INBOX/Projects/Invoices")
+        .unwrap()
+        .0;
+    assert_eq!(healed, child_id);
+}
+
+#[test]
+fn dry_run_never_selects_noselect_ancestors() {
+    let selected = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let server = MockImap::start_scripts(vec![noselect_control_script(selected.clone())]);
+    let archive = tempfile("noselect_dry");
+    let common = CommonConfig {
+        archive: archive.clone(),
+        threads: 1,
+        dry_run: true,
+        max_retries: 1,
+        allow_invalid_certs: false,
+        logger: Logger::from_flags(true, 0),
+    };
+    let config = ImapImportConfig {
+        url: server.url(),
+        auth: ImapAuth::Basic {
+            user: "alice".to_owned(),
+            password: "p@ss".to_owned(),
+        },
+        allow_cleartext: true,
+        compress: false,
+        include: Vec::new(),
+        exclude: Vec::new(),
+        exclude_special: Vec::new(),
+        folder: Vec::new(),
+        subscribed_only: false,
+        automap: true,
+        include_deleted: false,
+        fetch_batch: 256,
+        fetch_batch_bytes: inbuxa_migrate::sync::batch::DEFAULT_BATCH_BYTES,
+        imap_connections: 1,
+        allow_source_change: false,
+    };
+    let summary = run(common, config).expect("dry run");
+    let mailbox = summary
+        .per_type
+        .iter()
+        .find(|(k, _)| *k == "mailbox")
+        .unwrap();
+    assert_eq!(mailbox.1.created, 10);
+    assert_only_selectable_selected(&selected);
+}

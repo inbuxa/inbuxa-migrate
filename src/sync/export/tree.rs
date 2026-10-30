@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 Coffey Labs LLC <legal@coffeylabs.org>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -7,12 +8,14 @@
 use std::collections::{HashMap, HashSet};
 
 use rusqlite::params;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use super::common::{create_batch, jid, retry_if_blob_missing, target_query_get};
 use super::{Net, Plan, Uploader};
 use crate::error::Error;
+use crate::jmap::request::{Request, URN_INBUXA};
 use crate::jmap::wire::JmapId;
+use crate::jmap::wire::file_node::{NodeKind, Shape, for_server};
 use crate::logging::Logger;
 use crate::sync::import_jmap::mapping::{
     FILE_NODE_SELECT, MAILBOX_SELECT, TargetResolver, row_to_file_node, row_to_mailbox,
@@ -61,22 +64,70 @@ fn load_local(ctx: &Context, ty: ObjectType) -> Result<Vec<LocalNode>, Error> {
 fn load_target(net: &Net, ty: ObjectType) -> Result<Vec<TargetNode>, Error> {
     let props: &[&str] = &["role", "name", "parentId", "myRights"];
     let list = target_query_get(net, ty, Some(props)).map_err(Error::from)?;
+    let mut own_rights: HashMap<&str, bool> = HashMap::with_capacity(list.len());
+    for v in &list {
+        if let (Some(id), Some(may)) = (
+            v.get("id").and_then(Value::as_str),
+            v.get("myRights")
+                .and_then(|r| r.get("mayDelete"))
+                .and_then(Value::as_bool),
+        ) {
+            own_rights.insert(id, may);
+        }
+    }
     Ok(list
         .iter()
         .filter_map(|v| {
+            let id = jid(v)?;
+            let parent = v.get("parentId").and_then(Value::as_str);
+            let may_delete = own_rights
+                .get(id.as_str())
+                .or_else(|| parent.and_then(|p| own_rights.get(p)))
+                .copied()
+                .unwrap_or(true);
             Some(TargetNode {
-                id: jid(v)?,
-                parent: v.get("parentId").and_then(Value::as_str).map(str::to_owned),
+                id,
+                parent: parent.map(str::to_owned),
                 name: v.get("name").and_then(Value::as_str)?.to_owned(),
                 role: v.get("role").and_then(Value::as_str).map(str::to_owned),
-                may_delete: v
-                    .get("myRights")
-                    .and_then(|r| r.get("mayDelete"))
-                    .and_then(Value::as_bool)
-                    .unwrap_or(true),
+                may_delete,
             })
         })
         .collect())
+}
+
+/// The FileNode shape the target takes. Nothing in the session says, so this
+/// asks with a query sorted by `type`: a server on the 0.16 line answers it,
+/// and a draft-18 one refuses it as `unsupportedSort`, the property being
+/// gone. It writes nothing. Any other answer leaves it to the session, and
+/// inbuxa takes the 0.16 shape.
+fn file_node_shape(net: &Net) -> Shape {
+    let mut req = Request::new();
+    req.call(
+        "FileNode/query",
+        json!({
+            "accountId": net.account,
+            "sort": [{"property": "type", "isAscending": true}],
+            "limit": 1,
+        }),
+        "shape",
+    );
+    let answer = req.send(&net.client, &net.api);
+    let call = answer
+        .as_ref()
+        .ok()
+        .and_then(|r| r.by_call_id("shape").ok());
+    match call {
+        Some(c) if c.name == "FileNode/query" => Shape::Legacy,
+        Some(c)
+            if c.name == "error"
+                && c.args.get("type").and_then(Value::as_str) == Some("unsupportedSort") =>
+        {
+            Shape::Draft18
+        }
+        _ if net.session.capabilities.contains_key(URN_INBUXA) => Shape::Legacy,
+        _ => Shape::Draft18,
+    }
 }
 
 fn depth(local: i64, by: &HashMap<i64, Option<i64>>) -> usize {
@@ -197,6 +248,7 @@ pub fn reconcile(
         .max()
         .unwrap_or(0);
 
+    let shape = (ty == ObjectType::FileNode && !to_create.is_empty()).then(|| file_node_shape(net));
     let mut uploader = Uploader::new(net, &ctx.conn);
     let mut taken_roles: HashSet<String> = targets.iter().filter_map(|t| t.role.clone()).collect();
     let interleave = ty == ObjectType::FileNode;
@@ -240,7 +292,7 @@ pub fn reconcile(
                 }
                 let cid = format!("c{}", n.local);
                 let _ = uploader.take_touched();
-                let obj = match build_create(ctx, ty, n.local, maps, &mut uploader) {
+                let obj = match build_create(ctx, ty, n.local, maps, &mut uploader, shape) {
                     Ok(o) => o,
                     Err(e) => {
                         logger.warn(&format!(
@@ -262,7 +314,7 @@ pub fn reconcile(
                     &mut uploader,
                     touched,
                     outcome,
-                    |up| build_create(ctx, ty, n.local, maps, up),
+                    |up| build_create(ctx, ty, n.local, maps, up, shape),
                 ) {
                     Ok(o) => o,
                     Err(e) => {
@@ -335,7 +387,7 @@ pub fn reconcile(
                 counts.skipped += 1;
                 continue;
             }
-            match build_create(ctx, ty, n.local, maps, &mut uploader) {
+            match build_create(ctx, ty, n.local, maps, &mut uploader, shape) {
                 Ok(mut obj) => {
                     if ty == ObjectType::Mailbox
                         && let Some(r) = n.role.as_deref()
@@ -418,6 +470,7 @@ fn build_create(
     local: i64,
     maps: &Maps,
     uploader: &mut Uploader<'_>,
+    shape: Option<Shape>,
 ) -> Result<Value, Error> {
     if ty == ObjectType::Mailbox {
         let wire = ctx
@@ -441,21 +494,20 @@ fn build_create(
         .map_err(|e| Error::Partial(e.to_string()))?
         .map_err(Error::from)?;
     let mut wire = fnrow.wire;
-    if let (crate::jmap::wire::file_node::NodeType::File, Some(blob_local)) =
-        (wire.effective_node_type(), fnrow.blob_local_id)
-    {
-        let ct = wire
+    if let (NodeKind::File(file), Some(blob_local)) = (&mut wire.kind, fnrow.blob_local_id) {
+        let ct = file
             .media_type
-            .clone()
-            .unwrap_or_else(|| "application/octet-stream".to_owned());
-        let id = uploader.upload_with(blob_local, &ct).map_err(Error::from)?;
-        wire.blob_id = Some(id);
+            .as_deref()
+            .unwrap_or("application/octet-stream");
+        let id = uploader.upload_with(blob_local, ct).map_err(Error::from)?;
+        file.blob_id = Some(id);
     }
     let mut obj = serde_json::to_value(&wire).map_err(|e| Error::Partial(e.to_string()))?;
     if let Value::Object(m) = &mut obj {
         m.remove("created");
         m.remove("modified");
         m.remove("isSubscribed");
+        for_server(m, shape.unwrap_or(Shape::Draft18));
     }
     Ok(obj)
 }

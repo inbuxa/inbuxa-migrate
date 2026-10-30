@@ -44,7 +44,7 @@ fn import(url: &str, archive: &Path) -> Summary {
             allow_cleartext: true,
             dav_connections: 1,
             multiget_batch: 25,
-            allow_source_change: false,
+            source_change: inbuxa_migrate::sync::import_dav::SourceChange::Reject,
         },
     )
     .expect("import");
