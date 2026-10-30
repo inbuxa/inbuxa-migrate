@@ -12,6 +12,9 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
   at a mistyped path and bring an older archive's layout up to date; now
   the first is an error and the second is refused, and reading a closed
   archive leaves no files beside it.
+- `import carddav` takes a card that is in two address books into both.
+  It used to fail on that card on every run. Taking it out of one book, or
+  deleting that book, now leaves it in the other.
 
 ## [27.1-rc.3]
 

@@ -121,7 +121,10 @@ inbuxa-migrate import carddav \
   <ARCHIVE>
 ```
 
-Same shape as `caldav`, but for address books and contacts.
+Same shape as `caldav`, but for address books and contacts. A card the
+server keeps in two address books, by the same UID, is one card in both. If
+it leaves one book, or that book is deleted, it stays in the other; if the
+copies differ, the one read last is kept.
 
 ### WebDAV
 

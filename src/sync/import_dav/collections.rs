@@ -231,13 +231,7 @@ fn upsert_address_book_row(
 }
 
 fn delete_address_book_row(conn: &Connection, local_id: i64) -> Result<(), rusqlite::Error> {
-    conn.execute(
-        "DELETE FROM contact_cards
-         WHERE EXISTS (
-           SELECT 1 FROM json_each(address_book_ids) WHERE value = ?1
-         )",
-        params![local_id],
-    )?;
+    crate::db::cards::remove_book(conn, local_id)?;
     conn.execute("DELETE FROM address_books WHERE id = ?1", params![local_id])?;
     Ok(())
 }

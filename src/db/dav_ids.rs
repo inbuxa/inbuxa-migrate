@@ -121,6 +121,22 @@ pub fn collections_of_type(
     Ok(map)
 }
 
+/// How many server items stand for one local row: a card in two address
+/// books has two.
+pub fn items_for_local(
+    conn: &Connection,
+    source_id: i64,
+    type_name: &str,
+    local_id: i64,
+) -> Result<i64, rusqlite::Error> {
+    conn.query_row(
+        "SELECT count(*) FROM sync_id_dav
+         WHERE source_id = ?1 AND type_name = ?2 AND local_id = ?3",
+        params![source_id, type_name, local_id],
+        |row| row.get(0),
+    )
+}
+
 pub fn delete_item(
     conn: &Connection,
     source_id: i64,
@@ -305,32 +321,14 @@ mod tests {
     }
 
     #[test]
-    fn unique_local_id_per_type_enforced() {
+    fn two_items_can_stand_for_one_card() {
         let (conn, sid) = setup();
-        insert(
-            &conn,
-            sid,
-            CALENDAR_EVENT,
-            "/cal/a/",
-            "/cal/a/e1.ics",
-            "v",
-            1,
-        )
-        .unwrap();
-        let err = insert(
-            &conn,
-            sid,
-            CALENDAR_EVENT,
-            "/cal/a/",
-            "/cal/a/e2.ics",
-            "v",
-            1,
-        )
-        .unwrap_err();
-        let msg = format!("{err}");
-        assert!(
-            msg.contains("UNIQUE"),
-            "expected UNIQUE violation, got {msg}"
-        );
+        for (book, href) in [("/card/a/", "/card/a/x.vcf"), ("/card/b/", "/card/b/x.vcf")] {
+            insert(&conn, sid, CONTACT_CARD, book, href, "v", 1).unwrap();
+        }
+        assert_eq!(items_for_local(&conn, sid, CONTACT_CARD, 1).unwrap(), 2);
+        delete_item(&conn, sid, CONTACT_CARD, "/card/a/x.vcf").unwrap();
+        assert_eq!(items_for_local(&conn, sid, CONTACT_CARD, 1).unwrap(), 1);
+        assert_eq!(items_for_local(&conn, sid, CALENDAR_EVENT, 1).unwrap(), 0);
     }
 }

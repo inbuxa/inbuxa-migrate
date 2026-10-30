@@ -6,13 +6,13 @@
 
 use std::collections::{HashMap, HashSet};
 
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::dav::client::{DavClient, MultiStatus};
 use crate::dav::href::{Href, join_absolute, normalise};
 use crate::dav::parse::DavResponse;
 use crate::dav::xml;
-use crate::db::dav_ids;
+use crate::db::{cards, dav_ids};
 use crate::error::Error;
 use crate::jmap::error::JmapError;
 use crate::logging::{LEVEL_PROGRESS, Logger};
@@ -214,17 +214,26 @@ fn reconcile_items_generic(
         let tx = conn
             .unchecked_transaction()
             .map_err(|e| Error::Partial(e.to_string()))?;
-        let table = match pcc.kind {
-            ItemKind::CalendarEvent => "calendar_events",
-            ItemKind::ContactCard => "contact_cards",
-        };
-        tx.execute(
-            &format!("DELETE FROM {table} WHERE id = ?1"),
-            params![local_id],
-        )
-        .map_err(|e| Error::Partial(e.to_string()))?;
         dav_ids::delete_item(&tx, pcc.run.source_id, type_name, href)
             .map_err(|e| Error::Partial(e.to_string()))?;
+        let elsewhere = dav_ids::items_for_local(&tx, pcc.run.source_id, type_name, local_id)
+            .map_err(|e| Error::Partial(e.to_string()))?;
+        let removed = match pcc.kind {
+            // Still in another address book: only this one lets it go.
+            ItemKind::ContactCard if elsewhere > 0 => {
+                cards::leave_book(&tx, local_id, pcc.container_local_id)
+            }
+            ItemKind::ContactCard => tx
+                .execute("DELETE FROM contact_cards WHERE id = ?1", params![local_id])
+                .map(drop),
+            ItemKind::CalendarEvent => tx
+                .execute(
+                    "DELETE FROM calendar_events WHERE id = ?1",
+                    params![local_id],
+                )
+                .map(drop),
+        };
+        removed.map_err(|e| Error::Partial(e.to_string()))?;
         tx.commit().map_err(|e| Error::Partial(e.to_string()))?;
         counts.deleted += 1;
     }
@@ -471,7 +480,7 @@ fn insert_or_update_tx(
     local_map: &HashMap<String, (String, i64)>,
 ) -> Result<(), Error> {
     let existing = local_map.get(item_href).map(|(_, id)| *id);
-    match pcc.kind {
+    let local = match pcc.kind {
         ItemKind::CalendarEvent => insert_or_update_event(
             tx,
             pcc.container_local_id,
@@ -485,7 +494,6 @@ fn insert_or_update_tx(
         }
     };
     if existing.is_none() {
-        let new_local = tx.last_insert_rowid();
         dav_ids::insert(
             tx,
             pcc.run.source_id,
@@ -493,7 +501,7 @@ fn insert_or_update_tx(
             pcc.collection_href,
             item_href,
             etag,
-            new_local,
+            local,
         )
         .map_err(|e| Error::Partial(e.to_string()))?;
     } else {
@@ -510,7 +518,7 @@ fn insert_or_update_event(
     raw: &str,
     item_href: &str,
     logger: Logger,
-) -> Result<(), Error> {
+) -> Result<i64, Error> {
     let entries = calcard::ical_to_jscalendar_entries(raw)
         .map_err(|e| Error::Partial(format!("iCalendar parse: {e}")))?;
     if entries.len() > 1 && logger.enabled(crate::logging::LEVEL_DEFAULT) {
@@ -544,6 +552,7 @@ fn insert_or_update_event(
             ],
         )
         .map_err(|e| Error::Partial(e.to_string()))?;
+        Ok(local)
     } else {
         tx.execute(
             "INSERT INTO calendar_events (calendar_ids, is_draft, use_default_alerts, data, data_type)
@@ -557,8 +566,8 @@ fn insert_or_update_event(
             ],
         )
         .map_err(|e| Error::Partial(e.to_string()))?;
+        Ok(tx.last_insert_rowid())
     }
-    Ok(())
 }
 
 fn insert_or_update_card(
@@ -567,25 +576,58 @@ fn insert_or_update_card(
     existing: Option<i64>,
     raw: &str,
     item_href: &str,
-) -> Result<(), Error> {
+) -> Result<i64, Error> {
     let card = calcard::vcard_to_jscontact(raw, item_href)
         .map_err(|e| Error::Partial(format!("vCard parse: {e}")))?;
-    let address_book_ids = format!("[{address_book_local}]");
-    if let Some(local) = existing {
-        tx.execute(
-            "UPDATE contact_cards SET uid = ?1, address_book_ids = ?2, data = ?3
-             WHERE id = ?4",
-            params![card.uid, address_book_ids, card.data.to_string(), local],
-        )
-        .map_err(|e| Error::Partial(e.to_string()))?;
-    } else {
-        tx.execute(
-            "INSERT INTO contact_cards (uid, address_book_ids, data) VALUES (?1, ?2, ?3)",
-            params![card.uid, address_book_ids, card.data.to_string()],
-        )
-        .map_err(|e| Error::Partial(e.to_string()))?;
+    let db = |e: rusqlite::Error| Error::Partial(e.to_string());
+    // The same card met in another address book is the same row: this
+    // book joins its others, and the copy read last is kept.
+    let local = match existing {
+        Some(local) => Some(local),
+        None => tx
+            .query_row(
+                "SELECT id FROM contact_cards WHERE uid = ?1",
+                params![card.uid],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(db)?,
+    };
+    match local {
+        Some(local) => {
+            let books: String = tx
+                .query_row(
+                    "SELECT address_book_ids FROM contact_cards WHERE id = ?1",
+                    params![local],
+                    |r| r.get(0),
+                )
+                .map_err(db)?;
+            tx.execute(
+                "UPDATE contact_cards SET uid = ?1, address_book_ids = ?2, data = ?3
+                 WHERE id = ?4",
+                params![
+                    card.uid,
+                    cards::with_book(&books, address_book_local),
+                    card.data.to_string(),
+                    local
+                ],
+            )
+            .map_err(db)?;
+            Ok(local)
+        }
+        None => {
+            tx.execute(
+                "INSERT INTO contact_cards (uid, address_book_ids, data) VALUES (?1, ?2, ?3)",
+                params![
+                    card.uid,
+                    format!("[{address_book_local}]"),
+                    card.data.to_string()
+                ],
+            )
+            .map_err(db)?;
+            Ok(tx.last_insert_rowid())
+        }
     }
-    Ok(())
 }
 
 fn response_indicates_vanished(response: &DavResponse) -> bool {
