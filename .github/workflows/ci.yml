@@ -40,7 +40,9 @@ name: ci
 
 on:
   push:
-    branches: ['**']
+    # `upstream` holds upstream's releases, renamed, for main to merge
+    # (scripts/upstream-import.py); main tests them once merged.
+    branches: ['**', '!upstream']
     tags: ['**']
   # For a run GitHub queued and then orphaned. Run it from a tag to redo that
   # tag's release; attaching skips any file already on the Release.
