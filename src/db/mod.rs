@@ -5,6 +5,7 @@
  */
 
 pub mod blobs;
+pub mod cards;
 pub mod dav_ids;
 pub mod defaults;
 pub mod exchange_ews_ids;

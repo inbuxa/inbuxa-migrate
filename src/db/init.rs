@@ -123,6 +123,7 @@ pub fn apply_schema(conn: &Connection) -> Result<(), OpenError> {
     tx.execute_batch(SCHEMA_SQL)?;
     ensure_calendar_events_data_type(&tx)?;
     ensure_graph_ids_accept_file_nodes(&tx)?;
+    ensure_dav_ids_share_local_rows(&tx)?;
     tx.commit()?;
     Ok(())
 }
@@ -171,6 +172,47 @@ fn ensure_graph_ids_accept_file_nodes(conn: &Connection) -> Result<(), OpenError
          DROP TABLE sync_id_exchange_graph_old;
          CREATE INDEX IF NOT EXISTS sync_id_exchange_graph_type_idx
              ON sync_id_exchange_graph (source_id, type_name);",
+    )?;
+    Ok(())
+}
+
+/// A card in two address books is one archive row reached from two server
+/// items, so the DAV map no longer holds a local row to one item. An
+/// archive from before that is rebuilt without the constraint.
+fn ensure_dav_ids_share_local_rows(conn: &Connection) -> Result<(), OpenError> {
+    let sql: Option<String> = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sync_id_dav'",
+            [],
+            |row| row.get(0),
+        )
+        .ok();
+    let Some(sql) = sql else { return Ok(()) };
+    if !sql.contains("UNIQUE (source_id, type_name, local_id)") {
+        return Ok(());
+    }
+    conn.execute_batch(
+        "DROP INDEX IF EXISTS sync_id_dav_collection_idx;
+         DROP INDEX IF EXISTS sync_id_dav_local_idx;
+         ALTER TABLE sync_id_dav RENAME TO sync_id_dav_old;
+         CREATE TABLE sync_id_dav (
+             source_id        INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+             type_name        TEXT    NOT NULL CHECK (type_name IN (
+                                                          'calendar','calendarevent',
+                                                          'addressbook','contactcard',
+                                                          'filenode')),
+             collection_href  TEXT    NOT NULL,
+             item_href        TEXT    NOT NULL,
+             etag             TEXT    NOT NULL DEFAULT '',
+             local_id         INTEGER NOT NULL,
+             PRIMARY KEY (source_id, type_name, item_href)
+         );
+         INSERT INTO sync_id_dav SELECT * FROM sync_id_dav_old;
+         DROP TABLE sync_id_dav_old;
+         CREATE INDEX sync_id_dav_collection_idx
+             ON sync_id_dav (source_id, type_name, collection_href);
+         CREATE INDEX sync_id_dav_local_idx
+             ON sync_id_dav (source_id, type_name, local_id);",
     )?;
     Ok(())
 }
@@ -417,5 +459,49 @@ mod permission_tests {
                 .iter()
                 .all(|t| t.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
         );
+    }
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::*;
+
+    #[test]
+    fn an_older_dav_map_is_rebuilt_to_share_local_rows() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE sources (id INTEGER PRIMARY KEY);
+             INSERT INTO sources (id) VALUES (1);
+             CREATE TABLE sync_id_dav (
+                 source_id        INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+                 type_name        TEXT    NOT NULL,
+                 collection_href  TEXT    NOT NULL,
+                 item_href        TEXT    NOT NULL,
+                 etag             TEXT    NOT NULL DEFAULT '',
+                 local_id         INTEGER NOT NULL,
+                 PRIMARY KEY (source_id, type_name, item_href),
+                 UNIQUE (source_id, type_name, local_id)
+             );
+             INSERT INTO sync_id_dav VALUES (1, 'contactcard', '/a/', '/a/x.vcf', 'e1', 7);",
+        )
+        .unwrap();
+        ensure_dav_ids_share_local_rows(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO sync_id_dav VALUES (1, 'contactcard', '/b/', '/b/x.vcf', 'e2', 7)",
+            [],
+        )
+        .expect("two items may stand for one card");
+        let rows: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sync_id_dav WHERE local_id = 7",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows, 2, "the old row was kept");
+        // A second pass finds nothing to do.
+        ensure_dav_ids_share_local_rows(&conn).unwrap();
+        // And a full schema pass over it is clean.
+        apply_schema(&conn).unwrap();
     }
 }

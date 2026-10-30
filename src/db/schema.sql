@@ -68,12 +68,13 @@ CREATE TABLE IF NOT EXISTS sync_id_dav (
     item_href        TEXT    NOT NULL,
     etag             TEXT    NOT NULL DEFAULT '',
     local_id         INTEGER NOT NULL,
-    PRIMARY KEY (source_id, type_name, item_href),
-    UNIQUE (source_id, type_name, local_id)
+    PRIMARY KEY (source_id, type_name, item_href)
 );
 
 CREATE INDEX IF NOT EXISTS sync_id_dav_collection_idx
     ON sync_id_dav (source_id, type_name, collection_href);
+CREATE INDEX IF NOT EXISTS sync_id_dav_local_idx
+    ON sync_id_dav (source_id, type_name, local_id);
 
 CREATE TABLE IF NOT EXISTS sync_id_managesieve (
     source_id  INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
