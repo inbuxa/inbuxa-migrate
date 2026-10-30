@@ -19,3 +19,4 @@ pub mod roles;
 pub mod sources;
 pub mod sync_state_jmap;
 pub mod takeout_ids;
+pub mod vacation_response;

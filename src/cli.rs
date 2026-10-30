@@ -18,7 +18,7 @@ use crate::jmap::account::AccountSelector;
 use crate::jmap::http::Auth;
 use crate::logging::Logger;
 use crate::secret;
-use crate::sync::import_dav::{DavAuth, DavImportConfig, DavKindArg};
+use crate::sync::import_dav::{DavAuth, DavImportConfig, DavKindArg, SourceChange};
 use crate::sync::import_exchange_ews::{EwsAuth, EwsImportConfig};
 use crate::sync::import_exchange_graph::{GraphAuth, GraphImportConfig};
 use crate::sync::import_imap::{ImapAuth, ImapImportConfig};
@@ -494,6 +494,13 @@ pub struct DavImportArgs {
     )]
     allow_source_change: bool,
 
+    #[arg(
+        long,
+        conflicts_with = "allow_source_change",
+        help = "Remove other recorded sources of this kind, and their items, before importing"
+    )]
+    replace_source: bool,
+
     #[command(flatten)]
     global: GlobalArgs,
 
@@ -715,7 +722,11 @@ fn resolve_dav_import(args: DavImportArgs, kind: DavKindArg) -> Result<Action, E
             allow_cleartext: args.allow_cleartext,
             dav_connections,
             multiget_batch,
-            allow_source_change: args.allow_source_change,
+            source_change: match (args.replace_source, args.allow_source_change) {
+                (true, _) => SourceChange::Replace,
+                (false, true) => SourceChange::Allow,
+                (false, false) => SourceChange::Reject,
+            },
         },
     ))
 }
@@ -1050,38 +1061,45 @@ fn resolve_exchange_ews_auth(args: &ExchangeEwsImportArgs) -> Result<EwsAuth, Er
     if let Some(token) = bearer.clone() {
         return Ok(EwsAuth::Bearer { token });
     }
-    let tenant = args
-        .ews_tenant
-        .clone()
-        .unwrap_or_else(|| "common".to_owned());
-    let client_id = args.ews_client_id.clone().ok_or_else(|| {
-        Error::Usage(
-            "--ews-client-id is required when --auth-bearer is used without an inline token"
-                .to_owned(),
-        )
-    })?;
+    let tenant = || {
+        args.ews_tenant
+            .clone()
+            .unwrap_or_else(|| "common".to_owned())
+    };
+    let required_client_id = || {
+        args.ews_client_id.clone().ok_or_else(|| {
+            Error::Usage(
+                "--ews-client-id is required with --ews-device-code or --ews-client-secret"
+                    .to_owned(),
+            )
+        })
+    };
     if args.ews_device_code {
-        return Ok(EwsAuth::OAuth(OAuthFlow::DeviceCode { tenant, client_id }));
-    }
-    if let Some(secret) = args.ews_client_secret.clone() {
-        let resolved = secret::resolve(
-            Some(secret.as_str()),
-            "INBUXA_MIGRATE_EWS_CLIENT_SECRET",
-            "client secret",
-        )?;
-        return Ok(EwsAuth::OAuth(OAuthFlow::ClientCredentials {
-            tenant,
-            client_id,
-            client_secret: resolved,
+        return Ok(EwsAuth::OAuth(OAuthFlow::DeviceCode {
+            tenant: tenant(),
+            client_id: required_client_id()?,
         }));
     }
-    if let Ok(env_secret) = std::env::var("INBUXA_MIGRATE_EWS_CLIENT_SECRET")
-        && !env_secret.is_empty()
+    if let Some(secret) = args.ews_client_secret.as_deref() {
+        return Ok(EwsAuth::OAuth(OAuthFlow::ClientCredentials {
+            tenant: tenant(),
+            client_id: required_client_id()?,
+            client_secret: secret.to_owned(),
+        }));
+    }
+    if let Ok(token) = std::env::var("INBUXA_MIGRATE_TOKEN")
+        && !token.is_empty()
+    {
+        return Ok(EwsAuth::Bearer { token });
+    }
+    if let Some(client_id) = args.ews_client_id.clone()
+        && let Ok(client_secret) = std::env::var("INBUXA_MIGRATE_EWS_CLIENT_SECRET")
+        && !client_secret.is_empty()
     {
         return Ok(EwsAuth::OAuth(OAuthFlow::ClientCredentials {
-            tenant,
+            tenant: tenant(),
             client_id,
-            client_secret: env_secret,
+            client_secret,
         }));
     }
     let token = secret::resolve(None, "INBUXA_MIGRATE_TOKEN", "bearer token")?;
@@ -1396,6 +1414,110 @@ mod tests {
         assert!(matches!(auth, Auth::Bearer { token } if token == "t"));
     }
 
+    fn ews_auth(extra: &[&str]) -> Result<EwsAuth, Error> {
+        let mut argv = vec!["inbuxa-migrate", "import", "exchange-ews", "archive.sqlite"];
+        argv.extend_from_slice(extra);
+        let cli = Cli::try_parse_from(argv).unwrap_or_else(|e| panic!("clap rejected args: {e}"));
+        match cli.resolve()? {
+            Action::ImportExchangeEws(_, config) => Ok(config.auth),
+            _ => panic!("expected ImportExchangeEws"),
+        }
+    }
+
+    fn set_ews_env(token: Option<&str>, client_secret: Option<&str>) {
+        unsafe {
+            match token {
+                Some(t) => env::set_var("INBUXA_MIGRATE_TOKEN", t),
+                None => env::remove_var("INBUXA_MIGRATE_TOKEN"),
+            }
+            match client_secret {
+                Some(s) => env::set_var("INBUXA_MIGRATE_EWS_CLIENT_SECRET", s),
+                None => env::remove_var("INBUXA_MIGRATE_EWS_CLIENT_SECRET"),
+            }
+        }
+    }
+
+    // A bare --auth-bearer takes INBUXA_MIGRATE_TOKEN without needing --ews-client-id.
+    #[test]
+    fn ews_bare_bearer_uses_env_token_without_client_id() {
+        let _g = lock();
+        set_ews_env(Some("envtok"), None);
+        let auth = ews_auth(&["--auth-bearer"]);
+        set_ews_env(None, None);
+        assert!(matches!(auth, Ok(EwsAuth::Bearer { token }) if token == "envtok"));
+    }
+
+    // INBUXA_MIGRATE_TOKEN wins over client credentials taken from the environment.
+    #[test]
+    fn ews_env_token_beats_env_client_secret() {
+        let _g = lock();
+        set_ews_env(Some("envtok"), Some("sec"));
+        let auth = ews_auth(&["--auth-bearer", "--ews-client-id", "cid"]);
+        set_ews_env(None, None);
+        assert!(matches!(auth, Ok(EwsAuth::Bearer { token }) if token == "envtok"));
+    }
+
+    // The env client secret is used when no token is exported.
+    #[test]
+    fn ews_env_client_secret_without_token_uses_client_credentials() {
+        let _g = lock();
+        set_ews_env(None, Some("sec"));
+        let auth = ews_auth(&["--auth-bearer", "--ews-client-id", "cid"]);
+        set_ews_env(None, None);
+        assert!(matches!(
+            auth,
+            Ok(EwsAuth::OAuth(OAuthFlow::ClientCredentials { client_id, client_secret, .. }))
+                if client_id == "cid" && client_secret == "sec"
+        ));
+    }
+
+    // An explicit --ews-device-code is not overridden by an exported token.
+    #[test]
+    fn ews_device_code_flag_beats_env_token() {
+        let _g = lock();
+        set_ews_env(Some("envtok"), None);
+        let auth = ews_auth(&[
+            "--auth-bearer",
+            "--ews-client-id",
+            "cid",
+            "--ews-device-code",
+        ]);
+        set_ews_env(None, None);
+        assert!(matches!(
+            auth,
+            Ok(EwsAuth::OAuth(OAuthFlow::DeviceCode { tenant, client_id }))
+                if tenant == "common" && client_id == "cid"
+        ));
+    }
+
+    // --ews-device-code still needs a client id.
+    #[test]
+    fn ews_device_code_without_client_id_is_usage_error() {
+        let _g = lock();
+        set_ews_env(Some("envtok"), None);
+        let auth = ews_auth(&["--auth-bearer", "--ews-device-code"]);
+        set_ews_env(None, None);
+        match auth {
+            Err(Error::Usage(m)) => assert!(m.contains("--ews-client-id"), "msg was: {m}"),
+            other => panic!("expected Usage error, got {other:?}"),
+        }
+    }
+
+    // An inline token wins over everything else.
+    #[test]
+    fn ews_inline_token_beats_env_and_flows() {
+        let _g = lock();
+        set_ews_env(Some("envtok"), None);
+        let auth = ews_auth(&[
+            "--auth-bearer=inline",
+            "--ews-client-id",
+            "cid",
+            "--ews-device-code",
+        ]);
+        set_ews_env(None, None);
+        assert!(matches!(auth, Ok(EwsAuth::Bearer { token }) if token == "inline"));
+    }
+
     fn graph_config(objects: &[&str]) -> Result<GraphImportConfig, Error> {
         let mut argv = vec![
             "inbuxa-migrate",
@@ -1448,5 +1570,40 @@ mod tests {
             }
             other => panic!("expected Usage error, got {:?}", other.map(|_| ())),
         }
+    }
+
+    fn webdav_source_change(extra: &[&str]) -> Result<SourceChange, clap::Error> {
+        let mut argv = vec![
+            "inbuxa-migrate",
+            "import",
+            "webdav",
+            "--url",
+            "https://dav.example/files/u/",
+            "--auth-bearer",
+            "tok",
+        ];
+        argv.extend_from_slice(extra);
+        argv.push("archive.sqlite");
+        let cli = Cli::try_parse_from(argv)?;
+        match cli.resolve() {
+            Ok(Action::ImportDav(_, config)) => Ok(config.source_change),
+            _ => panic!("expected ImportDav"),
+        }
+    }
+
+    // --replace-source maps to Replace and cannot be combined with --allow-source-change.
+    #[test]
+    fn dav_source_change_flags_resolve() {
+        let _g = lock();
+        assert_eq!(webdav_source_change(&[]).unwrap(), SourceChange::Reject);
+        assert_eq!(
+            webdav_source_change(&["--allow-source-change"]).unwrap(),
+            SourceChange::Allow
+        );
+        assert_eq!(
+            webdav_source_change(&["--replace-source"]).unwrap(),
+            SourceChange::Replace
+        );
+        assert!(webdav_source_change(&["--replace-source", "--allow-source-change"]).is_err());
     }
 }

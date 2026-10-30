@@ -14,8 +14,7 @@ use ureq::tls::{RootCerts, TlsConfig};
 
 use crate::exchange_graph::error::GraphError;
 
-pub const SCOPES: &str =
-    "offline_access User.Read Mail.Read MailboxSettings.Read Calendars.Read Contacts.Read";
+pub const SCOPES: &str = "offline_access User.Read Mail.Read MailboxSettings.Read Calendars.Read Contacts.Read Files.Read";
 
 const JWT_SEGMENT: Base64 = URL_SAFE.with_padding(Padding::Optional).any_alphabet();
 
@@ -424,6 +423,24 @@ mod tests {
         let claims = format!(r#"{{"tid":"{tid}","upn":"{upn}","exp":{exp}}}"#);
         let payload = URL_SAFE_NO_PAD.encode(claims.as_bytes());
         format!("{header}.{payload}.")
+    }
+
+    // Device code consent covers every --objects surface, including the drive.
+    #[test]
+    fn scopes_cover_every_surface() {
+        for required in [
+            "offline_access",
+            "Mail.Read",
+            "MailboxSettings.Read",
+            "Calendars.Read",
+            "Contacts.Read",
+            "Files.Read",
+        ] {
+            assert!(
+                SCOPES.split_whitespace().any(|s| s == required),
+                "missing {required}"
+            );
+        }
     }
 
     #[test]

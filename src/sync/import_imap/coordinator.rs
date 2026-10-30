@@ -379,7 +379,7 @@ fn run_into(
     let local_mailboxes = db::imap_ids::mailbox_folders(&conn, source_id)?;
     let server_folder_set: HashSet<String> = resolved.iter().map(|f| f.name.clone()).collect();
 
-    upsert_mailboxes(&mut conn, source_id, &resolved, &mut mailbox_counts)?;
+    upsert_mailboxes(&mut conn, source_id, &resolved, &mut mailbox_counts, logger)?;
 
     let server_delimiter = resolved.iter().find_map(|f| f.delimiter).unwrap_or('/');
 
@@ -418,7 +418,7 @@ fn run_into(
     )
     .map_err(|e| Error::Connection(format!("worker pool: {e}")))?;
 
-    for (i, folder) in resolved.iter().enumerate() {
+    for (i, folder) in resolved.iter().filter(|f| f.selectable).enumerate() {
         if i > 0 {
             let _ = control_run_collect(&mut client, &control_ctx, "NOOP");
         }
@@ -585,16 +585,29 @@ fn upsert_mailboxes(
     source_id: i64,
     folders: &[ResolvedFolder],
     counts: &mut TypeCounts,
+    logger: Logger,
 ) -> Result<(), Error> {
     let tx = conn.transaction()?;
     let mut local_ids: HashMap<String, i64> = HashMap::new();
     for folder in folders {
         let parent_local = match &folder.parent_path {
-            Some(p) => local_ids.get(p.as_str()).copied().or_else(|| {
-                db::imap_ids::local_for_mailbox(&tx, source_id, p)
-                    .ok()
-                    .flatten()
-            }),
+            Some(p) => {
+                let found = match local_ids.get(p.as_str()) {
+                    Some(id) => Some(*id),
+                    None => db::imap_ids::local_for_mailbox(&tx, source_id, p)?,
+                };
+                if found.is_none() {
+                    log_at(
+                        logger,
+                        LEVEL_DEFAULT,
+                        &format!(
+                            "folder {:?}: parent {p:?} could not be resolved; storing it at the top level",
+                            folder.name
+                        ),
+                    );
+                }
+                found
+            }
             None => None,
         };
         let existing = db::imap_ids::local_for_mailbox(&tx, source_id, &folder.name)?;
@@ -1129,7 +1142,7 @@ fn dry_run_summary(
         );
     }
 
-    for folder in folders {
+    for folder in folders.iter().filter(|f| f.selectable) {
         let select_resp = match select_folder(client, control_ctx, folder) {
             Ok(r) => r,
             Err(e) => {

@@ -18,7 +18,7 @@ use integration::validate::{
 
 use inbuxa_migrate::error::Error;
 use inbuxa_migrate::sync::import_dav;
-use inbuxa_migrate::sync::import_dav::{DavAuth, DavImportConfig, DavKindArg};
+use inbuxa_migrate::sync::import_dav::{DavAuth, DavImportConfig, DavKindArg, SourceChange};
 use rusqlite::Connection;
 use serde_json::Value;
 
@@ -38,7 +38,7 @@ fn dav_config(kind: DavKindArg, account: &Account, dav_root: &str) -> DavImportC
         allow_cleartext: true,
         dav_connections: 2,
         multiget_batch: 25,
-        allow_source_change: false,
+        source_change: SourceChange::Reject,
     }
 }
 
@@ -57,7 +57,7 @@ fn dav_config_via_discovery(
         allow_cleartext: true,
         dav_connections: 2,
         multiget_batch: 25,
-        allow_source_change: false,
+        source_change: SourceChange::Reject,
     }
 }
 
@@ -411,7 +411,7 @@ fn baikal_carddav_preserves_apple_item_labels() {
         allow_cleartext: true,
         dav_connections: 2,
         multiget_batch: 25,
-        allow_source_change: false,
+        source_change: SourceChange::Reject,
     };
     let summary = import_dav::run(common(&archive), cfg).expect("carddav import");
     assert!(
