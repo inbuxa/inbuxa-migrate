@@ -13,6 +13,7 @@ pub mod data;
 pub mod dav_client;
 pub mod dovecot;
 pub mod error;
+pub mod google;
 pub mod guide;
 pub mod imap_client;
 pub mod inbuxa;

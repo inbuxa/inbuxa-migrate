@@ -5,6 +5,8 @@
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
 
+mod integration;
+
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
@@ -2309,35 +2311,11 @@ fn append_refused_before_the_go_ahead_sends_nothing_and_keeps_the_session() {
     client.noop().expect("session still usable");
 }
 
-/// A service account's JSON key for a new RSA key, with the token
-/// endpoint at `token_uri`, and the key's public half.
-fn google_key(token_uri: &str) -> (String, Vec<u8>) {
-    use aws_lc_rs::encoding::{AsDer, Pkcs8V1Der};
-    use aws_lc_rs::signature::KeyPair as _;
-    let pair = aws_lc_rs::rsa::KeyPair::generate(aws_lc_rs::rsa::KeySize::Rsa2048).unwrap();
-    let der: Pkcs8V1Der<'static> = pair.as_der().unwrap();
-    let body = STANDARD.encode(der.as_ref());
-    let lines: Vec<&str> = body
-        .as_bytes()
-        .chunks(64)
-        .map(|c| std::str::from_utf8(c).unwrap())
-        .collect();
-    let pem = format!(
-        "-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----\n",
-        lines.join("\n")
-    );
-    let key = serde_json::json!({
-        "type": "service_account", "client_email": "migrate@proj.iam.gserviceaccount.com",
-        "private_key": pem, "token_uri": token_uri,
-    });
-    (key.to_string(), pair.public_key().as_ref().to_vec())
-}
-
 #[test]
 fn coordinator_signs_in_to_gmail_as_a_service_account_acting_for_the_user() {
     let mut google = mockito::Server::new();
     let token_uri = format!("{}/token", google.url());
-    let (key, public) = google_key(&token_uri);
+    let (key, public) = integration::google::service_account_key(&token_uri);
     let audience = token_uri.clone();
     let _token = google
         .mock("POST", "/token")

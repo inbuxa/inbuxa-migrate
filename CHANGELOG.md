@@ -18,6 +18,10 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
   names. A whole Workspace domain moves in a plan with one key and no
   one's password. The JWT is signed with the key itself (RS256), and each
   connection takes a fresh token when the last is close to running out.
+- The guide offers Microsoft 365 (an Entra app, app-only) and Google
+  Workspace (a service account) as sources. Its check signs the app in and
+  names any permission it lacks, or asks Google for a token for the first
+  account.
 
 ## [27.1-rc.5]
 

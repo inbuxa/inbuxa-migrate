@@ -21,6 +21,7 @@ pub const SOURCE_SECRET_VAR: &str = "MIGRATE_SOURCE_SECRET";
 pub const TARGET_TOKEN_VAR: &str = "MIGRATE_INBUXA_TOKEN";
 /// The directory the setup step reads, relative to the guide's directory.
 pub const DIRECTORY: &str = "directory";
+const GMAIL_IMAP: &str = "imaps://imap.gmail.com";
 
 #[derive(Deserialize, Serialize, Clone, Default)]
 #[serde(rename_all = "camelCase", default)]
@@ -40,6 +41,18 @@ pub enum SourceKind {
     Imap,
     Jmap,
     Maildir,
+    /// Microsoft 365, through Graph, as an app with application permissions.
+    Microsoft,
+    /// Google Workspace's Gmail, as a service account with domain-wide
+    /// delegation.
+    Google,
+}
+
+impl SourceKind {
+    /// Whether the source signs in with a secret typed into the page.
+    fn has_secret(self) -> bool {
+        matches!(self, Self::Imap | Self::Jmap | Self::Microsoft)
+    }
 }
 
 #[derive(Deserialize, Serialize, Clone, Default)]
@@ -55,6 +68,12 @@ pub struct Source {
     pub path: String,
     /// IMAP: credentials on `imap://` without STARTTLS.
     pub cleartext: bool,
+    /// Microsoft 365: the Entra tenant and the app's client id.
+    pub tenant: String,
+    pub client_id: String,
+    /// Google: the service account's JSON key file.
+    pub key_file: String,
+    /// The password, API key or client secret.
     #[serde(skip_serializing)]
     pub secret: String,
 }
@@ -71,7 +90,7 @@ impl Form {
     /// The secrets a run needs, by variable.
     pub fn env(&self) -> Vec<(&'static str, String)> {
         let mut env = vec![(TARGET_TOKEN_VAR, self.target.token.clone())];
-        if self.source.kind != SourceKind::Maildir {
+        if self.source.kind.has_secret() {
             env.push((SOURCE_SECRET_VAR, self.source.secret.clone()));
         }
         env
@@ -103,10 +122,22 @@ impl Form {
             SourceKind::Maildir if !names_account(&s.path) => {
                 return Err("The Maildir path has to name the account: {email} or {local}.".into());
             }
+            SourceKind::Microsoft
+                if s.tenant.trim().is_empty() || s.client_id.trim().is_empty() =>
+            {
+                return Err("Give the Microsoft 365 tenant and the app's client id.".into());
+            }
+            SourceKind::Google if s.key_file.trim().is_empty() => {
+                return Err("Give the service account's key file.".into());
+            }
             _ => {}
         }
-        if s.kind != SourceKind::Maildir && s.secret.is_empty() {
-            return Err("Give the old server's password or API key.".into());
+        if s.kind.has_secret() && s.secret.is_empty() {
+            return Err(if s.kind == SourceKind::Microsoft {
+                "Give the app's client secret.".into()
+            } else {
+                "Give the old server's password or API key.".into()
+            });
         }
         if self.accounts.is_empty() {
             return Err("List the accounts to move.".into());
@@ -143,6 +174,16 @@ impl Form {
                 args.extend(["--account-name", "{email}"]);
             }
             SourceKind::Maildir => args.extend(["import", "maildir", s.path.trim()]),
+            SourceKind::Microsoft => {
+                args.extend(["import", "exchange-graph", "--tenant", s.tenant.trim()]);
+                args.extend(["--client-id", s.client_id.trim(), "--app-only"]);
+                args.extend(["--user", "{email}"]);
+                secrets = json!({"clientSecret": SOURCE_SECRET_VAR});
+            }
+            SourceKind::Google => {
+                args.extend(["import", "imap", "--url", GMAIL_IMAP]);
+                args.extend(["--google-key", s.key_file.trim(), "--auth-user", "{email}"]);
+            }
         }
         args.push("{archive}");
         json!({"name": "import", "args": args, "secrets": secrets})
@@ -305,6 +346,9 @@ mod tests {
                 login: "{email}*master".into(),
                 path: "/var/vmail/{domain}/{local}/Maildir".into(),
                 cleartext: false,
+                tenant: String::new(),
+                client_id: String::new(),
+                key_file: String::new(),
                 secret: "s3cret".into(),
             },
             accounts: vec!["ann@example.org".into()],
@@ -385,6 +429,55 @@ mod tests {
                 "{archive}"
             ])
         );
+        assert_eq!(f.env(), [(TARGET_TOKEN_VAR, "t0ken".to_owned())]);
+    }
+
+    #[test]
+    fn microsoft_365_reads_as_the_app_and_google_as_the_service_account() {
+        let mut f = form(SourceKind::Microsoft);
+        f.source.tenant = "contoso.onmicrosoft.com".into();
+        f.source.client_id = "app-1".into();
+        let step = &f.plan("p.csv")["steps"][0];
+        assert_eq!(
+            step["args"],
+            json!([
+                "import",
+                "exchange-graph",
+                "--tenant",
+                "contoso.onmicrosoft.com",
+                "--client-id",
+                "app-1",
+                "--app-only",
+                "--user",
+                "{email}",
+                "{archive}"
+            ])
+        );
+        assert_eq!(step["secrets"]["clientSecret"], SOURCE_SECRET_VAR);
+        f.source.tenant.clear();
+        assert!(f.check().unwrap_err().contains("tenant"));
+
+        let mut f = form(SourceKind::Google);
+        f.source.secret.clear();
+        assert!(f.check().unwrap_err().contains("key file"));
+        f.source.key_file = "/keys/sa.json".into();
+        assert_eq!(f.check(), Ok(()));
+        let step = &f.plan("p.csv")["steps"][0];
+        assert_eq!(
+            step["args"],
+            json!([
+                "import",
+                "imap",
+                "--url",
+                "imaps://imap.gmail.com",
+                "--google-key",
+                "/keys/sa.json",
+                "--auth-user",
+                "{email}",
+                "{archive}"
+            ])
+        );
+        assert_eq!(step["secrets"], json!({}));
         assert_eq!(f.env(), [(TARGET_TOKEN_VAR, "t0ken".to_owned())]);
     }
 

@@ -166,3 +166,39 @@ fn a_closed_stdout_doesnt_end_the_guide() {
     let head = format!("GET /x/ HTTP/1.1\r\nHost: {}", guide.host);
     assert_eq!(send(&guide, &head, "").0, 404);
 }
+
+#[test]
+fn the_guide_checks_a_google_key_by_asking_for_a_token() {
+    let mut google = mockito::Server::new();
+    let (key, _) = integration::google::service_account_key(&format!("{}/token", google.url()));
+    let _token = google
+        .mock("POST", "/token")
+        .match_body(mockito::Matcher::Regex("assertion=".to_owned()))
+        .with_status(200)
+        .with_body(r#"{"access_token":"ya29.x","expires_in":3599}"#)
+        .create();
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("sa.json"), key).unwrap();
+    let guide = start(BIN, dir.path());
+    let form = |key_file: &str| {
+        json!({"form": {
+            "source": {"kind": "google", "keyFile": key_file},
+            "accounts": ["ann@example.org"],
+        }})
+    };
+    let (_, missing) = post(&guide, "api/check-source", &form("nope.json"));
+    assert_eq!(missing["ok"], false, "{missing}");
+    assert!(
+        missing["message"].as_str().unwrap().contains("nope.json"),
+        "{missing}"
+    );
+    let (_, found) = post(&guide, "api/check-source", &form("sa.json"));
+    assert_eq!(found["ok"], true, "{found}");
+    assert!(
+        found["message"]
+            .as_str()
+            .unwrap()
+            .contains("act for ann@example.org"),
+        "{found}"
+    );
+}

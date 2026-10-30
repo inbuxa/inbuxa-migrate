@@ -57,6 +57,8 @@ pub struct JwtClaims {
     pub upn: Option<String>,
     pub name: Option<String>,
     pub exp: Option<u64>,
+    /// An app-only token's application permissions, such as `Mail.Read`.
+    pub roles: Vec<String>,
 }
 
 pub fn decode_jwt_claims(token: &str) -> Option<JwtClaims> {
@@ -73,6 +75,14 @@ pub fn decode_jwt_claims(token: &str) -> Option<JwtClaims> {
             .or_else(|| value.get("preferred_username").and_then(Value::as_str))
             .map(str::to_owned),
         name: value.get("name").and_then(Value::as_str).map(str::to_owned),
+        roles: value
+            .get("roles")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect(),
         exp: value.get("exp").and_then(Value::as_u64),
     })
 }
@@ -459,6 +469,20 @@ mod tests {
         assert_eq!(claims.tenant_id.as_deref(), Some("t-1"));
         assert_eq!(claims.upn.as_deref(), Some("alice@x.com"));
         assert_eq!(claims.exp, Some(9999999999));
+    }
+
+    #[test]
+    fn an_app_only_tokens_roles_are_its_permissions() {
+        let claims = r#"{"tid":"t-1","roles":["Mail.Read","User.Read.All"]}"#;
+        let token = format!("h.{}.", URL_SAFE_NO_PAD.encode(claims.as_bytes()));
+        let roles = decode_jwt_claims(&token).unwrap().roles;
+        assert_eq!(roles, ["Mail.Read", "User.Read.All"]);
+        assert!(
+            decode_jwt_claims(&make_jwt("t", "u", 1))
+                .unwrap()
+                .roles
+                .is_empty()
+        );
     }
 
     #[test]

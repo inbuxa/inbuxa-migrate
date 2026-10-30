@@ -679,10 +679,14 @@ browser. `guide` serves a page on 127.0.0.1 from the binary itself and
 opens it. The page asks five things in turn:
 
 1. **Where the mail is now:** an IMAP server, a JMAP server (Stalwart or
-   inbuxa), or Maildir folders on this machine. It also asks for a login
-   that can act for every account. On IMAP that's a master user, such as
-   Dovecot's `{email}*master`. On JMAP it's an administrator, with a
-   password or an API key.
+   inbuxa), Maildir folders on this machine, Microsoft 365 or Google
+   Workspace. It also asks for a login that can act for every account. On
+   IMAP that's a master user, such as Dovecot's `{email}*master`. On JMAP
+   it's an administrator, with a password or an API key. On Microsoft 365
+   it's an Entra app with application permissions (`--app-only`), and on
+   Google Workspace a service account's key (`--google-key`). Check signs
+   the app in and says which permissions it lacks, or asks Google for a
+   token for the first account.
 2. **Which accounts:** pasted one per line or as a CSV, or read from a
    JMAP server's account list. The list can be edited before anything runs.
 3. **Where to:** the inbuxa server and an administrator's API key, and

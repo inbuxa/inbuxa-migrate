@@ -15,6 +15,7 @@ function showKind() {
   for (const el of document.querySelectorAll("[data-kind]")) {
     el.hidden = !el.dataset.kind.split(" ").includes(k);
   }
+  $("src-secret-label").textContent = k === "microsoft" ? "Client secret" : "Password or API key";
 }
 
 function lines(text) {
@@ -30,6 +31,9 @@ function form() {
       login: k === "imap" ? $("src-imap-login").value.trim() : $("src-jmap-login").value.trim(),
       path: $("src-path").value.trim(),
       cleartext: $("src-cleartext").checked,
+      tenant: $("src-tenant").value.trim(),
+      clientId: $("src-client-id").value.trim(),
+      keyFile: $("src-key-file").value.trim(),
       secret: $("src-secret").value,
     },
     accounts: lines($("accounts").value),
@@ -69,7 +73,7 @@ async function checkAccounts() {
 
 async function check(path, statusId) {
   try {
-    if (statusId === "source-status" && kind() === "maildir") await checkAccounts();
+    if (statusId === "source-status" && ["maildir", "google"].includes(kind())) await checkAccounts();
     const r = await call(path, { form: form() });
     status(statusId, r.ok, r.message);
     await refresh();
@@ -206,6 +210,9 @@ async function load() {
     if (f.source.kind === "jmap") $("src-jmap-login").value = f.source.login || "";
     if (f.source.path) $("src-path").value = f.source.path;
     $("src-cleartext").checked = !!f.source.cleartext;
+    $("src-tenant").value = f.source.tenant || "";
+    $("src-client-id").value = f.source.clientId || "";
+    $("src-key-file").value = f.source.keyFile || "";
     $("accounts").value = (f.accounts || []).join("\n");
     $("create").checked = f.create || !f.target.url;
     $("dst-url").value = f.target.url || "";
