@@ -2767,6 +2767,37 @@ fn export_sieve_renames_stalwart_names_for_an_inbuxa_target() {
     let _ = std::fs::remove_file(&archive);
 }
 
+/// inbuxa runs its vendor extensions without listing them; its session's
+/// `urn:inbuxa:jmap` is what says the target is inbuxa.
+#[test]
+fn export_sieve_renames_for_an_inbuxa_session_that_lists_no_vendor_names() {
+    let mut server = mockito::Server::new();
+    let base = server.url();
+    let archive = archive_with_active_sieve(
+        "loop",
+        b"require [\"fileinto\", \"vnd.stalwart.while\"];\nkeep;\n",
+    );
+    let mut session: serde_json::Value =
+        serde_json::from_str(&session_body_sieve(&base, &["fileinto"])).unwrap();
+    session["capabilities"]["urn:inbuxa:jmap"] = json!({});
+    let (upload, activate, _keep) = mock_sieve_export(
+        &mut server,
+        session.to_string(),
+        Matcher::Exact("require [\"fileinto\", \"vnd.inbuxa.while\"];\nkeep;\n".into()),
+        true,
+        json!(["SieveScript/set", {"accountId":"w"}, "a"]),
+    );
+    let summary = sync::export::run(
+        common(&archive),
+        export_cfg_objects(&base, vec![ObjectType::SieveScript]),
+    )
+    .expect("export");
+    upload.assert();
+    activate.assert();
+    assert_eq!(sieve_counts(&summary).created, 1);
+    let _ = std::fs::remove_file(&archive);
+}
+
 #[test]
 fn export_sieve_keeps_stalwart_names_for_a_target_without_inbuxa_names() {
     let mut server = mockito::Server::new();

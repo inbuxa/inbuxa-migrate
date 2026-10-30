@@ -24,6 +24,11 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
   plan.
 
 ### Fixed
+- `export` into inbuxa renames Stalwart's Sieve extensions
+  (`vnd.stalwart.while` and the rest) to inbuxa's. It looked for inbuxa's
+  names in the server's list of Sieve extensions, which doesn't name them,
+  so scripts went in unchanged. It now goes by the session, which says the
+  server is inbuxa.
 - `inspect` opens the archive read-only. It used to create an empty archive
   at a mistyped path and bring an older archive's layout up to date; now
   the first is an error and the second is refused, and reading a closed

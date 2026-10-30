@@ -20,11 +20,12 @@ const NEW: &str = "vnd.inbuxa.";
 const OLD_ENV_REF: &str = "${env.vnd.stalwart.";
 const NEW_ENV_REF: &str = "${env.vnd.inbuxa.";
 
-/// Whether the target advertises inbuxa's vendor extensions, from the
-/// `sieveExtensions` list of its `urn:ietf:params:jmap:sieve` account
-/// capability.
-pub fn target_uses_inbuxa_names(sieve_extensions: &[String]) -> bool {
-    sieve_extensions.iter().any(|e| e.starts_with(NEW))
+/// Whether the target takes inbuxa's vendor names: it is an inbuxa server
+/// (its session has `urn:inbuxa:jmap`), or its `sieveExtensions` list
+/// names them. inbuxa runs `vnd.inbuxa.while` and the rest without listing
+/// them, as Stalwart does its own, so the list alone misses it.
+pub fn target_uses_inbuxa_names(inbuxa_session: bool, sieve_extensions: &[String]) -> bool {
+    inbuxa_session || sieve_extensions.iter().any(|e| e.starts_with(NEW))
 }
 
 /// The script with Stalwart's vendor names renamed, and the old names that
@@ -329,14 +330,16 @@ mod tests {
 
     #[test]
     fn target_detection() {
-        assert!(target_uses_inbuxa_names(&[
-            "fileinto".to_owned(),
-            "vnd.inbuxa.while".to_owned()
-        ]));
-        assert!(!target_uses_inbuxa_names(&[
-            "fileinto".to_owned(),
-            "vnd.stalwart.while".to_owned()
-        ]));
-        assert!(!target_uses_inbuxa_names(&[]));
+        assert!(target_uses_inbuxa_names(
+            false,
+            &["fileinto".to_owned(), "vnd.inbuxa.while".to_owned()]
+        ));
+        assert!(!target_uses_inbuxa_names(
+            false,
+            &["fileinto".to_owned(), "vnd.stalwart.while".to_owned()]
+        ));
+        assert!(!target_uses_inbuxa_names(false, &[]));
+        // inbuxa lists none of its vendor extensions.
+        assert!(target_uses_inbuxa_names(true, &["fileinto".to_owned()]));
     }
 }

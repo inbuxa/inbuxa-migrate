@@ -675,6 +675,9 @@ cargo test --test integration_export_imap        -- --ignored --test-threads=1
 cargo test --test integration_export_managesieve -- --ignored --test-threads=1
 cargo test --test integration_export_dav         -- --ignored --test-threads=1
 
+# inbuxa itself, an image pinned by digest (run before each release):
+cargo test --test integration_inbuxa -- --ignored
+
 # Slow tests
 cargo test --test mock_jmap -- --ignored
 ```
@@ -684,4 +687,17 @@ container, and each one creates and removes the same disposable domain,
 `inbuxa-migrate.org`, and opens its archive with SQLite's `EXCLUSIVE` lock.
 Separate binaries each boot their own container on their own ports, so
 running them one after another is safe.
+
+`integration_inbuxa` is the exception: each of its tests starts its own
+inbuxa server on its own volume, so its tests run in parallel. A test starts
+the server once in recovery mode to make a domain and an administrator, then
+again normally, where the administrator makes an API key. It then checks:
+- a `migrate --plan` run that sets up the accounts with `import-directory`
+  and exports each one with that one key;
+- a message in two folders arriving once, in both;
+- a second export carrying over a changed flag;
+- Sieve scripts getting inbuxa's names.
+
+To test another release, change the digest in
+`tests/integration/inbuxa.rs`.
 

@@ -18,6 +18,9 @@ use crate::logging::Logger;
 
 pub const URN_CORE: &str = "urn:ietf:params:jmap:core";
 
+/// The session capability every inbuxa server has.
+pub const URN_INBUXA: &str = "urn:inbuxa:jmap";
+
 /// The capability inbuxa advertises for its registry types (`x:Account`,
 /// `x:Domain` and the rest of the `x:` objects).
 pub const URN_INBUXA_REGISTRY: &str = "urn:inbuxa:jmap:registry";
