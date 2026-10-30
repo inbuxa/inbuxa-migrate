@@ -14,6 +14,7 @@ use std::path::Path;
 use std::process::Command;
 
 use inbuxa_migrate::db;
+use integration::guide::{post, settled, start};
 use integration::inbuxa::{ADMIN_EMAIL, ADMIN_PASSWORD, Inbuxa};
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -287,5 +288,82 @@ fn a_second_export_updates_flags_and_sieve_names_are_renamed() {
             1,
             vec!["$flagged".to_owned(), "$seen".to_owned()]
         )]
+    );
+}
+
+#[test]
+#[ignore = "requires Docker"]
+fn the_guide_sets_up_the_accounts_previews_and_moves_them() {
+    let server = Inbuxa::start().expect("start inbuxa");
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    message(
+        &root.join("mail/example.org/cat"),
+        "1:2,S",
+        "cat-1",
+        "For Cat",
+    );
+    message(
+        &root.join("mail/other.test/dan"),
+        "1:2,",
+        "dan-1",
+        "For Dan",
+    );
+    let guide = start(BIN, root);
+    let form = json!({
+        "source": {"kind": "maildir", "path": "mail/{domain}/{local}"},
+        "accounts": ["cat@example.org", "dan@other.test"],
+        "create": true,
+        "target": {"url": server.base_url, "token": server.token},
+        "parallel": 2,
+    });
+    let (_, checked) = post(&guide, "api/check-target", &json!({"form": form}));
+    assert_eq!(checked["ok"], true, "{checked}");
+    let job = |kind: &str| {
+        let (status, body) = post(&guide, "api/job", &json!({"kind": kind, "form": form}));
+        assert_eq!(status, 200, "{body}");
+        let state = settled(&guide);
+        assert_eq!(state["job"]["exit"], 0, "{state}");
+        state["job"]["result"].clone()
+    };
+
+    // The preview creates nothing and reads each account's folder.
+    let preview = job("preview");
+    let report = preview["report"].as_str().unwrap();
+    assert!(report.contains("(setup),accounts,done,"), "{report}");
+    assert!(
+        report.contains("dan@other.test,import,done,2,2"),
+        "{report}"
+    );
+    assert!(server.account_of("cat@example.org", "x").is_err());
+
+    let run = job("run");
+    let passwords =
+        fs::read_to_string(run["passwords"].as_str().expect("a passwords file")).unwrap();
+    let password = |email: &str| {
+        passwords
+            .lines()
+            .find_map(|l| l.strip_prefix(&format!("{email},")))
+            .unwrap_or_else(|| panic!("{email} not in {passwords}"))
+            .to_owned()
+    };
+    assert_eq!(
+        emails(&server, "cat@example.org", &password("cat@example.org")),
+        [("For Cat".to_owned(), 1, vec!["$seen".to_owned()])]
+    );
+    assert_eq!(
+        emails(&server, "dan@other.test", &password("dan@other.test")),
+        [("For Dan".to_owned(), 1, Vec::new())]
+    );
+
+    // The final pass finds nothing new.
+    let last = job("final");
+    let report = last["report"].as_str().unwrap();
+    assert!(
+        report
+            .lines()
+            .filter(|r| r.contains(",export,"))
+            .all(|r| r.contains(",export,done,0,0,0,0,")),
+        "{report}"
     );
 }

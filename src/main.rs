@@ -10,7 +10,7 @@ use clap::Parser;
 use inbuxa_migrate::cli::{Action, Cli};
 use inbuxa_migrate::error::Error;
 use inbuxa_migrate::sync::{self, RunOutcome, Summary};
-use inbuxa_migrate::{export_directory, export_files, import_directory, inspect, migrate};
+use inbuxa_migrate::{export_directory, export_files, guide, import_directory, inspect, migrate};
 
 fn main() {
     let code = run();
@@ -144,6 +144,12 @@ fn run() -> i32 {
                         0
                     }
                 }
+                Err(err) => fail(&err),
+            };
+        }
+        Action::Guide(config) => {
+            return match guide::run(config) {
+                Ok(()) => 0,
                 Err(err) => fail(&err),
             };
         }

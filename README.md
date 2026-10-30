@@ -25,6 +25,7 @@ contacts, identities, Sieve scripts and files.
     inbuxa-migrate export-directory … out        a server's accounts, no secrets
     inbuxa-migrate import-directory … out        those accounts, set up on inbuxa
     inbuxa-migrate migrate --plan plan.json work  many accounts, by a plan
+    inbuxa-migrate guide work                    the same, walked through in the browser
 
 Between the two sides sits an archive: one SQLite file holding one account.
 `import` fills it from the old server; `export` writes it into the new one.
@@ -52,7 +53,10 @@ list of domains, accounts, groups, lists and aliases to set up again
 elsewhere, without passwords, and `import-directory` sets them up on an
 inbuxa server, with a new password for each user. `migrate` moves many
 accounts with one plan file: the same steps for each account, several at
-once, resuming where it stopped, with one report at the end. The full
+once, resuming where it stopped, with one report at the end. `guide`
+walks through the same move in the browser: it asks where the mail is,
+which accounts and which inbuxa server, previews, and runs the plan it
+writes. The full
 command reference is in [docs/usage.md](docs/usage.md).
 
 ## Sources

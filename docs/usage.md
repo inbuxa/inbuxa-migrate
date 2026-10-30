@@ -13,7 +13,7 @@ and how to install it.
 ## Commands and global flags
 
 ```
-inbuxa-migrate <import|export|export-imap|export-managesieve|export-caldav|export-carddav|export-files|export-directory|import-directory|migrate|inspect> [args...]
+inbuxa-migrate <import|export|export-imap|export-managesieve|export-caldav|export-carddav|export-files|export-directory|import-directory|migrate|guide|inspect> [args...]
 ```
 
 Every command takes a few global flags -- verbosity, worker pool size, retry
@@ -629,6 +629,50 @@ The work directory is made readable by its owner only, and so are the
 logs. With `--dry-run`, each step runs with `--dry-run`, nothing is
 recorded, and the report goes to `dry-run-report.csv`. An export step
 reads the archive as it is, so on a first dry run it has nothing to show.
+
+## The guide
+
+```
+inbuxa-migrate guide [--port <PORT>] [--no-open] <DIR>
+```
+
+Walks through moving a domain, or a few accounts, into inbuxa in the
+browser. `guide` serves a page on 127.0.0.1 from the binary itself and
+opens it. The page asks five things in turn:
+
+1. **Where the mail is now:** an IMAP server, a JMAP server (Stalwart or
+   inbuxa), or Maildir folders on this machine. It also asks for a login
+   that can act for every account. On IMAP that's a master user, such as
+   Dovecot's `{email}*master`. On JMAP it's an administrator, with a
+   password or an API key.
+2. **Which accounts:** pasted one per line or as a CSV, or read from a
+   JMAP server's account list. The list can be edited before anything runs.
+3. **Where to:** the inbuxa server and an administrator's API key, and
+   whether to create the accounts inbuxa doesn't have yet. Each new account
+   gets a generated password, written to a file only its owner can read.
+4. **Preview:** a dry run. It signs in for each account, counts what would
+   move, and creates nothing.
+5. **Move,** with progress, a report, and a final pass for when the old
+   server stops taking mail.
+
+The guide writes an ordinary plan, `<DIR>/plan.json`, and runs it with
+`migrate`, so a move started in the browser can be finished from a
+terminal. The page shows the command. Everything else goes into `<DIR>`
+too: the archives, the logs, `work/report.csv`, the passwords file, and the
+answers so far, in `guide.json`. A guide started again on the same
+directory picks up where it was.
+
+- **Only this browser.** The page is served on 127.0.0.1 alone, at an
+  address with a random token that changes each start. A request without
+  the token, for another host name, or from another site's page is
+  refused.
+- **Secrets stay in memory.** Passwords and API keys never go into
+  `guide.json` or the plan. The runs get them through environment
+  variables, `MIGRATE_SOURCE_SECRET` and `MIGRATE_INBUXA_TOKEN`, as a plan
+  run from a terminal does. After the guide restarts, the page asks for
+  them again.
+- `--no-open` prints the address instead of opening a browser.
+  `--port` picks the port; by default any free one is used.
 
 ## Inspect
 

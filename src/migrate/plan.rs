@@ -305,7 +305,7 @@ fn directory_users(path: &Path) -> Result<Vec<String>, Error> {
 }
 
 /// An address that is safe as a directory name, lowercased.
-fn account_email(email: &str) -> Result<String, Error> {
+pub(crate) fn account_email(email: &str) -> Result<String, Error> {
     let email = email.trim().to_ascii_lowercase();
     let ok = match email.split_once('@') {
         Some((local, domain)) => {
