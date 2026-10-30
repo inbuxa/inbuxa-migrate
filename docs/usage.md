@@ -110,6 +110,10 @@ inbuxa-migrate import caldav \
 ```
 
 Discovers the user's CalDAV principal (or accepts a URL pointing straight at a calendar-home or calendar), then imports calendars and events.
+A recurring event comes in with its changed occurrences. Someone invited to
+single occurrences of a series, without the series itself, has each of those
+occurrences as its own event, and `export`, `export-caldav` and
+`export-files` write them back the same way.
 
 ### CardDAV
 
