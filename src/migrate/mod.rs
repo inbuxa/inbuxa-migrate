@@ -21,6 +21,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
 use crate::error::Error;
 use crate::logging::Logger;
@@ -40,6 +41,27 @@ pub struct MigrateConfig {
     /// The binary each step runs: this one.
     pub program: PathBuf,
     pub logger: Logger,
+    /// Progress as JSON lines on stdout, for a program that runs this one.
+    pub progress_json: bool,
+}
+
+/// Writes one progress event, a JSON object on a line of its own, when
+/// `--progress json` asked for them. The events, by `event`:
+///
+/// - `start`: `accounts`, `parallel`, `dryRun`
+/// - `setup`: a setup step ended: `step`, `result`, `counts`, `detail`
+/// - `step`: an account's step began (`result` absent) or ended
+/// - `account`: an account ended: `email`, `n` of `total`, `result`
+/// - `end`: `done`, `unfinished`, `report`
+///
+/// `result` is `done`, `partial`, `failed`, `done earlier` or `not run`. A
+/// closed stdout is ignored, as the guide's output is.
+fn emit(config: &MigrateConfig, event: &str, mut fields: Value) {
+    if !config.progress_json {
+        return;
+    }
+    fields["event"] = json!(event);
+    let _ = writeln!(std::io::stdout().lock(), "{fields}");
 }
 
 pub struct Outcome {
@@ -76,7 +98,7 @@ struct StepReport {
     detail: String,
 }
 
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone, Copy, Serialize)]
 struct Counts {
     fetched: u64,
     created: u64,
@@ -101,6 +123,11 @@ pub fn run(config: MigrateConfig) -> Result<Outcome, Error> {
     let work = std::path::absolute(&config.work)?;
     private_dir(&work)?;
 
+    emit(
+        &config,
+        "start",
+        json!({"accounts": accounts.len(), "parallel": config.parallel, "dryRun": config.dry_run}),
+    );
     let state_path = work.join("state.json");
     let state = Mutex::new(load_state(&state_path)?);
     let save = |state: &State| -> Result<(), Error> {
@@ -126,7 +153,9 @@ pub fn run(config: MigrateConfig) -> Result<Outcome, Error> {
         }
         let log = work.join("setup").join(format!("{}.log", step.name));
         let ran = run_step(&config, &plan, step, None, &log);
-        setup_reports.push(report_of(&step.name, &ran));
+        let report = report_of(&step.name, &ran);
+        emit(&config, "setup", report.json());
+        setup_reports.push(report);
         if !config.dry_run {
             lock(&state).setup.insert(step.name.clone(), ran.result);
         }
@@ -156,6 +185,12 @@ pub fn run(config: MigrateConfig) -> Result<Outcome, Error> {
                     match migrate_account(&config, &plan, &work, email, &state, &save) {
                         Ok(steps) => {
                             let n = finished.fetch_add(1, Ordering::SeqCst) + 1;
+                            emit(
+                                &config,
+                                "account",
+                                json!({"email": email, "n": n, "total": total,
+                                       "result": result_of(&steps)}),
+                            );
                             if config.logger.enabled(crate::logging::LEVEL_DEFAULT) {
                                 eprintln!("[{n}/{total}] {email}: {}", line_of(&steps));
                             }
@@ -187,6 +222,12 @@ pub fn run(config: MigrateConfig) -> Result<Outcome, Error> {
         })
         .count();
     let report = write_report(&work, &config, &setup_reports, &reports)?;
+    emit(
+        &config,
+        "end",
+        json!({"done": reports.len() - unfinished, "unfinished": unfinished,
+               "report": report.display().to_string()}),
+    );
     Ok(Outcome {
         done: reports.len() - unfinished,
         unfinished,
@@ -299,8 +340,13 @@ fn migrate_account(
         }
         running = true;
         let log = dir.join(format!("{}.log", step.name));
+        emit(config, "step", json!({"email": email, "step": step.name}));
         let ran = run_step(config, plan, step, Some((email, &archive)), &log);
-        reports.push(report_of(&step.name, &ran));
+        let report = report_of(&step.name, &ran);
+        let mut ended = report.json();
+        ended["email"] = json!(email);
+        emit(config, "step", ended);
+        reports.push(report);
         if !config.dry_run {
             let mut s = lock(state);
             s.accounts
@@ -334,6 +380,24 @@ fn report_of(step: &str, ran: &Ran) -> StepReport {
         counts: ran.counts,
         detail: ran.detail.clone(),
     }
+}
+
+impl StepReport {
+    fn json(&self) -> Value {
+        json!({
+            "step": self.step, "result": self.result,
+            "counts": self.counts, "detail": self.detail,
+        })
+    }
+}
+
+/// An account's result: the first step that didn't finish decides it.
+fn result_of(steps: &[StepReport]) -> &'static str {
+    steps
+        .iter()
+        .map(|s| s.result)
+        .find(|r| *r == "failed" || *r == "partial")
+        .unwrap_or("done")
 }
 
 fn line_of(steps: &[StepReport]) -> String {

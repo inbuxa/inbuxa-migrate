@@ -43,6 +43,7 @@ fn config(plan: &Path, work: &Path) -> MigrateConfig {
         dry_run: false,
         program: PathBuf::from(env!("CARGO_BIN_EXE_inbuxa-migrate")),
         logger: Logger::from_flags(true, 0),
+        progress_json: false,
     }
 }
 
@@ -177,4 +178,65 @@ fn a_step_sees_only_the_secrets_it_names() {
     assert_eq!(out.unfinished, 2);
     let text = fs::read_to_string(&out.report).unwrap();
     assert!(text.contains("no password provided"), "{text}");
+}
+
+#[test]
+fn progress_json_is_one_event_per_line_and_nothing_else() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    message(&root.join("mail/ann"), "m1", "First");
+    let plan = root.join("plan.json");
+    write_plan(
+        &plan,
+        json!([{"name": "mail", "args": ["import", "maildir", "mail/{local}", "{archive}"]}]),
+    );
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_inbuxa-migrate"))
+        .args(["migrate", "--parallel", "1", "--progress", "json", "--plan"])
+        .arg(&plan)
+        .arg(root.join("work"))
+        .output()
+        .unwrap();
+    // Bob has no Maildir: the run ends unfinished.
+    assert_eq!(out.status.code(), Some(5));
+    let events: Vec<serde_json::Value> = String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("{e}: {l}")))
+        .collect();
+    let kinds: Vec<&str> = events
+        .iter()
+        .map(|e| e["event"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "start", "step", "step", "account", "step", "step", "account", "end"
+        ]
+    );
+    assert_eq!(events[0]["accounts"], 2);
+    assert_eq!(
+        events[1],
+        json!({"event": "step", "email": "ann@example.org", "step": "mail"})
+    );
+    assert_eq!(events[2]["result"], "done");
+    assert_eq!(events[2]["counts"]["created"], 2);
+    assert_eq!(
+        events[3],
+        json!({"event": "account", "email": "ann@example.org", "n": 1, "total": 2, "result": "done"})
+    );
+    assert_eq!(events[5]["result"], "failed");
+    assert!(
+        events[5]["detail"].as_str().unwrap().contains("mail/bob"),
+        "{}",
+        events[5]
+    );
+    assert_eq!(events[6]["result"], "failed");
+    assert_eq!(events[7]["done"], 1);
+    assert_eq!(events[7]["unfinished"], 1);
+    assert!(
+        events[7]["report"]
+            .as_str()
+            .unwrap()
+            .ends_with("report.csv")
+    );
 }

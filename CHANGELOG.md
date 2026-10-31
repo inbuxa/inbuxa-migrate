@@ -7,6 +7,11 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
 
 ## [Unreleased]
 
+### Added
+- `migrate --progress json` writes one JSON event per line on stdout (a
+  step begins or ends, an account ends, the run ends), for a program that
+  runs a migration and shows its progress.
+
 ## [27.1-rc.7]
 
 The seventh release candidate of the 27.1 series: upstream's 1.0.12 and

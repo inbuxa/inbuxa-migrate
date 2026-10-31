@@ -126,14 +126,17 @@ fn run() -> i32 {
             )
         }
         Action::Migrate(config) => {
+            let json = config.progress_json;
             return match migrate::run(config) {
                 Ok(outcome) => {
-                    println!(
-                        "accounts: {} done, {} not finished; report: {}",
-                        outcome.done,
-                        outcome.unfinished,
-                        outcome.report.display()
-                    );
+                    if !json {
+                        println!(
+                            "accounts: {} done, {} not finished; report: {}",
+                            outcome.done,
+                            outcome.unfinished,
+                            outcome.report.display()
+                        );
+                    }
                     if outcome.unfinished > 0 {
                         eprintln!(
                             "error: some accounts did not finish; the report says why. Fix that \
