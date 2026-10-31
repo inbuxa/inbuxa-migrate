@@ -145,7 +145,14 @@ fn seed(path: &Path) {
                 (2, 1, 'file', ?1, NULL, 'a.txt', 'text/plain', '2024-01-01T00:00:00Z', '2024-02-01T10:00:00Z'),
                 (3, 1, 'directory', NULL, NULL, 'Taxes', NULL, '2024-01-01T00:00:00Z', NULL),
                 (4, 3, 'file', ?2, NULL, '2025.pdf', 'application/pdf', '2024-01-01T00:00:00Z', '2024-04-15T09:30:00Z'),
-                (5, 1, 'symlink', NULL, '{\"path\":\"Taxes/2025.pdf\"}', 'latest', NULL, '2024-01-01T00:00:00Z', NULL)",
+                (5, 1, 'symlink', NULL, '{\"path\":\"Taxes/2025.pdf\"}', 'latest', NULL, '2024-01-01T00:00:00Z', NULL),
+                (6, 1, 'file', ?1, NULL, '.profile', 'text/plain', '2024-01-01T00:00:00Z', '2024-02-01T10:00:00Z'),
+                (7, 1, 'file', ?1, NULL, 'Q3: plan?', NULL, '2024-01-01T00:00:00Z', '2024-03-01T08:00:00Z'),
+                (8, NULL, 'directory', NULL, NULL, 'Notes', NULL, '2024-01-01T00:00:00Z', NULL),
+                (9, NULL, 'file', ?1, NULL, 'notes', 'text/plain', '2024-01-01T00:00:00Z', '2024-05-01T12:00:00Z'),
+                (10, 8, 'symlink', NULL, '{\"path\":\"../Docs\"}', 'CON', NULL, '2024-01-01T00:00:00Z', NULL),
+                (11, 1, 'directory', NULL, NULL, 'Plans: 2026', NULL, '2024-01-01T00:00:00Z', NULL),
+                (12, 11, 'file', ?2, NULL, 'draft.pdf', 'application/pdf', '2024-01-01T00:00:00Z', '2024-06-01T09:00:00Z')",
         params![text, pdf],
     )
     .unwrap();
@@ -432,6 +439,32 @@ fn an_exported_account_comes_back_whole() {
         "{mailboxes:?}"
     );
 
+    // Files whose names had to change on disk kept their real names.
+    let names = &manifest(&f.out)["files"]["names"];
+    assert_eq!(
+        names,
+        &json!({
+            "files/Docs/Plans_ 2026": "Plans: 2026",
+            "files/Docs/Q3_ plan_": "Q3: plan?",
+            "files/Docs/_.profile": ".profile",
+            "files/Notes/CON_": "CON",
+            "files/notes (2)": "notes",
+        })
+    );
+    let files = &read_back["files"];
+    for path in [
+        "Docs/.profile",
+        "Docs/Q3: plan?",
+        "notes",
+        "Notes/CON",
+        "Docs/Plans: 2026/draft.pdf",
+    ] {
+        assert!(
+            files.iter().any(|f| f.starts_with(&format!("{path} "))),
+            "{path}: {files:?}"
+        );
+    }
+
     let conn = Connection::open(&back).unwrap();
     let source: (String, String) = conn
         .query_row("SELECT kind, account_name FROM sources", [], |r| {
@@ -656,7 +689,7 @@ fn a_dry_run_reads_the_export_and_writes_nothing() {
     assert_eq!(counts(&summary, "email").fetched, 8);
     assert_eq!(counts(&summary, "contactcard").fetched, 3);
     assert_eq!(counts(&summary, "calendarevent").fetched, 3);
-    assert_eq!(counts(&summary, "filenode").fetched, 5);
+    assert_eq!(counts(&summary, "filenode").fetched, 12);
 }
 
 #[test]
@@ -754,6 +787,51 @@ fn nothing_outside_the_export_is_read() {
     assert_eq!(elsewhere, 0);
     // Everything that was safely inside still came in.
     assert_eq!(counts(&summary, "email").created, 7);
+}
+
+#[test]
+fn real_names_that_clash_or_cant_be_names_are_not_used() {
+    let f = exported();
+    let mut m = manifest(&f.out);
+    let names = m["files"]["names"].as_object_mut().unwrap();
+    // A file renamed onto its sibling directory, a name that climbs, an empty
+    // one, and a link renamed onto a file.
+    names.insert("files/Docs/a.txt".into(), json!("Taxes"));
+    names.insert("files/Docs/_.profile".into(), json!("../escape"));
+    names.insert("files/Docs/Q3_ plan_".into(), json!(""));
+    names.insert("files/Docs/latest".into(), json!("a.txt"));
+    fs::write(f.out.join("manifest.json"), m.to_string()).unwrap();
+
+    let back = f.root.join("back.sqlite");
+    let summary = import(&f.out, &back).unwrap();
+    // Only the link has nowhere to go.
+    assert_eq!(
+        counts(&summary, "filenode").failed,
+        1,
+        "{:?}",
+        summary.per_type
+    );
+
+    let conn = Connection::open(&back).unwrap();
+    let docs: BTreeSet<String> = rows(
+        &conn,
+        "SELECT c.name || ' ' || c.node_type FROM file_nodes c
+         JOIN file_nodes p ON p.id = c.parent_id WHERE p.name = 'Docs'",
+    )
+    .into_iter()
+    .map(|r| r[0].as_str().unwrap().to_owned())
+    .collect();
+    let expected: BTreeSet<String> = [
+        "Taxes directory",
+        "a.txt file",
+        "_.profile file",
+        "Q3_ plan_ file",
+        "Plans: 2026 directory",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+    assert_eq!(docs, expected);
 }
 
 #[test]

@@ -239,7 +239,8 @@ struct FileNode {
 
 /// The file tree as directories and files. Links are listed in the manifest
 /// and never made: the source chose their targets, and one could point
-/// anywhere on this machine.
+/// anywhere on this machine. A name that had to change on disk is listed with
+/// its real one.
 fn write_files(
     conn: &Connection,
     root: &Path,
@@ -281,6 +282,7 @@ fn write_files(
         counts: TypeCounts::default(),
         links: Vec::new(),
         media_types: serde_json::Map::new(),
+        names: serde_json::Map::new(),
         visited: std::collections::HashSet::new(),
     };
     state.write_dir(None, root, "files")?;
@@ -288,6 +290,7 @@ fn write_files(
         "path": "files",
         "mediaTypes": state.media_types,
         "links": state.links,
+        "names": state.names,
     });
     Ok((state.counts, manifest))
 }
@@ -300,6 +303,8 @@ struct FilesState<'a> {
     counts: TypeCounts,
     links: Vec<Value>,
     media_types: serde_json::Map<String, Value>,
+    /// The real name of each entry whose name on disk had to change.
+    names: serde_json::Map<String, Value>,
     visited: std::collections::HashSet<i64>,
 }
 
@@ -316,6 +321,10 @@ impl FilesState<'_> {
             let name = names.unique(&safe_component(&node.name), "");
             let path = dir.join(&name);
             let rel_path = format!("{rel}/{name}");
+            if name != node.name {
+                self.names
+                    .insert(rel_path.clone(), Value::String(node.name.clone()));
+            }
             match node.node_type.as_str() {
                 "directory" => {
                     if !self.dry_run {

@@ -254,6 +254,9 @@ fn writes_open_formats_and_a_manifest() {
             .any(|s| s["name"] == "filters" && s["active"] == true)
     );
     assert_eq!(m["files"]["links"][0]["path"], "files/link");
+    // Names that had to change on disk are kept with their real ones.
+    assert_eq!(m["files"]["names"]["files/_.._escape"], "../escape");
+    assert!(m["files"]["names"].get("files/Docs/a.txt").is_none());
     assert_eq!(m["identities"][0]["email"], "alice@example.org");
 
     #[cfg(unix)]

@@ -8,7 +8,7 @@
 //! media types and links, and the identities, which only the manifest
 //! holds.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
@@ -150,6 +150,7 @@ pub fn import_files(
         source_id,
         files,
         dirs: HashMap::new(),
+        claimed: HashMap::new(),
         rerun: Rerun::default(),
         created,
         logger,
@@ -183,6 +184,8 @@ struct FileTree<'a> {
     files: &'a Files,
     /// Each directory made, by its path in the export.
     dirs: HashMap<String, i64>,
+    /// The names given in each directory so far, so no two entries share one.
+    claimed: HashMap<Option<i64>, HashSet<String>>,
     rerun: Rerun,
     /// When the export was written: the time for what has none of its own.
     created: &'a str,
@@ -200,7 +203,7 @@ struct Node<'a> {
     modified: Option<String>,
 }
 
-impl FileTree<'_> {
+impl<'a> FileTree<'a> {
     fn walk(
         &mut self,
         dir: &Path,
@@ -218,6 +221,7 @@ impl FileTree<'_> {
                 }
             };
         entries.sort_by_key(fs::DirEntry::file_name);
+        let mut found: Vec<(fs::DirEntry, String, fs::FileType)> = Vec::new();
         for entry in entries {
             let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
                 self.logger.warn(&format!(
@@ -242,6 +246,17 @@ impl FileTree<'_> {
                 counts.skipped += 1;
                 continue;
             }
+            if !file_type.is_dir() && !file_type.is_file() {
+                self.logger
+                    .warn(&format!("{rel_path} is not a file or directory; skipped"));
+                counts.skipped += 1;
+                continue;
+            }
+            found.push((entry, name, file_type));
+        }
+        let names = self.real_names(rel, parent, found.iter().map(|(_, name, _)| name.as_str()));
+        for ((entry, name, file_type), real) in found.into_iter().zip(names) {
+            let rel_path = format!("{rel}/{name}");
             if file_type.is_dir() {
                 // A writer sets the times of files, not of directories, so a
                 // directory's time is only when the export was written.
@@ -252,7 +267,7 @@ impl FileTree<'_> {
                         node_type: "directory",
                         blob: None,
                         target: None,
-                        name: &name,
+                        name: &real,
                         media_type: None,
                         created: self.created.to_owned(),
                         modified: None,
@@ -261,7 +276,7 @@ impl FileTree<'_> {
                 )?;
                 self.dirs.insert(rel_path.clone(), id);
                 self.walk(&entry.path(), &rel_path, Some(id), counts)?;
-            } else if file_type.is_file() {
+            } else {
                 let modified = entry.metadata().ok().and_then(|m| mtime_rfc3339(&m));
                 let created = modified.clone().unwrap_or_else(|| self.created.to_owned());
                 let bytes = match fs::read(entry.path()) {
@@ -281,20 +296,73 @@ impl FileTree<'_> {
                         node_type: "file",
                         blob: Some(blob),
                         target: None,
-                        name: &name,
+                        name: &real,
                         media_type,
                         created,
                         modified,
                     },
                     counts,
                 )?;
-            } else {
-                self.logger
-                    .warn(&format!("{rel_path} is not a file or directory; skipped"));
-                counts.skipped += 1;
             }
         }
         Ok(())
+    }
+
+    /// The name each entry of one directory gets in the archive. Entries the
+    /// manifest doesn't rename keep their names on disk, and claim them
+    /// first, so a renamed entry never takes a name that is already there; one
+    /// whose real name is taken, or can't be a name, keeps its name on disk.
+    fn real_names<'n>(
+        &mut self,
+        rel: &str,
+        parent: Option<i64>,
+        on_disk: impl Iterator<Item = &'n str>,
+    ) -> Vec<String> {
+        let wanted: Vec<(&str, Option<&str>)> = on_disk
+            .map(|name| (name, self.renamed(&format!("{rel}/{name}"), name)))
+            .collect();
+        let claimed = self.claimed.entry(parent).or_default();
+        for (name, real) in &wanted {
+            if real.is_none() {
+                claimed.insert((*name).to_owned());
+            }
+        }
+        let mut out = Vec::with_capacity(wanted.len());
+        for (name, real) in wanted {
+            let Some(real) = real else {
+                out.push(name.to_owned());
+                continue;
+            };
+            if claimed.insert(real.to_owned()) {
+                out.push(real.to_owned());
+                continue;
+            }
+            self.logger.warn(&format!(
+                "{rel}/{name}: its real name {real:?} is taken in the same directory; \
+                 it keeps the name it has on disk"
+            ));
+            claimed.insert(name.to_owned());
+            out.push(name.to_owned());
+        }
+        out
+    }
+
+    /// The real name the manifest gives an entry, when it differs from the
+    /// name on disk and could be a name at all.
+    fn renamed(&self, rel_path: &str, on_disk: &str) -> Option<&'a str> {
+        let files: &'a Files = self.files;
+        let real = files.names.get(rel_path)?.as_str();
+        if real == on_disk {
+            return None;
+        }
+        if real.is_empty() || real == "." || real == ".." || real.contains(['/', '\0']) {
+            self.logger.warn(&format!(
+                "{rel_path}: the manifest's name for it, {real:?}, can't be a name; \
+                 it keeps the name it has on disk"
+            ));
+            return None;
+        }
+        Some(real)
     }
 
     fn link(
@@ -320,6 +388,12 @@ impl FileTree<'_> {
                 None => return Err(format!("its directory {parent_rel} is not in the export")),
             }
         };
+        let name = self.renamed(rel, name).unwrap_or(name).to_owned();
+        if !self.claimed.entry(parent).or_default().insert(name.clone()) {
+            return Err(format!(
+                "its name {name:?} is taken by another entry in the same directory"
+            ));
+        }
         let target = (!target.is_null()).then(|| target.to_string());
         self.node(
             rel,
@@ -328,7 +402,7 @@ impl FileTree<'_> {
                 node_type: "symlink",
                 blob: None,
                 target,
-                name,
+                name: &name,
                 media_type: None,
                 created: self.created.to_owned(),
                 modified: None,

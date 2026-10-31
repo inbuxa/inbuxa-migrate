@@ -232,7 +232,8 @@ manifest, so what those formats can't hold comes back too:
 - which address book and calendar were the default, and each calendar's
   description, color and time zone;
 - which Sieve script was active;
-- the files' media types and links;
+- the files' media types and links, and the real name of any file or
+  directory whose name had to change on disk;
 - the identities with their reply-to, bcc and signatures, and the calendar
   identities.
 
@@ -541,7 +542,8 @@ DIR/
 
 Every name comes from the source, so none is used as a path as it stands:
 separators and names Windows refuses become `_`, and names that clash, even
-only by case, are numbered.
+only by case, are numbered. The manifest keeps the real name of every file
+and directory whose name changed, so a reader can restore it.
 
 `manifest.json` records the source account, every folder's real name,
 path, role and message count, each address book and calendar with its
