@@ -352,6 +352,7 @@ fn graph_import_survives_a_full_export_to_stalwart() {
         },
         ExportConfig {
             connect: ConnectConfig {
+                stay_on_url: false,
                 url: base_url().to_owned(),
                 auth: Auth::Basic {
                     user: account.email.clone(),

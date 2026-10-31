@@ -220,6 +220,7 @@ fn managesieve_and_jmap_imports_share_blob_bytes() {
 
     let jmap_cfg = ImportConfig {
         connect: ConnectConfig {
+            stay_on_url: false,
             url: fx.base_url.clone(),
             auth: Auth::Basic {
                 user: acc.email.clone(),
@@ -385,6 +386,7 @@ fn managesieve_round_trip_via_jmap_export_converges() {
     };
     let export_cfg = inbuxa_migrate::sync::ExportConfig {
         connect: ConnectConfig {
+            stay_on_url: false,
             url: fx.base_url.clone(),
             auth: Auth::Basic {
                 user: dst.email.clone(),
@@ -419,6 +421,7 @@ fn managesieve_round_trip_via_jmap_export_converges() {
     };
     let export_cfg2 = inbuxa_migrate::sync::ExportConfig {
         connect: ConnectConfig {
+            stay_on_url: false,
             url: fx.base_url.clone(),
             auth: Auth::Basic {
                 user: dst.email.clone(),

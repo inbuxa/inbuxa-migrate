@@ -48,10 +48,15 @@ pub enum SourceKind {
     Google,
 }
 
-impl SourceKind {
-    /// Whether the source signs in with a secret typed into the page.
-    fn has_secret(self) -> bool {
-        matches!(self, Self::Imap | Self::Jmap | Self::Microsoft)
+impl Source {
+    /// Whether the source signs in with a secret typed into the page. A
+    /// Google key given as a secret, not a file, is one too.
+    pub fn has_secret(&self) -> bool {
+        match self.kind {
+            SourceKind::Imap | SourceKind::Jmap | SourceKind::Microsoft => true,
+            SourceKind::Google => self.key_file.trim().is_empty(),
+            SourceKind::Maildir => false,
+        }
     }
 }
 
@@ -71,9 +76,10 @@ pub struct Source {
     /// Microsoft 365: the Entra tenant and the app's client id.
     pub tenant: String,
     pub client_id: String,
-    /// Google: the service account's JSON key file.
+    /// Google: the service account's JSON key file. Empty when the key
+    /// itself is the secret, as from a program running the tool.
     pub key_file: String,
-    /// The password, API key or client secret.
+    /// The password, API key, client secret or Google key.
     #[serde(skip_serializing)]
     pub secret: String,
 }
@@ -82,15 +88,34 @@ pub struct Source {
 #[serde(rename_all = "camelCase", default)]
 pub struct Target {
     pub url: String,
+    /// `--stay-on-url`: for a server reached at an address other than the
+    /// one it advertises, such as its own loopback.
+    pub stay_on_url: bool,
+    /// `--allow-invalid-certs`, for the same.
+    pub allow_invalid_certs: bool,
     #[serde(skip_serializing)]
     pub token: String,
+}
+
+impl Target {
+    /// The flags every step that writes into inbuxa takes.
+    fn flags(&self) -> Vec<&'static str> {
+        let mut flags = Vec::new();
+        if self.stay_on_url {
+            flags.push("--stay-on-url");
+        }
+        if self.allow_invalid_certs {
+            flags.push("--allow-invalid-certs");
+        }
+        flags
+    }
 }
 
 impl Form {
     /// The secrets a run needs, by variable.
     pub fn env(&self) -> Vec<(&'static str, String)> {
         let mut env = vec![(TARGET_TOKEN_VAR, self.target.token.clone())];
-        if self.source.kind.has_secret() {
+        if self.source.has_secret() {
             env.push((SOURCE_SECRET_VAR, self.source.secret.clone()));
         }
         env
@@ -107,8 +132,26 @@ impl Form {
         }
     }
 
-    /// Everything a plan needs, or what's missing, in the page's words.
+    /// Everything a run needs, or what's missing, in the page's words.
     pub fn check(&self) -> Result<(), String> {
+        self.check_answers()?;
+        let s = &self.source;
+        if s.has_secret() && s.secret.is_empty() {
+            return Err(match s.kind {
+                SourceKind::Microsoft => "Give the app's client secret.".into(),
+                SourceKind::Google => "Give the service account's key file.".into(),
+                _ => "Give the old server's password or API key.".into(),
+            });
+        }
+        if self.target.token.is_empty() {
+            return Err("Give the inbuxa server's address and an administrator's API key.".into());
+        }
+        Ok(())
+    }
+
+    /// Everything a plan needs, secrets aside: a plan only names the
+    /// variables they'll be in.
+    pub fn check_answers(&self) -> Result<(), String> {
         let s = &self.source;
         match s.kind {
             SourceKind::Imap | SourceKind::Jmap if s.url.trim().is_empty() => {
@@ -127,22 +170,12 @@ impl Form {
             {
                 return Err("Give the Microsoft 365 tenant and the app's client id.".into());
             }
-            SourceKind::Google if s.key_file.trim().is_empty() => {
-                return Err("Give the service account's key file.".into());
-            }
             _ => {}
-        }
-        if s.kind.has_secret() && s.secret.is_empty() {
-            return Err(if s.kind == SourceKind::Microsoft {
-                "Give the app's client secret.".into()
-            } else {
-                "Give the old server's password or API key.".into()
-            });
         }
         if self.accounts.is_empty() {
             return Err("List the accounts to move.".into());
         }
-        if self.target.url.trim().is_empty() || self.target.token.is_empty() {
+        if self.target.url.trim().is_empty() {
             return Err("Give the inbuxa server's address and an administrator's API key.".into());
         }
         Ok(())
@@ -180,6 +213,11 @@ impl Form {
                 args.extend(["--user", "{email}"]);
                 secrets = json!({"clientSecret": SOURCE_SECRET_VAR});
             }
+            SourceKind::Google if s.key_file.trim().is_empty() => {
+                args.extend(["import", "imap", "--url", GMAIL_IMAP]);
+                args.extend(["--google-key-from-env", "--auth-user", "{email}"]);
+                secrets = json!({"googleKey": SOURCE_SECRET_VAR});
+            }
             SourceKind::Google => {
                 args.extend(["import", "imap", "--url", GMAIL_IMAP]);
                 args.extend(["--google-key", s.key_file.trim(), "--auth-user", "{email}"]);
@@ -190,24 +228,25 @@ impl Form {
     }
 
     fn export_step(&self) -> Value {
-        json!({
-            "name": "export",
-            "args": ["export", "--url", self.target.url.trim(), "--auth-bearer",
-                     "--account-name", "{email}", "{archive}"],
-            "secrets": {"token": TARGET_TOKEN_VAR},
-        })
+        let mut args = vec!["export", "--url", self.target.url.trim(), "--auth-bearer"];
+        args.extend(self.target.flags());
+        args.extend(["--account-name", "{email}", "{archive}"]);
+        json!({"name": "export", "args": args, "secrets": {"token": TARGET_TOKEN_VAR}})
     }
 
     fn setup(&self, passwords: &str) -> Vec<Value> {
         if !self.create {
             return Vec::new();
         }
-        vec![json!({
-            "name": "accounts",
-            "args": ["import-directory", "--url", self.target.url.trim(), "--auth-bearer",
-                     "--passwords", passwords, DIRECTORY],
-            "secrets": {"token": TARGET_TOKEN_VAR},
-        })]
+        let mut args = vec![
+            "import-directory",
+            "--url",
+            self.target.url.trim(),
+            "--auth-bearer",
+        ];
+        args.extend(self.target.flags());
+        args.extend(["--passwords", passwords, DIRECTORY]);
+        vec![json!({"name": "accounts", "args": args, "secrets": {"token": TARGET_TOKEN_VAR}})]
     }
 
     /// The plan for the move: set up the accounts if asked, then read each
@@ -356,6 +395,7 @@ mod tests {
             target: Target {
                 url: "https://mail.example.org".into(),
                 token: "t0ken".into(),
+                ..Target::default()
             },
             parallel: 4,
         }
@@ -396,6 +436,57 @@ mod tests {
         assert_eq!(plan["steps"][0]["secrets"]["password"], SOURCE_SECRET_VAR);
         assert_eq!(plan["steps"][1]["args"][5], "{email}");
         assert_eq!(plan["steps"][1]["secrets"]["token"], TARGET_TOKEN_VAR);
+    }
+
+    #[test]
+    fn a_server_on_its_own_loopback_stays_there_in_every_inbuxa_step() {
+        let mut f = form(SourceKind::Imap);
+        f.target.url = "https://127.0.0.1:443".into();
+        f.target.stay_on_url = true;
+        f.target.allow_invalid_certs = true;
+        let plan = f.plan("p.csv");
+        for args in [&plan["setup"][0]["args"], &plan["steps"][1]["args"]] {
+            assert_eq!(args[4], "--stay-on-url", "{args}");
+            assert_eq!(args[5], "--allow-invalid-certs", "{args}");
+        }
+        let import = plan["steps"][0]["args"].to_string();
+        assert!(!import.contains("--stay-on-url"), "{import}");
+    }
+
+    #[test]
+    fn a_google_key_is_a_file_or_the_secret() {
+        let mut f = form(SourceKind::Google);
+        f.source.key_file = "sa.json".into();
+        f.source.secret.clear();
+        assert_eq!(f.check(), Ok(()));
+        let step = &f.plan("p.csv")["steps"][0];
+        assert_eq!(step["args"][4], "--google-key");
+        assert_eq!(step["secrets"], json!({}));
+        assert_eq!(f.env().len(), 1, "only the target's token");
+
+        f.source.key_file.clear();
+        assert_eq!(f.check_answers(), Ok(()));
+        assert_eq!(
+            f.check(),
+            Err("Give the service account's key file.".into())
+        );
+        f.source.secret = "{\"type\":\"service_account\"}".into();
+        assert_eq!(f.check(), Ok(()));
+        let step = &f.plan("p.csv")["steps"][0];
+        assert_eq!(step["args"][4], "--google-key-from-env");
+        assert_eq!(step["secrets"]["googleKey"], SOURCE_SECRET_VAR);
+        assert!(f.env().iter().any(|(var, _)| *var == SOURCE_SECRET_VAR));
+    }
+
+    #[test]
+    fn answers_are_checked_without_their_secrets() {
+        let mut f = form(SourceKind::Imap);
+        f.source.secret.clear();
+        f.target.token.clear();
+        assert_eq!(f.check_answers(), Ok(()));
+        assert!(f.check().is_err());
+        f.target.url.clear();
+        assert!(f.check_answers().is_err());
     }
 
     #[test]

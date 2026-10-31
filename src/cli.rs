@@ -16,7 +16,7 @@ use crate::exchange_ews::types::MailboxKind;
 use crate::exchange_graph::types::{EventBodyFormat, MailboxKind as GraphMailboxKind, Surfaces};
 use crate::export_directory::ExportDirectoryConfig;
 use crate::export_files::ExportFilesConfig;
-use crate::guide::GuideConfig;
+use crate::guide::{GuideConfig, PlanConfig};
 use crate::import_directory::ImportDirectoryConfig;
 use crate::inspect::InspectConfig;
 use crate::jmap::account::AccountSelector;
@@ -100,6 +100,10 @@ enum Command {
         about = "Walk through a move to inbuxa in the browser: a page on this machine writes the plan and runs it"
     )]
     Guide(Box<GuideArgs>),
+    #[command(
+        about = "Write the guide's plans from its answers, for a program that runs migrate itself"
+    )]
+    Plan(Box<PlanArgs>),
     #[command(about = "Show the contents of a local archive (read-only)")]
     Inspect(Box<InspectArgs>),
 }
@@ -187,6 +191,12 @@ struct JmapImportArgs {
     #[arg(long, value_name = "URL", help = "Base URL or full JMAP session URL")]
     url: String,
 
+    #[arg(
+        long,
+        help = "Send every request to the --url host, even when the server's session names another (such as its public address)"
+    )]
+    stay_on_url: bool,
+
     #[arg(long, value_name = "USER", help = "HTTP Basic user")]
     auth_basic: Option<String>,
 
@@ -235,7 +245,7 @@ struct JmapImportArgs {
 }
 
 #[derive(Args)]
-#[command(group(clap::ArgGroup::new("auth").required(true).args(["auth_basic", "auth_bearer", "google_key"])))]
+#[command(group(clap::ArgGroup::new("auth").required(true).args(["auth_basic", "auth_bearer", "google_key", "google_key_from_env"])))]
 struct ImapImportArgs {
     #[arg(
         long,
@@ -279,6 +289,12 @@ struct ImapImportArgs {
         help = "Google Workspace: a service account's JSON key with domain-wide delegation; signs in as --auth-user"
     )]
     google_key: Option<PathBuf>,
+
+    #[arg(
+        long,
+        help = "Like --google-key, with the key's JSON in $INBUXA_MIGRATE_GOOGLE_KEY"
+    )]
+    google_key_from_env: bool,
 
     #[arg(long, help = "Permit credentials on imap:// without STARTTLS")]
     allow_cleartext: bool,
@@ -372,6 +388,12 @@ struct ImapImportArgs {
 struct ExportArgs {
     #[arg(long, value_name = "URL", help = "Base URL or full JMAP session URL")]
     url: String,
+
+    #[arg(
+        long,
+        help = "Send every request to the --url host, even when the server's session names another (such as its public address)"
+    )]
+    stay_on_url: bool,
 
     #[arg(long, value_name = "USER", help = "HTTP Basic user")]
     auth_basic: Option<String>,
@@ -580,6 +602,12 @@ struct ExportDirectoryArgs {
     #[arg(long, value_name = "URL", help = "Base URL or full JMAP session URL")]
     url: String,
 
+    #[arg(
+        long,
+        help = "Send every request to the --url host, even when the server's session names another (such as its public address)"
+    )]
+    stay_on_url: bool,
+
     #[arg(long, value_name = "USER", help = "HTTP Basic user (an administrator)")]
     auth_basic: Option<String>,
 
@@ -640,6 +668,12 @@ struct ImportDirectoryArgs {
         help = "The inbuxa server: base URL or full JMAP session URL"
     )]
     url: String,
+
+    #[arg(
+        long,
+        help = "Send every request to the --url host, even when the server's session names another (such as its public address)"
+    )]
+    stay_on_url: bool,
 
     #[arg(long, value_name = "USER", help = "HTTP Basic user (an administrator)")]
     auth_basic: Option<String>,
@@ -774,6 +808,29 @@ struct GuideArgs {
 }
 
 #[derive(Args)]
+struct PlanArgs {
+    #[arg(
+        long,
+        value_name = "FILE",
+        help = "The guide's answers, as JSON, without secrets"
+    )]
+    answers: PathBuf,
+
+    #[arg(
+        long,
+        value_name = "DIR",
+        help = "A directory export-directory wrote from the source, to set up its accounts as they were"
+    )]
+    source_directory: Option<PathBuf>,
+
+    #[arg(
+        value_name = "DIR",
+        help = "Where the plans go; migrate runs them there"
+    )]
+    dir: PathBuf,
+}
+
+#[derive(Args)]
 struct InspectArgs {
     #[arg(value_name = "ARCHIVE", help = "Local SQLite archive")]
     archive: PathBuf,
@@ -815,6 +872,7 @@ pub enum Action {
     ImportDirectory(ImportDirectoryConfig),
     Migrate(MigrateConfig),
     Guide(GuideConfig),
+    Plan(PlanConfig),
     ExportImap(CommonConfig, ExportImapConfig),
     ExportManageSieve(CommonConfig, ExportManageSieveConfig),
     ExportDav(CommonConfig, ExportDavConfig),
@@ -959,6 +1017,11 @@ impl Cli {
                 port: args.port,
                 open: !args.no_open,
                 program: std::env::current_exe()?,
+            })),
+            Command::Plan(args) => Ok(Action::Plan(PlanConfig {
+                answers: args.answers,
+                source_directory: args.source_directory,
+                dir: args.dir,
             })),
             Command::ExportImap(args) => resolve_export_imap(*args),
             Command::ExportManageSieve(args) => resolve_export_managesieve(*args),
@@ -1225,6 +1288,7 @@ fn resolve_jmap_import(args: JmapImportArgs) -> Result<Action, Error> {
         common,
         ImportConfig {
             connect: ConnectConfig {
+                stay_on_url: args.stay_on_url,
                 url: args.url,
                 auth,
                 account,
@@ -1237,8 +1301,14 @@ fn resolve_jmap_import(args: JmapImportArgs) -> Result<Action, Error> {
 
 fn resolve_imap_import(args: ImapImportArgs) -> Result<Action, Error> {
     let common = common_config(&args.global, args.archive);
-    let auth = match &args.google_key {
-        Some(key) => {
+    let auth = match (&args.google_key, args.google_key_from_env) {
+        (None, false) => resolve_imap_auth(
+            args.auth_basic.as_deref(),
+            args.auth_password.as_deref(),
+            args.auth_bearer.as_ref(),
+            args.auth_user.as_deref(),
+        )?,
+        (path, _) => {
             if args.auth_password.is_some() {
                 return Err(Error::Usage(
                     "--auth-password is only valid together with --auth-basic".to_owned(),
@@ -1247,19 +1317,16 @@ fn resolve_imap_import(args: ImapImportArgs) -> Result<Action, Error> {
             let user = args.auth_user.as_deref().ok_or_else(|| {
                 Error::Usage("--auth-user names the account --google-key signs in as".to_owned())
             })?;
-            let account = std::sync::Arc::new(crate::google::ServiceAccount::load(key)?);
+            let account = std::sync::Arc::new(match path {
+                Some(path) => crate::google::ServiceAccount::load(path)?,
+                None => crate::google::ServiceAccount::from_env()?,
+            });
             ImapAuth::Google(std::sync::Arc::new(crate::google::Delegated::new(
                 account,
                 user,
                 crate::google::MAIL_SCOPE,
             )))
         }
-        None => resolve_imap_auth(
-            args.auth_basic.as_deref(),
-            args.auth_password.as_deref(),
-            args.auth_bearer.as_ref(),
-            args.auth_user.as_deref(),
-        )?,
     };
     if !args.folder.is_empty() && (!args.include.is_empty() || !args.exclude.is_empty()) {
         return Err(Error::Usage(
@@ -1353,6 +1420,7 @@ fn resolve_export(args: ExportArgs) -> Result<Action, Error> {
         common,
         ExportConfig {
             connect: ConnectConfig {
+                stay_on_url: args.stay_on_url,
                 url: args.url,
                 auth,
                 account,
@@ -1436,6 +1504,7 @@ fn resolve_export_directory(args: ExportDirectoryArgs) -> Result<Action, Error> 
         args.auth_bearer.as_ref(),
     )?;
     Ok(Action::ExportDirectory(ExportDirectoryConfig {
+        stay_on_url: args.stay_on_url,
         url: args.url,
         auth,
         dir: args.dir,
@@ -1454,6 +1523,7 @@ fn resolve_import_directory(args: ImportDirectoryArgs) -> Result<Action, Error> 
         args.auth_bearer.as_ref(),
     )?;
     Ok(Action::ImportDirectory(ImportDirectoryConfig {
+        stay_on_url: args.stay_on_url,
         url: args.url,
         auth,
         dir: args.dir,
@@ -2290,6 +2360,24 @@ mod tests {
             Err(Error::Usage(m)) => assert!(m.contains("/nonexistent/k.json"), "{m}"),
             _ => panic!("a missing key file is a usage error"),
         }
+        assert!(parse(&["--google-key", "k.json", "--google-key-from-env"]).is_err());
+        unsafe { env::remove_var(crate::google::KEY_VAR) };
+        match parse(&["--google-key-from-env", "--auth-user", "a@x"])
+            .unwrap()
+            .resolve()
+        {
+            Err(Error::Usage(m)) => assert!(m.contains(crate::google::KEY_VAR), "{m}"),
+            _ => panic!("an unset key variable is a usage error"),
+        }
+        unsafe { env::set_var(crate::google::KEY_VAR, r#"{"type":"user"}"#) };
+        match parse(&["--google-key-from-env", "--auth-user", "a@x"])
+            .unwrap()
+            .resolve()
+        {
+            Err(Error::Usage(m)) => assert!(m.contains("not a service account"), "{m}"),
+            _ => panic!("a key that isn't a service account's is a usage error"),
+        }
+        unsafe { env::remove_var(crate::google::KEY_VAR) };
     }
 
     fn webdav_source_change(extra: &[&str]) -> Result<SourceChange, clap::Error> {

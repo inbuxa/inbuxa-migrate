@@ -63,6 +63,9 @@ pub struct ConnectConfig {
     pub url: String,
     pub auth: Auth,
     pub account: AccountSelector,
+    /// `--stay-on-url`: every request goes to `url`'s host, whatever the
+    /// session advertises.
+    pub stay_on_url: bool,
 }
 
 pub struct ImportConfig {

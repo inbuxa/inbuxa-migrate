@@ -278,6 +278,7 @@ fn auth() -> Auth {
 
 fn export(registry: &Registry, dir: &Path) {
     let summary = export_directory::run(ExportDirectoryConfig {
+        stay_on_url: false,
         url: registry.url(),
         auth: auth(),
         dir: dir.to_path_buf(),
@@ -293,6 +294,7 @@ fn export(registry: &Registry, dir: &Path) {
 
 fn import(registry: &Registry, dir: &Path, passwords: Option<PathBuf>, dry_run: bool) -> Summary {
     import_directory::run(ImportDirectoryConfig {
+        stay_on_url: false,
         url: registry.url(),
         auth: auth(),
         dir: dir.to_path_buf(),
@@ -391,6 +393,7 @@ fn a_directory_imported_and_exported_again_comes_out_the_same() {
 
     // Running again creates nothing and wants a new password file.
     let err = import_directory::run(ImportDirectoryConfig {
+        stay_on_url: false,
         url: to.url(),
         auth: auth(),
         dir: exported.clone(),

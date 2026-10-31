@@ -67,6 +67,7 @@ fn dry_run(archive: &Path, base: &str) -> Summary {
         },
         ExportConfig {
             connect: ConnectConfig {
+                stay_on_url: false,
                 url: base.to_owned(),
                 auth: Auth::Basic {
                     user: "u".into(),

@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ * SPDX-FileCopyrightText: 2026 Coffey Labs LLC <legal@coffeylabs.org>
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -30,7 +31,10 @@ impl Connected {
 pub fn prepare(ctx: &Context, connect: &ConnectConfig) -> Result<Connected, Error> {
     ctx.client.set_logger(ctx.common.logger);
 
-    let session = Session::discover(&ctx.client, &connect.url)?;
+    let mut session = Session::discover(&ctx.client, &connect.url)?;
+    if connect.stay_on_url {
+        session = session.kept_on(&connect.url);
+    }
     for mismatch in session.origin_mismatches(&connect.url) {
         ctx.common.logger.warn(&mismatch.to_string());
     }

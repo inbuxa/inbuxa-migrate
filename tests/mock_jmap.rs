@@ -1278,6 +1278,7 @@ fn import_aborts_with_exit_two_when_the_advertised_api_url_is_unreachable() {
         },
         inbuxa_migrate::sync::ImportConfig {
             connect: inbuxa_migrate::sync::ConnectConfig {
+                stay_on_url: false,
                 url: session_base.clone(),
                 auth: Auth::Basic {
                     user: "u".into(),
@@ -1296,5 +1297,58 @@ fn import_aborts_with_exit_two_when_the_advertised_api_url_is_unreachable() {
         "a 404 from the advertised apiUrl is a whole-run connection failure, got {err:?}"
     );
     assert_eq!(err.exit_code(), 2, "must not report a partial failure");
+    let _ = std::fs::remove_file(&archive);
+}
+
+#[test]
+fn stay_on_url_sends_the_api_calls_to_the_connect_host() {
+    let mut api_host = mockito::Server::new();
+    let mut session_host = mockito::Server::new();
+    let session_base = session_host.url();
+
+    let _root = session_host.mock("GET", "/").with_status(404).create();
+    let _wk = session_host
+        .mock("GET", "/.well-known/jmap")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(session_json(&api_host.url()))
+        .create();
+    let advertised = api_host
+        .mock("POST", "/jmap/api")
+        .with_status(503)
+        .expect(0)
+        .create();
+    let kept = session_host
+        .mock("POST", "/jmap/api")
+        .with_status(404)
+        .expect_at_least(1)
+        .create();
+
+    let archive = archive_path();
+    let _ = inbuxa_migrate::sync::import_jmap::run(
+        inbuxa_migrate::sync::CommonConfig {
+            archive: archive.clone(),
+            threads: 1,
+            dry_run: false,
+            max_retries: 0,
+            allow_invalid_certs: false,
+            logger: inbuxa_migrate::logging::Logger::from_flags(true, 0),
+        },
+        inbuxa_migrate::sync::ImportConfig {
+            connect: inbuxa_migrate::sync::ConnectConfig {
+                stay_on_url: true,
+                url: session_base,
+                auth: Auth::Basic {
+                    user: "u".into(),
+                    password: "p".into(),
+                },
+                account: AccountSelector::Id("w".into()),
+            },
+            objects: None,
+            allow_source_change: false,
+        },
+    );
+    advertised.assert();
+    kept.assert();
     let _ = std::fs::remove_file(&archive);
 }

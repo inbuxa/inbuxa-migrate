@@ -13,7 +13,7 @@ and how to install it.
 ## Commands and global flags
 
 ```
-inbuxa-migrate <import|export|export-imap|export-managesieve|export-caldav|export-carddav|export-files|export-directory|import-directory|migrate|guide|inspect> [args...]
+inbuxa-migrate <import|export|export-imap|export-managesieve|export-caldav|export-carddav|export-files|export-directory|import-directory|migrate|guide|plan|inspect> [args...]
 ```
 
 Every command takes a few global flags -- verbosity, worker pool size, retry
@@ -38,7 +38,17 @@ is where on-premises Autodiscover looks, and then only the EWS endpoint
 Autodiscover finds.
 
 Every other host is verified as usual, including a host the server
-redirects to or names for its API, uploads or downloads. The Microsoft and
+redirects to or names for its API, uploads or downloads.
+
+### Staying on the address given
+
+A JMAP server's session names the addresses for its API, uploads and
+downloads, and the tool uses them, warning when they're on another host
+than `--url`. `--stay-on-url` sends every request to the `--url` host
+instead, keeping each path. It's for a server reached at an address it
+doesn't advertise: its own loopback, an SSH tunnel, a node behind a load
+balancer. `import jmap`, `export`, `export-directory` and
+`import-directory` take it. The Microsoft and
 Google sign-in and cloud endpoints are always verified, with or without the
 flag: a certificate that fails there is an attack or a broken network, never
 a server to trust.
@@ -112,6 +122,9 @@ and UID, and the rest of the folder carries on.
 signs in as a Workspace service account acting for the user `--auth-user`
 names, so no one's password is needed. In a plan that is
 `--url imaps://imap.gmail.com --google-key key.json --auth-user {email}`.
+`--google-key-from-env` reads the key's JSON from
+`$INBUXA_MIGRATE_GOOGLE_KEY` instead of a file; in a plan, the step names
+the variable that holds it as `"secrets": {"googleKey": "..."}`.
 
 - In Google Cloud, create a service account and a JSON key for it.
 - In the Workspace Admin console, under domain-wide delegation, allow the
@@ -734,6 +747,28 @@ directory picks up where it was.
   them again.
 - `--no-open` prints the address instead of opening a browser.
   `--port` picks the port; by default any free one is used.
+
+## Plans from answers
+
+```
+inbuxa-migrate plan --answers <FILE> [--source-directory <DIR>] <DIR>
+```
+
+Writes what the guide would, for a program that asks the questions itself
+and runs `migrate`: `<DIR>/plan.json`, `<DIR>/preview-plan.json` and,
+when accounts are to be created, the directory the setup reads. The
+answers are the guide's, as JSON: `source` (`kind`, `url`, `login`,
+`path`, `cleartext`, `tenant`, `clientId`, `keyFile`), `accounts`,
+`create`, and `target` (`url`, `stayOnUrl`, `allowInvalidCerts`).
+`--source-directory` is what `export-directory` wrote from a JMAP source,
+so its accounts are set up as they were.
+
+The answers hold no secrets, and `plan` refuses them if they do. It says
+on stdout, as one JSON object, which plans it wrote, where the move's
+passwords will go, and which variables to set when running them:
+`MIGRATE_SOURCE_SECRET` for the source's password, API key, client secret
+or Google key (for Google, a `keyFile` left empty means the key is the
+secret), and `MIGRATE_INBUXA_TOKEN` for inbuxa's.
 
 ## Inspect
 

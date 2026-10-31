@@ -156,6 +156,12 @@ fn run() -> i32 {
                 Err(err) => fail(&err),
             };
         }
+        Action::Plan(config) => {
+            return match guide::write_plans(config) {
+                Ok(()) => 0,
+                Err(err) => fail(&err),
+            };
+        }
         Action::Inspect(config) => {
             return match inspect::run(config) {
                 Ok(()) => 0,

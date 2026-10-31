@@ -146,6 +146,7 @@ fn export_email_already_exists_is_matched_not_failed() {
         },
         ExportConfig {
             connect: ConnectConfig {
+                stay_on_url: false,
                 url: base.clone(),
                 auth: Auth::Basic {
                     user: "u".into(),
@@ -287,6 +288,7 @@ fn export_mailbox_name_collision_merges_without_create() {
         },
         ExportConfig {
             connect: ConnectConfig {
+                stay_on_url: false,
                 url: base.clone(),
                 auth: Auth::Basic {
                     user: "u".into(),
@@ -445,6 +447,7 @@ fn export_mailbox_already_exists_maps_existing_id() {
         },
         ExportConfig {
             connect: ConnectConfig {
+                stay_on_url: false,
                 url: base.clone(),
                 auth: Auth::Basic {
                     user: "u".into(),
@@ -610,6 +613,7 @@ fn export_email_blob_not_found_reuploads_and_retries() {
         },
         ExportConfig {
             connect: ConnectConfig {
+                stay_on_url: false,
                 url: base.clone(),
                 auth: Auth::Basic {
                     user: "u".into(),
@@ -670,6 +674,7 @@ fn session_body_full(base: &str) -> String {
 fn import_cfg_objects(base: &str, objects: Vec<ObjectType>) -> ImportConfig {
     ImportConfig {
         connect: ConnectConfig {
+            stay_on_url: false,
             url: base.to_owned(),
             auth: Auth::Basic {
                 user: "u".into(),
@@ -685,6 +690,7 @@ fn import_cfg_objects(base: &str, objects: Vec<ObjectType>) -> ImportConfig {
 fn export_cfg_objects(base: &str, objects: Vec<ObjectType>) -> ExportConfig {
     ExportConfig {
         connect: ConnectConfig {
+            stay_on_url: false,
             url: base.to_owned(),
             auth: Auth::Basic {
                 user: "u".into(),
@@ -4500,6 +4506,7 @@ fn run_export(archive: &Path, base: &str, max_retries: u32) -> sync::Summary {
         },
         ExportConfig {
             connect: ConnectConfig {
+                stay_on_url: false,
                 url: base.to_owned(),
                 auth: Auth::Basic {
                     user: "u".into(),
