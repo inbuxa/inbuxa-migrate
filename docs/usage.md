@@ -603,7 +603,7 @@ server and counts what it would create, sends nothing and writes no file;
 
 ```
 inbuxa-migrate migrate --plan <FILE> [--parallel <N>] [--again]
-  [--account <EMAIL>]... [--dry-run] [-q] <DIR>
+  [--account <EMAIL>]... [--dry-run] [-q] [--progress json] <DIR>
 ```
 
 Moves a list of accounts with one command. The plan file names the steps
@@ -674,6 +674,13 @@ account, the state a later run resumes from, and the report.
   `done earlier`), the counts summed over the step's types, and, for one
   that didn't finish, its last error. Exit code 5 means some account
   didn't finish.
+- **Progress for another program.** `--progress json` writes one JSON
+  object per line on stdout, and nothing else there. `event` says which:
+  `start` (`accounts`, `parallel`, `dryRun`), `setup` (a setup step ended),
+  `step` (an account's step began, or ended with `result`, `counts` and
+  `detail`), `account` (an account ended: `email`, `n` of `total`,
+  `result`) and `end` (`done`, `unfinished`, `report`). Messages still go
+  to stderr.
 
 The work directory is made readable by its owner only, and so are the
 logs. With `--dry-run`, each step runs with `--dry-run`, nothing is

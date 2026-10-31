@@ -739,6 +739,14 @@ struct MigrateArgs {
     quiet: bool,
 
     #[arg(
+        long,
+        value_name = "FORMAT",
+        value_parser = ["json"],
+        help = "Progress for another program: `json` writes an event per line on stdout, and nothing else"
+    )]
+    progress: Option<String>,
+
+    #[arg(
         value_name = "DIR",
         help = "Work directory: an archive and logs per account, the state and the report"
     )]
@@ -1468,6 +1476,7 @@ fn resolve_migrate(args: MigrateArgs) -> Result<Action, Error> {
         dry_run: args.dry_run,
         program: std::env::current_exe()?,
         logger: Logger::from_flags(args.quiet, 0),
+        progress_json: args.progress.is_some(),
     }))
 }
 
