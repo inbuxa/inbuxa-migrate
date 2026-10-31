@@ -10,6 +10,7 @@ pub mod dav_ids;
 pub mod defaults;
 pub mod exchange_ews_ids;
 pub mod exchange_graph_ids;
+pub mod files_ids;
 pub mod ids;
 pub mod imap_ids;
 pub mod imap_state;

@@ -5,7 +5,7 @@
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
 
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::{Connection, OpenFlags, OptionalExtension};
 
 pub const SCHEMA_SQL: &str = include_str!("schema.sql");
 
@@ -126,6 +126,9 @@ fn schema_tables() -> impl Iterator<Item = &'static str> {
 }
 
 pub fn apply_schema(conn: &Connection) -> Result<(), OpenError> {
+    // Before the transaction: it turns foreign keys off, which SQLite only
+    // allows outside one.
+    ensure_sources_accept_files(conn)?;
     let tx = conn.unchecked_transaction()?;
     tx.execute_batch(SCHEMA_SQL)?;
     ensure_calendar_events_data_type(&tx)?;
@@ -242,6 +245,64 @@ fn ensure_dav_ids_share_local_rows(conn: &Connection) -> Result<(), OpenError> {
          CREATE INDEX sync_id_dav_local_idx
              ON sync_id_dav (source_id, type_name, local_id);",
     )?;
+    Ok(())
+}
+
+/// `import files` records its source as the kind `files`, which the
+/// `sources` table's CHECK didn't allow before. SQLite can't change a CHECK
+/// in place, so an older archive's table is rebuilt. Foreign keys are off
+/// while it is: with them on, dropping the old table would cascade into
+/// every row that came from a source.
+fn ensure_sources_accept_files(conn: &Connection) -> Result<(), OpenError> {
+    let sql: Option<String> = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sources'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    // Only the table as earlier releases made it: its kind list ended at
+    // `takeout`.
+    let Some(sql) = sql else { return Ok(()) };
+    if sql.contains("'files'") || !sql.contains("'takeout')") {
+        return Ok(());
+    }
+    let foreign_keys: i64 = conn.query_row("PRAGMA foreign_keys", [], |row| row.get(0))?;
+    conn.pragma_update(None, "foreign_keys", "OFF")?;
+    let rebuilt = rebuild_sources(conn);
+    if foreign_keys != 0 {
+        conn.pragma_update(None, "foreign_keys", "ON")?;
+    }
+    rebuilt
+}
+
+fn rebuild_sources(conn: &Connection) -> Result<(), OpenError> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch(
+        "CREATE TABLE sources_new (
+             id            INTEGER PRIMARY KEY,
+             kind          TEXT    NOT NULL CHECK (kind IN ('jmap','imap','caldav','carddav','webdav','managesieve','maildir','exchange_ews','exchange_graph','takeout','files')),
+             session_url   TEXT    NOT NULL,
+             account_id    TEXT    NOT NULL,
+             account_name  TEXT,
+             username      TEXT    NOT NULL,
+             UNIQUE (kind, session_url, account_id)
+         );
+         INSERT INTO sources_new (id, kind, session_url, account_id, account_name, username)
+             SELECT id, kind, session_url, account_id, account_name, username FROM sources;
+         DROP TABLE sources;
+         ALTER TABLE sources_new RENAME TO sources;",
+    )?;
+    // Every row that names a source still finds it.
+    let dangling = tx.prepare("PRAGMA foreign_key_check")?.exists([])?;
+    if dangling {
+        return Err(OpenError::NotAnArchive(
+            "rebuilding the archive's sources table left rows without a source; \
+             nothing was changed"
+                .to_owned(),
+        ));
+    }
+    tx.commit()?;
     Ok(())
 }
 
@@ -493,6 +554,65 @@ mod permission_tests {
 #[cfg(test)]
 mod migration_tests {
     use super::*;
+
+    #[test]
+    fn an_older_sources_table_is_rebuilt_to_accept_files_and_keeps_every_row() {
+        let conn = Connection::open_in_memory().unwrap();
+        // The table as releases before `import files` made it.
+        let old = SCHEMA_SQL.replace("'takeout','files')", "'takeout')");
+        assert_ne!(old, SCHEMA_SQL);
+        conn.execute_batch(&old).unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        conn.execute_batch(
+            "INSERT INTO sources (id, kind, session_url, account_id, account_name, username)
+                 VALUES (3, 'maildir', 'file:///m', '/m', 'm', '');
+             INSERT INTO sync_id_maildir VALUES (3, 'mailbox', 'INBOX', 'x', 9);",
+        )
+        .unwrap();
+        assert!(
+            conn.execute(
+                "INSERT INTO sources (kind, session_url, account_id, username)
+                 VALUES ('files', 'file:///e', '/e', '')",
+                [],
+            )
+            .is_err(),
+            "the old CHECK refuses it"
+        );
+
+        apply_schema(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO sources (kind, session_url, account_id, username)
+             VALUES ('files', 'file:///e', '/e', '')",
+            [],
+        )
+        .expect("files is a source kind now");
+        let kept: (String, i64) = conn
+            .query_row(
+                "SELECT s.kind, m.local_id FROM sync_id_maildir m JOIN sources s ON s.id = m.source_id",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            kept,
+            ("maildir".to_owned(), 9),
+            "rows that came from it stayed"
+        );
+        let on: i64 = conn
+            .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(on, 1, "foreign keys are back on");
+        // Deleting the source still cascades, so the reference survived.
+        conn.execute("DELETE FROM sources WHERE id = 3", [])
+            .unwrap();
+        let left: i64 = conn
+            .query_row("SELECT count(*) FROM sync_id_maildir", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(left, 0);
+        // A second pass finds nothing to do.
+        apply_schema(&conn).unwrap();
+    }
 
     #[test]
     fn an_older_dav_map_is_rebuilt_to_share_local_rows() {

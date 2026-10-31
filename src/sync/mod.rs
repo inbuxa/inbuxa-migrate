@@ -14,6 +14,7 @@ pub mod export_managesieve;
 pub mod import_dav;
 pub mod import_exchange_ews;
 pub mod import_exchange_graph;
+pub mod import_files;
 pub mod import_imap;
 pub mod import_jmap;
 pub mod import_maildir;
