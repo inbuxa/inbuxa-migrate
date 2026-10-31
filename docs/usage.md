@@ -215,6 +215,45 @@ Finds every `.mbox`, `.ics` and `.vcf` file under a directory and imports it.
 It is shaped for Google Takeout but reads any such tree. `--noautomap` stops
 it giving Gmail's system labels their mailbox roles.
 
+### An account export
+
+```
+inbuxa-migrate import files <DIR> <ARCHIVE>
+```
+
+Reads an account export back: the directory `export-files` writes, laid out
+as <https://coffeylabs.org/specs/account-export/> specifies, from this tool
+or any other that writes the layout. No network. Where `import maildir` and
+`import takeout` read the open formats on their own, this also reads the
+manifest, so what those formats can't hold comes back too:
+
+- every folder's real name, its place in the tree, its role and whether it
+  was subscribed, in place of the names Maildir++ could give it on disk;
+- which address book and calendar were the default, and each calendar's
+  description, color and time zone;
+- which Sieve script was active;
+- the files' media types and links;
+- the identities with their reply-to, bcc and signatures, and the calendar
+  identities.
+
+A message kept in several folders is written to each folder's directory;
+copies with the same content come back as one message in all of those
+folders. The same goes for a card in two address books and an event in two
+calendars. A message's arrival time is its file's modification time.
+
+The manifest's paths are data, so each is checked to stay inside its part of
+the export, and nothing that is a symbolic link is followed: a link in the
+tree is skipped with a warning, and the links an account had are made from
+the manifest as archive entries. A directory without `manifest.json` was
+interrupted, and is refused, as is a later version of the layout than this
+release reads. 27.1.0-rc.2 named the format `inbuxa-migrate-files`; that is
+read as the same format.
+
+Run again, it brings the archive up to date with the export: flags that
+changed, a different active script, a renamed folder. It never deletes.
+With `--dry-run` it checks the export and counts what it holds, and opens no
+archive.
+
 ### Microsoft Exchange (EWS)
 
 ```
@@ -484,7 +523,7 @@ DIR/
 ```
 
 - **Mail** is laid out as Dovecot and Courier keep it, so either can serve
-  it as it is, and `import maildir` reads it back. Folder names are in
+  it as it is. Folder names are in
   modified UTF-7. A `.` or `/` inside a folder's name becomes `_` on disk,
   since Maildir++ uses the dot between levels. A message kept in several
   folders is written to each. Read, answered, flagged, draft, forwarded and
@@ -495,7 +534,6 @@ DIR/
   files. **Calendars** are iCalendar, one VCALENDAR each, named by
   `X-WR-CALNAME`, with each time zone once. Photos and attachments the
   archive holds go inside as `data:` URIs, as `export` sends them.
-  `import takeout` reads both back.
 - **Sieve scripts** are written as they are; the manifest says which is
   active.
 - **Files** keep their names and dates. Links are listed in the manifest
@@ -513,7 +551,9 @@ the way to finish it is to run again into an empty directory.
 
 The layout and the manifest are specified at
 <https://coffeylabs.org/specs/account-export/>, so other tools can read and
-write them too.
+write them too. `import files` reads the whole tree back, manifest and all
+([An account export](#an-account-export)); `import maildir` and `import
+takeout` read the mail, contacts and calendars without it.
 
 `--objects` takes the same types as `export`; naming a folder or a message
 type writes all of mail, and the same for contacts and calendars. With

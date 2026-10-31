@@ -18,6 +18,7 @@ contacts, identities, Sieve scripts and files.
     inbuxa-migrate inspect alice.sqlite          what landed
     inbuxa-migrate export … alice.sqlite         the archive into inbuxa
     inbuxa-migrate export-files alice.sqlite out the archive as plain files
+    inbuxa-migrate import files out alice.sqlite those files read back, manifest and all
     inbuxa-migrate export-imap … alice.sqlite    its mail into any IMAP server
     inbuxa-migrate export-managesieve … alice.sqlite  its filters, likewise
     inbuxa-migrate export-caldav … alice.sqlite  its calendars into any CalDAV server
@@ -48,7 +49,8 @@ server, `export-caldav` and `export-carddav` the calendars and contacts into
 any CalDAV and CardDAV server, and `export-files` is the way out to everything else: it writes
 the archive as a Maildir++ tree, vCard, iCalendar and Sieve files that other
 servers and mail, calendar and contacts apps open, with no network and no
-store format in the way. For a whole server, `export-directory` writes the
+store format in the way, and `import files` reads such a tree back whole.
+For a whole server, `export-directory` writes the
 list of domains, accounts, groups, lists and aliases to set up again
 elsewhere, without passwords, and `import-directory` sets them up on an
 inbuxa server, with a new password for each user. `migrate` moves many

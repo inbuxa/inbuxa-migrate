@@ -30,6 +30,7 @@ use crate::sync::export_managesieve::ExportManageSieveConfig;
 use crate::sync::import_dav::{DavAuth, DavImportConfig, DavKindArg, SourceChange};
 use crate::sync::import_exchange_ews::{EwsAuth, EwsImportConfig};
 use crate::sync::import_exchange_graph::{GraphAuth, GraphImportConfig};
+use crate::sync::import_files::FilesImportConfig;
 use crate::sync::import_imap::{ImapAuth, ImapImportConfig};
 use crate::sync::import_maildir::MaildirImportConfig;
 use crate::sync::import_managesieve::{ManageSieveAuth, ManageSieveImportConfig};
@@ -126,6 +127,8 @@ enum Source {
     Maildir(Box<MaildirImportArgs>),
     #[command(about = "Google Takeout (or any mbox/ics/vcf directory tree)")]
     Takeout(Box<TakeoutImportArgs>),
+    #[command(about = "An account export, as export-files writes it, manifest and all")]
+    Files(Box<FilesImportArgs>),
     #[command(about = "MS Exchange via EWS (SOAP/XML)", name = "exchange-ews")]
     ExchangeEws(Box<ExchangeEwsImportArgs>),
     #[command(
@@ -864,6 +867,7 @@ pub enum Action {
     ImportManageSieve(CommonConfig, ManageSieveImportConfig),
     ImportMaildir(CommonConfig, MaildirImportConfig),
     ImportTakeout(CommonConfig, TakeoutImportConfig),
+    ImportFiles(CommonConfig, FilesImportConfig),
     ImportExchangeEws(CommonConfig, EwsImportConfig),
     ImportExchangeGraph(CommonConfig, GraphImportConfig),
     Export(CommonConfig, ExportConfig),
@@ -1042,6 +1046,7 @@ fn resolve_import(source: Source) -> Result<Action, Error> {
         Source::Managesieve(args) => resolve_managesieve_import(*args),
         Source::Maildir(args) => resolve_maildir_import(*args),
         Source::Takeout(args) => resolve_takeout_import(*args),
+        Source::Files(args) => resolve_files_import(*args),
         Source::ExchangeEws(args) => resolve_exchange_ews_import(*args),
         Source::ExchangeGraph(args) => resolve_exchange_graph_import(*args),
     }
@@ -1215,6 +1220,41 @@ fn resolve_takeout_import(args: TakeoutImportArgs) -> Result<Action, Error> {
             takeout_root: args.path,
             allow_source_change: args.allow_source_change,
             automap: !args.noautomap,
+        },
+    ))
+}
+
+#[derive(Args)]
+pub struct FilesImportArgs {
+    #[arg(
+        value_name = "DIR",
+        help = "An account export: the directory export-files wrote, with its manifest.json"
+    )]
+    dir: PathBuf,
+
+    #[arg(
+        value_name = "ARCHIVE",
+        help = "Local SQLite archive (created if absent)"
+    )]
+    archive: PathBuf,
+
+    #[arg(
+        long,
+        help = "Permit importing when the archive records an account export at a different path"
+    )]
+    allow_source_change: bool,
+
+    #[command(flatten)]
+    global: GlobalArgs,
+}
+
+fn resolve_files_import(args: FilesImportArgs) -> Result<Action, Error> {
+    let common = common_config(&args.global, args.archive);
+    Ok(Action::ImportFiles(
+        common,
+        FilesImportConfig {
+            dir: args.dir,
+            allow_source_change: args.allow_source_change,
         },
     ))
 }

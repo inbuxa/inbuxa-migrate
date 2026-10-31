@@ -1,6 +1,6 @@
 CREATE TABLE IF NOT EXISTS sources (
     id            INTEGER PRIMARY KEY,
-    kind          TEXT    NOT NULL CHECK (kind IN ('jmap','imap','caldav','carddav','webdav','managesieve','maildir','exchange_ews','exchange_graph','takeout')),
+    kind          TEXT    NOT NULL CHECK (kind IN ('jmap','imap','caldav','carddav','webdav','managesieve','maildir','exchange_ews','exchange_graph','takeout','files')),
     session_url   TEXT    NOT NULL,
     account_id    TEXT    NOT NULL,
     account_name  TEXT,
@@ -268,3 +268,14 @@ CREATE TABLE IF NOT EXISTS sync_id_takeout (
 
 CREATE INDEX IF NOT EXISTS sync_id_takeout_type_idx
     ON sync_id_takeout (source_id, type_name);
+
+CREATE TABLE IF NOT EXISTS sync_id_files (
+    source_id   INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+    type_name   TEXT    NOT NULL,
+    item_key    TEXT    NOT NULL,
+    local_id    INTEGER NOT NULL,
+    PRIMARY KEY (source_id, type_name, item_key)
+);
+
+CREATE INDEX IF NOT EXISTS sync_id_files_local_idx
+    ON sync_id_files (source_id, type_name, local_id);

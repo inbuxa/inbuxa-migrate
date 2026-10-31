@@ -7,6 +7,20 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
 
 ## [Unreleased]
 
+### Added
+- `import files` reads an account export back into an archive: the tree
+  `export-files` writes, specified at
+  <https://coffeylabs.org/specs/account-export/>. Besides the mail,
+  contacts, calendars, Sieve scripts and files, it reads what only the
+  manifest holds: real folder names, roles and subscriptions, the default
+  address book and calendar, calendar colors and time zones, the active
+  script, media types, links and identities. Copies of a message in several
+  folders come back as one message in each. Paths in the manifest are
+  checked to stay inside the export, and no symbolic link is followed. An
+  archive gains the source kind `files` and a table for what it read at its
+  next import; until then `inspect` and the other read-only commands call it
+  an older layout.
+
 ## [27.1-rc.8]
 
 The eighth release candidate of the 27.1 series: what a server needs to

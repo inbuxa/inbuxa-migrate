@@ -61,6 +61,10 @@ fn run() -> i32 {
             let logger = common.logger;
             (sync::import_takeout::run_reporting(common, config), logger)
         }
+        Action::ImportFiles(common, config) => {
+            let logger = common.logger;
+            (sync::import_files::run_reporting(common, config), logger)
+        }
         Action::ImportExchangeEws(common, config) => {
             let logger = common.logger;
             (

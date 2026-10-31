@@ -160,7 +160,8 @@ fn insert_card(
     Ok(())
 }
 
-fn split_vcards(text: &str) -> Vec<String> {
+/// The vCards in one file, each as its own text.
+pub fn split_vcards(text: &str) -> Vec<String> {
     let mut chunks: Vec<String> = Vec::new();
     let mut current: Option<String> = None;
     for raw_line in text.lines() {
