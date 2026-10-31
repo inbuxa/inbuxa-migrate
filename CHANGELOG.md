@@ -7,6 +7,11 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
 
 ## [Unreleased]
 
+## [27.1-rc.8]
+
+The eighth release candidate of the 27.1 series: what a server needs to
+run migrations into itself, from its admin console.
+
 ### Added
 - `migrate --progress json` writes one JSON event per line on stdout (a
   step begins or ends, an account ends, the run ends), for a program that
