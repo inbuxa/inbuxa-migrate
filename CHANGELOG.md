@@ -11,6 +11,16 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
 - `migrate --progress json` writes one JSON event per line on stdout (a
   step begins or ends, an account ends, the run ends), for a program that
   runs a migration and shows its progress.
+- `plan --answers` writes the guide's plans from its answers in a file, so
+  a program can ask the questions itself and run `migrate`. The answers
+  hold no secrets.
+- `--stay-on-url` sends every request to the `--url` host, whatever the
+  server's session advertises, for a server reached at its own loopback or
+  through a tunnel. `import jmap`, `export`, `export-directory` and
+  `import-directory` take it.
+- `import imap --google-key-from-env` reads the Google service account's
+  key from `$INBUXA_MIGRATE_GOOGLE_KEY`, and a plan step can name it as
+  the `googleKey` secret.
 
 ## [27.1-rc.7]
 

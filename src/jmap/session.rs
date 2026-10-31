@@ -183,6 +183,28 @@ impl Session {
         self
     }
 
+    /// The session with every URL moved onto `connect_url`'s origin: for
+    /// `--stay-on-url`, when the address that reaches the server isn't the
+    /// one it advertises, such as its own loopback.
+    pub fn kept_on(mut self, connect_url: &str) -> Session {
+        let Some(origin) = origin_of(connect_url) else {
+            return self;
+        };
+        for url in [
+            &mut self.api_url,
+            &mut self.upload_url,
+            &mut self.download_url,
+        ] {
+            if let Some(after) = url.find("://").map(|at| at + 3) {
+                let path = url[after..]
+                    .find('/')
+                    .map_or(url.len(), |slash| after + slash);
+                *url = format!("{origin}{}", &url[path..]);
+            }
+        }
+        self
+    }
+
     pub fn origin_mismatches(&self, connect_url: &str) -> Vec<OriginMismatch> {
         let Some(connect_origin) = origin_of(connect_url) else {
             return Vec::new();
@@ -607,6 +629,31 @@ mod tests {
         assert_eq!(
             well_known_url("https://h.example"),
             "https://h.example/.well-known/jmap"
+        );
+    }
+
+    #[test]
+    fn kept_on_moves_every_url_to_the_connect_origin() {
+        let raw = r#"{"apiUrl":"https://mail.example/jmap/",
+            "uploadUrl":"https://mail.example/jmap/upload/{accountId}/",
+            "downloadUrl":"https://mail.example:443/jmap/download/{accountId}/{blobId}/{name}?accept={type}",
+            "capabilities":{},"accounts":{}}"#;
+        let session = parse_session(raw)
+            .unwrap()
+            .kept_on("http://127.0.0.1:8080/");
+        assert_eq!(session.api_url, "http://127.0.0.1:8080/jmap/");
+        assert_eq!(
+            session.upload_url,
+            "http://127.0.0.1:8080/jmap/upload/{accountId}/"
+        );
+        assert_eq!(
+            session.download_url,
+            "http://127.0.0.1:8080/jmap/download/{accountId}/{blobId}/{name}?accept={type}"
+        );
+        assert!(
+            session
+                .origin_mismatches("http://127.0.0.1:8080")
+                .is_empty()
         );
     }
 }

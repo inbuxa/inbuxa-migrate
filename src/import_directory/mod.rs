@@ -44,6 +44,8 @@ pub struct ImportDirectoryConfig {
     pub dry_run: bool,
     pub max_retries: u32,
     pub allow_invalid_certs: bool,
+    /// `--stay-on-url`: every request goes to `url`'s host.
+    pub stay_on_url: bool,
     pub logger: Logger,
 }
 
@@ -481,7 +483,10 @@ pub fn run(config: ImportDirectoryConfig) -> Result<Summary, Error> {
         CertOverride::for_url(config.allow_invalid_certs, &config.url),
     );
     client.set_logger(logger);
-    let session = Session::discover(&client, &config.url)?;
+    let mut session = Session::discover(&client, &config.url)?;
+    if config.stay_on_url {
+        session = session.kept_on(&config.url);
+    }
     for mismatch in session.origin_mismatches(&config.url) {
         logger.warn(&mismatch.to_string());
     }

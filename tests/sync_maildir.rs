@@ -544,6 +544,7 @@ fn maildir_and_jmap_imports_share_blob_bytes() {
 
     let jmap_cfg = ImportConfig {
         connect: ConnectConfig {
+            stay_on_url: false,
             url: fx.base_url.clone(),
             auth: Auth::Basic {
                 user: acc.email.clone(),
@@ -620,6 +621,7 @@ fn maildir_message_count_matches_jmap_for_same_corpus() {
     let jmap_archive = tmp_archive("count-jmap");
     let jmap_cfg = ImportConfig {
         connect: ConnectConfig {
+            stay_on_url: false,
             url: fx.base_url.clone(),
             auth: Auth::Basic {
                 user: acc.email.clone(),

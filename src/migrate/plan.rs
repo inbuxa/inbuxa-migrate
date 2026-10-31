@@ -30,6 +30,7 @@ pub const SECRET_VARS: &[&str] = &[
     "INBUXA_MIGRATE_EWS_CLIENT_SECRET",
     "INBUXA_MIGRATE_CLIENT_SECRET",
     "INBUXA_MIGRATE_GRAPH_TOKEN",
+    crate::google::KEY_VAR,
 ];
 
 const ACCOUNT_COMMANDS: &[&str] = &[
@@ -85,6 +86,8 @@ struct Secrets {
     token: Option<String>,
     client_secret: Option<String>,
     graph_token: Option<String>,
+    /// A Google service account's JSON key, for `--google-key-from-env`.
+    google_key: Option<String>,
 }
 
 pub struct Plan {
@@ -208,6 +211,7 @@ fn step_of(raw: RawStep, per_account: bool, names: &mut HashSet<String>) -> Resu
         ("INBUXA_MIGRATE_API_KEY", secrets.token),
         ("INBUXA_MIGRATE_EWS_CLIENT_SECRET", secrets.client_secret),
         ("INBUXA_MIGRATE_GRAPH_TOKEN", secrets.graph_token),
+        (crate::google::KEY_VAR, secrets.google_key),
     ] {
         let Some(from) = from else { continue };
         match std::env::var(&from) {

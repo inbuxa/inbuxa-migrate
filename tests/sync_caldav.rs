@@ -78,6 +78,7 @@ fn jmap_basic(localpart: &str, domain: &str) -> Auth {
 fn export_cfg(base_url: &str, domain: &str, localpart: &str, account_id: &str) -> ExportConfig {
     ExportConfig {
         connect: ConnectConfig {
+            stay_on_url: false,
             url: base_url.to_owned(),
             auth: jmap_basic(localpart, domain),
             account: AccountSelector::Id(account_id.to_owned()),
@@ -96,6 +97,7 @@ fn jmap_import_cfg(
 ) -> ImportConfig {
     ImportConfig {
         connect: ConnectConfig {
+            stay_on_url: false,
             url: base_url.to_owned(),
             auth: jmap_basic(localpart, domain),
             account: AccountSelector::Id(account_id.to_owned()),

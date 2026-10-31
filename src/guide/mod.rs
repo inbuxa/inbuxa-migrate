@@ -54,6 +54,14 @@ pub struct GuideConfig {
     pub program: PathBuf,
 }
 
+/// `plan`: the plans the guide would write, from its answers in a file.
+pub struct PlanConfig {
+    pub answers: PathBuf,
+    /// What `export-directory` read from the source, if it was read.
+    pub source_directory: Option<PathBuf>,
+    pub dir: PathBuf,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Kind {
     Directory,
@@ -149,6 +157,86 @@ pub fn run(config: GuideConfig) -> Result<(), Error> {
         std::thread::spawn(move || guide.serve(stream));
     }
     Ok(())
+}
+
+/// `plan`: writes the plan, the preview's plan and the directory the setup
+/// reads, then says on stdout, as JSON, which files to run. The answers
+/// carry no secrets; the runs get them through the variables the plans
+/// name.
+pub fn write_plans(config: PlanConfig) -> Result<(), Error> {
+    let usage = |e: String| Error::Usage(format!("{}: {e}", config.answers.display()));
+    let text = fs::read_to_string(&config.answers).map_err(|e| usage(e.to_string()))?;
+    let f: Form = serde_json::from_str(&text).map_err(|e| usage(e.to_string()))?;
+    if !f.source.secret.is_empty() || !f.target.token.is_empty() {
+        return Err(usage(format!(
+            "the answers hold a secret; leave it out, and give it to migrate in \
+             ${} or ${}",
+            form::SOURCE_SECRET_VAR,
+            form::TARGET_TOKEN_VAR
+        )));
+    }
+    f.check_answers().map_err(usage)?;
+    let dir = std::path::absolute(&config.dir)?;
+    private_dir(&dir)?;
+    let written =
+        write_plan_files(&dir, &f, config.source_directory.as_deref()).map_err(Error::Usage)?;
+    let _ = writeln!(
+        std::io::stdout(),
+        "{}",
+        json!({
+            "plan": written.plan,
+            "preview": written.preview,
+            "passwords": written.passwords,
+            "accounts": f.accounts.len(),
+            "secrets": {
+                "source": f.source.has_secret().then_some(form::SOURCE_SECRET_VAR),
+                "target": form::TARGET_TOKEN_VAR,
+            },
+        })
+    );
+    Ok(())
+}
+
+/// What [`write_plan_files`] wrote, relative to the directory.
+struct Written {
+    plan: &'static str,
+    preview: &'static str,
+    /// Where the move's setup puts new passwords, if it sets up accounts.
+    passwords: Option<String>,
+}
+
+/// The plan, the preview's plan and, when accounts are to be set up, the
+/// directory for it: the source's, if `source` is what `export-directory`
+/// read from it.
+fn write_plan_files(dir: &Path, f: &Form, source: Option<&Path>) -> Result<Written, String> {
+    let write = |name: &str, value: &Value| {
+        let path = dir.join(name);
+        write_private(&path, &serde_json::to_vec_pretty(value).unwrap_or_default())
+            .map_err(|e| format!("{} couldn't be written: {e}", path.display()))
+    };
+    if f.create {
+        let source = match source {
+            Some(d) => {
+                let text = fs::read_to_string(d.join("directory.json"))
+                    .map_err(|e| format!("{}: {e}", d.display()))?;
+                Some(serde_json::from_str::<Value>(&text).map_err(|e| e.to_string())?)
+            }
+            None => None,
+        };
+        private_dir(&dir.join(form::DIRECTORY)).map_err(|e| e.to_string())?;
+        write(
+            &format!("{}/directory.json", form::DIRECTORY),
+            &form::directory(source.as_ref(), &f.accounts),
+        )?;
+    }
+    let passwords = format!("passwords-{}.csv", stamp());
+    write("preview-plan.json", &f.preview_plan())?;
+    write("plan.json", &f.plan(&passwords))?;
+    Ok(Written {
+        plan: "plan.json",
+        preview: "preview-plan.json",
+        passwords: f.create.then_some(passwords),
+    })
 }
 
 fn open_browser(url: &str) -> bool {
@@ -500,33 +588,12 @@ impl Guide {
     /// Writes the plan, and the directory it sets up, for `migrate`.
     fn plan_run(&self, f: &Form, kind: Kind) -> Result<Prepared, String> {
         f.check()?;
-        let write = |name: &str, value: &Value| {
-            let path = self.dir.join(name);
-            write_private(&path, &serde_json::to_vec_pretty(value).unwrap_or_default())
-                .map_err(|e| format!("{} couldn't be written: {e}", path.display()))
-        };
-        if f.create {
-            let source = lock(&self.state).directory.clone();
-            let source = match source {
-                Some(d) => {
-                    let text = fs::read_to_string(d.join("directory.json"))
-                        .map_err(|e| format!("{}: {e}", d.display()))?;
-                    Some(serde_json::from_str::<Value>(&text).map_err(|e| e.to_string())?)
-                }
-                None => None,
-            };
-            private_dir(&self.dir.join(form::DIRECTORY)).map_err(|e| e.to_string())?;
-            write(
-                &format!("{}/directory.json", form::DIRECTORY),
-                &form::directory(source.as_ref(), &f.accounts),
-            )?;
-        }
+        let source = lock(&self.state).directory.clone();
+        let written = write_plan_files(&self.dir, f, source.as_deref())?;
         let plan = if kind == Kind::Preview {
-            write("preview-plan.json", &f.preview_plan())?;
-            "preview-plan.json"
+            written.preview
         } else {
-            write("plan.json", &f.plan(&format!("passwords-{}.csv", stamp())))?;
-            "plan.json"
+            written.plan
         };
         let mut args: Vec<String> = ["migrate", "--plan", plan, "--parallel"]
             .map(str::to_owned)

@@ -153,6 +153,7 @@ fn out_dir(name: &str) -> PathBuf {
 
 fn config(registry: &Registry, dir: &std::path::Path) -> ExportDirectoryConfig {
     ExportDirectoryConfig {
+        stay_on_url: false,
         url: format!("{}/jmap/session", registry.server.url()),
         auth: Auth::Basic {
             user: "admin".into(),

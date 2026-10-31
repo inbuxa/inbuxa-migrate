@@ -61,6 +61,7 @@ fn basic(localpart: &str) -> Auth {
 fn import_cfg(account: AccountSelector) -> ImportConfig {
     ImportConfig {
         connect: ConnectConfig {
+            stay_on_url: false,
             url: base_url().to_owned(),
             auth: basic("test1"),
             account,
@@ -95,6 +96,7 @@ fn import_test1_full_matches_seed_stats() {
 
     let cfg = ImportConfig {
         connect: ConnectConfig {
+            stay_on_url: false,
             url: fx.base_url.clone(),
             auth: basic("test1"),
             account: AccountSelector::Id(acc.account_id.clone()),
@@ -176,6 +178,7 @@ fn import_resolves_account_via_admin_principal_path() {
 
     let cfg = ImportConfig {
         connect: ConnectConfig {
+            stay_on_url: false,
             url: fx.base_url.clone(),
             auth: Auth::Basic {
                 user: admin_fx.email.clone(),
@@ -234,6 +237,7 @@ fn import_dry_run_writes_nothing() {
 fn export_cfg(localpart: &str, account_id: &str, prune: bool) -> ExportConfig {
     ExportConfig {
         connect: ConnectConfig {
+            stay_on_url: false,
             url: base_url().to_owned(),
             auth: Auth::Basic {
                 user: format!("{localpart}@{}", seeder::DOMAIN),
@@ -388,6 +392,7 @@ fn import_export_deeply_nested_mailbox_tree() {
     let archive = tmp_archive("deep_mbox");
     let imp = ImportConfig {
         connect: ConnectConfig {
+            stay_on_url: false,
             url: base_url().to_owned(),
             auth: basic("test4"),
             account: AccountSelector::Id(src.account_id.clone()),
@@ -430,6 +435,7 @@ fn import_export_deeply_nested_mailbox_tree() {
     let again_archive = tmp_archive("deep_mbox_round");
     let imp_again = ImportConfig {
         connect: ConnectConfig {
+            stay_on_url: false,
             url: base_url().to_owned(),
             auth: basic("test5"),
             account: AccountSelector::Id(tgt.account_id.clone()),
@@ -468,6 +474,7 @@ fn import_export_deeply_nested_filenode_tree() {
     let archive = tmp_archive("deep_fn");
     let imp = ImportConfig {
         connect: ConnectConfig {
+            stay_on_url: false,
             url: base_url().to_owned(),
             auth: basic("test4"),
             account: AccountSelector::Id(src.account_id.clone()),
@@ -512,6 +519,7 @@ fn import_export_deeply_nested_filenode_tree() {
         common(&again_archive, false),
         ImportConfig {
             connect: ConnectConfig {
+                stay_on_url: false,
                 url: base_url().to_owned(),
                 auth: basic("test5"),
                 account: AccountSelector::Id(tgt.account_id.clone()),
@@ -552,6 +560,7 @@ fn prune_multilevel_mailbox_tree_destroys_leaf_first() {
         common(&arch_src, false),
         ImportConfig {
             connect: ConnectConfig {
+                stay_on_url: false,
                 url: base_url().to_owned(),
                 auth: basic("test4"),
                 account: AccountSelector::Id(src.account_id.clone()),
@@ -593,6 +602,7 @@ fn prune_multilevel_mailbox_tree_destroys_leaf_first() {
         common(&arch_empty, false),
         ImportConfig {
             connect: ConnectConfig {
+                stay_on_url: false,
                 url: base_url().to_owned(),
                 auth: basic("test6"),
                 account: AccountSelector::Id(fx.account("test6").unwrap().account_id.clone()),
@@ -641,6 +651,7 @@ fn prune_non_tree_type_contact_card() {
         common(&arch_full, false),
         ImportConfig {
             connect: ConnectConfig {
+                stay_on_url: false,
                 url: base_url().to_owned(),
                 auth: basic("test1"),
                 account: AccountSelector::Id(src.account_id.clone()),
@@ -893,6 +904,7 @@ fn export_round_trip_and_convergence() {
 
     let imp = ImportConfig {
         connect: ConnectConfig {
+            stay_on_url: false,
             url: base_url().to_owned(),
             auth: basic("test1"),
             account: AccountSelector::Id(src.account_id.clone()),
@@ -973,6 +985,7 @@ fn export_emails_in_multiple_import_batches() {
 
     let imp = ImportConfig {
         connect: ConnectConfig {
+            stay_on_url: false,
             url: base_url().to_owned(),
             auth: basic("test1"),
             account: AccountSelector::Id(src.account_id.clone()),
@@ -1053,6 +1066,7 @@ fn export_prune_destroys_unmatched() {
         common(&arch_big, false),
         ImportConfig {
             connect: ConnectConfig {
+                stay_on_url: false,
                 url: base_url().to_owned(),
                 auth: basic("test1"),
                 account: AccountSelector::Id(big.account_id.clone()),
@@ -1073,6 +1087,7 @@ fn export_prune_destroys_unmatched() {
         common(&arch_small, false),
         ImportConfig {
             connect: ConnectConfig {
+                stay_on_url: false,
                 url: base_url().to_owned(),
                 auth: basic("test3"),
                 account: AccountSelector::Id(small.account_id.clone()),
@@ -1108,6 +1123,7 @@ fn import_resume_converges_after_partial() {
 
     let mk = || ImportConfig {
         connect: ConnectConfig {
+            stay_on_url: false,
             url: base_url().to_owned(),
             auth: basic("test2"),
             account: AccountSelector::Id(acc.account_id.clone()),

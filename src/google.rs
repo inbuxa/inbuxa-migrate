@@ -49,7 +49,20 @@ impl fmt::Debug for ServiceAccount {
     }
 }
 
+/// Where `--google-key-from-env` reads the key: the JSON itself, so a
+/// program running the tool needn't write it to a file.
+pub const KEY_VAR: &str = "INBUXA_MIGRATE_GOOGLE_KEY";
+
 impl ServiceAccount {
+    /// The key in [`KEY_VAR`].
+    pub fn from_env() -> Result<Self, Error> {
+        let text = std::env::var(KEY_VAR)
+            .ok()
+            .filter(|t| !t.trim().is_empty())
+            .ok_or_else(|| Error::Usage(format!("--google-key-from-env: ${KEY_VAR} is not set")))?;
+        Self::parse(&text).map_err(|e| Error::Usage(format!("${KEY_VAR}: {e}")))
+    }
+
     pub fn load(path: &Path) -> Result<Self, Error> {
         let text = std::fs::read_to_string(path)
             .map_err(|e| Error::Usage(format!("{}: {e}", path.display())))?;

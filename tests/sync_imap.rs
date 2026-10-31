@@ -236,6 +236,7 @@ fn imap_and_jmap_imports_share_blob_set() {
 
     let jmap_cfg = ImportConfig {
         connect: ConnectConfig {
+            stay_on_url: false,
             url: fx.base_url.clone(),
             auth: Auth::Basic {
                 user: acc.email.clone(),
@@ -376,6 +377,7 @@ fn imap_imported_archive_exports_via_jmap() {
     };
     let export_cfg = ExportConfig {
         connect: ConnectConfig {
+            stay_on_url: false,
             url: fx.base_url.clone(),
             auth: Auth::Basic {
                 user: dst.email.clone(),
@@ -400,6 +402,7 @@ fn imap_imported_archive_exports_via_jmap() {
     };
     let export_cfg2 = ExportConfig {
         connect: ConnectConfig {
+            stay_on_url: false,
             url: fx.base_url.clone(),
             auth: Auth::Basic {
                 user: dst.email.clone(),
@@ -494,6 +497,7 @@ fn dovecot_noselect_parents_keep_the_tree_through_export() {
         },
         ExportConfig {
             connect: ConnectConfig {
+                stay_on_url: false,
                 url: fx.base_url.clone(),
                 auth: Auth::Basic {
                     user: dst.email.clone(),

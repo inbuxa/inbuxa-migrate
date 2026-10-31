@@ -84,6 +84,8 @@ Secrets are read from the environment, or asked for at a prompt:
                                           (INBUXA_MIGRATE_TOKEN still works)
     INBUXA_MIGRATE_EWS_CLIENT_SECRET      the OAuth client secret for app-only EWS
     INBUXA_MIGRATE_GRAPH_TOKEN            a Microsoft Graph access token
+    INBUXA_MIGRATE_GOOGLE_KEY             a Google service account's JSON key,
+                                          for --google-key-from-env
 
 The command line takes them too, but a secret there ends up in the shell's
 history and in the process list. Use the environment or the prompt.

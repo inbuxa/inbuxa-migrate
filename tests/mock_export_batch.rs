@@ -176,6 +176,7 @@ fn run_export(archive: &Path, base: &str, threads: usize) -> TypeCounts {
         },
         ExportConfig {
             connect: ConnectConfig {
+                stay_on_url: false,
                 url: base.to_owned(),
                 auth: Auth::Basic {
                     user: "u".into(),

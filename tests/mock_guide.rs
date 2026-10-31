@@ -202,3 +202,100 @@ fn the_guide_checks_a_google_key_by_asking_for_a_token() {
         "{found}"
     );
 }
+
+#[test]
+fn plan_writes_what_the_guide_would_from_answers_without_secrets() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    let mail = root.join("mail/ann");
+    for sub in ["cur", "new", "tmp"] {
+        fs::create_dir_all(mail.join(sub)).unwrap();
+    }
+    fs::write(
+        mail.join("cur/1:2,S"),
+        "From: a@example.org\r\nSubject: Hi\r\nMessage-ID: <m1@example.org>\r\n\r\nHi\r\n",
+    )
+    .unwrap();
+    let plan = |answers: &Value| {
+        fs::write(root.join("answers.json"), answers.to_string()).unwrap();
+        std::process::Command::new(BIN)
+            .args(["plan", "--answers"])
+            .arg(root.join("answers.json"))
+            .arg(root.join("run"))
+            .output()
+            .unwrap()
+    };
+    let mut answers = json!({
+        "source": {"kind": "maildir", "path": "../mail/{local}"},
+        "accounts": ["ann@example.org"],
+        "create": true,
+        "target": {"url": "http://127.0.0.1:9", "stayOnUrl": true},
+    });
+
+    let out = plan(&answers);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let said: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(said["plan"], "plan.json");
+    assert_eq!(said["preview"], "preview-plan.json");
+    assert_eq!(said["accounts"], 1);
+    assert_eq!(
+        said["secrets"],
+        json!({"source": null, "target": "MIGRATE_INBUXA_TOKEN"})
+    );
+    let passwords = said["passwords"].as_str().unwrap();
+    let written: Value =
+        serde_json::from_str(&fs::read_to_string(root.join("run/plan.json")).unwrap()).unwrap();
+    assert_eq!(
+        written["setup"][0]["args"],
+        json!([
+            "import-directory",
+            "--url",
+            "http://127.0.0.1:9",
+            "--auth-bearer",
+            "--stay-on-url",
+            "--passwords",
+            passwords,
+            "directory"
+        ])
+    );
+    let directory = fs::read_to_string(root.join("run/directory/directory.json")).unwrap();
+    assert!(directory.contains("ann@example.org"), "{directory}");
+
+    // The preview it wrote runs as is.
+    answers["create"] = json!(false);
+    assert!(plan(&answers).status.success());
+    let out = std::process::Command::new(BIN)
+        .current_dir(root.join("run"))
+        .args([
+            "migrate",
+            "--plan",
+            "preview-plan.json",
+            "--dry-run",
+            "work",
+        ])
+        .env("MIGRATE_INBUXA_TOKEN", "unused")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let report = fs::read_to_string(root.join("run/work/dry-run-report.csv")).unwrap();
+    assert!(report.contains("ann@example.org,import,done"), "{report}");
+
+    // A secret in the answers is refused, and isn't written anywhere.
+    answers["target"]["token"] = json!("t0ken-for-the-test");
+    let out = plan(&answers);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("hold a secret"), "{err}");
+    answers["target"]["token"] = json!(null);
+    answers["target"]["url"] = json!("");
+    let out = plan(&answers);
+    assert!(!out.status.success());
+}
