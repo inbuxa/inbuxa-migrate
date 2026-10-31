@@ -7,6 +7,11 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
 
 ## [Unreleased]
 
+## [27.1-rc.9]
+
+The ninth release candidate of the 27.1 series: an account export read
+back whole.
+
 ### Added
 - `import files` reads an account export back into an archive: the tree
   `export-files` writes, specified at
