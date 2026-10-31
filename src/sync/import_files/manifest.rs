@@ -124,6 +124,10 @@ pub struct Files {
     pub media_types: BTreeMap<String, String>,
     #[serde(default)]
     pub links: Vec<Link>,
+    /// The real name of each entry whose name on disk had to change, by its
+    /// path on disk. Writers before 27.1.0-rc.10 don't write it.
+    #[serde(default)]
+    pub names: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Deserialize)]

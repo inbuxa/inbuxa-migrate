@@ -7,6 +7,14 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
 
 ## [Unreleased]
 
+### Added
+- `export-files` keeps the real name of every file, directory and link
+  whose name had to change on disk, in the manifest's new `files.names`,
+  and `import files` restores them. A real name that is taken in its
+  directory, or can't be a name, is left as it is on disk with a warning,
+  so a renamed entry never takes another's place; a listed link whose name
+  is taken is not made.
+
 ## [27.1-rc.9]
 
 The ninth release candidate of the 27.1 series: an account export read
