@@ -7,6 +7,11 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
 
 ## [Unreleased]
 
+## [27.1-rc.10]
+
+The tenth release candidate of the 27.1 series: real file names kept
+through an account export.
+
 ### Added
 - `export-files` keeps the real name of every file, directory and link
   whose name had to change on disk, in the manifest's new `files.names`,
