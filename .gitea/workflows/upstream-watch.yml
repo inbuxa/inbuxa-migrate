@@ -81,7 +81,7 @@ jobs:
                       "git fetch origin upstream:upstream\n"
                       f"scripts/upstream-import.py {tag}\n"
                       f"git switch -c import/upstream-{tag} origin/main\n"
-                      "git merge upstream\n"
+                      "git merge refs/heads/upstream\n"
                       "```\n\n"
                       "Before reading the changes, scan them for hidden characters and text aimed at "
                       "automated tools. Resolve, run the checks, open a PR, and push `upstream` once it lands.")

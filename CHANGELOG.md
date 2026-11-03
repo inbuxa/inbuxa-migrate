@@ -7,6 +7,97 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
 
 ## [Unreleased]
 
+## [27.1-rc.10]
+
+The tenth release candidate of the 27.1 series: real file names kept
+through an account export.
+
+### Added
+- `export-files` keeps the real name of every file, directory and link
+  whose name had to change on disk, in the manifest's new `files.names`,
+  and `import files` restores them. A real name that is taken in its
+  directory, or can't be a name, is left as it is on disk with a warning,
+  so a renamed entry never takes another's place; a listed link whose name
+  is taken is not made.
+
+## [27.1-rc.9]
+
+The ninth release candidate of the 27.1 series: an account export read
+back whole.
+
+### Added
+- `import files` reads an account export back into an archive: the tree
+  `export-files` writes, specified at
+  <https://coffeylabs.org/specs/account-export/>. Besides the mail,
+  contacts, calendars, Sieve scripts and files, it reads what only the
+  manifest holds: real folder names, roles and subscriptions, the default
+  address book and calendar, calendar colors and time zones, the active
+  script, media types, links and identities. Copies of a message in several
+  folders come back as one message in each. Paths in the manifest are
+  checked to stay inside the export, and no symbolic link is followed. An
+  archive gains the source kind `files` and a table for what it read at its
+  next import; until then `inspect` and the other read-only commands call it
+  an older layout.
+
+## [27.1-rc.8]
+
+The eighth release candidate of the 27.1 series: what a server needs to
+run migrations into itself, from its admin console.
+
+### Added
+- `migrate --progress json` writes one JSON event per line on stdout (a
+  step begins or ends, an account ends, the run ends), for a program that
+  runs a migration and shows its progress.
+- `plan --answers` writes the guide's plans from its answers in a file, so
+  a program can ask the questions itself and run `migrate`. The answers
+  hold no secrets.
+- `--stay-on-url` sends every request to the `--url` host, whatever the
+  server's session advertises, for a server reached at its own loopback or
+  through a tunnel. `import jmap`, `export`, `export-directory` and
+  `import-directory` take it.
+- `import imap --google-key-from-env` reads the Google service account's
+  key from `$INBUXA_MIGRATE_GOOGLE_KEY`, and a plan step can name it as
+  the `googleKey` secret.
+
+## [27.1-rc.7]
+
+The seventh release candidate of the 27.1 series: upstream's 1.0.12 and
+1.0.13 merged in, with out-of-office replies, `--replace-source`, and files
+kept working with inbuxa.
+
+### Added
+- The out-of-office reply comes across: imported from a server's
+  `VacationResponse`, and exported to the target's, in place of copying the
+  script the server keeps for it.
+- WebDAV, CalDAV, CardDAV: `--replace-source` removes the other recorded
+  sources of the same kind, and what was imported from them, before
+  importing, so a moved share leaves one tree in the archive.
+- Files keep their `executable` flag where the server has one. An archive
+  gains the column at its next import; until then `inspect` and the other
+  read-only commands call it an older layout.
+
+### Changed
+- FileNodes are read in either shape servers use: `nodeType` and `type`, as
+  inbuxa and other 0.16-line servers spell them, or `@type` and `mediaType`
+  (draft-ietf-jmap-filenode-18, as in Stalwart 1.0). An export asks the
+  target which it takes and writes that one. Upstream dropped the older
+  shape; this fork keeps both.
+- The Graph device-code sign-in asks for `Files.Read`, so the default run
+  reaches OneDrive.
+- iCalendar and vCard parse failures say what was wrong and quote the line.
+
+### Fixed
+- IMAP: children of a `\Noselect` parent folder kept their place instead of
+  landing at the top level.
+- JMAP import no longer holds every blob of a page in memory at once, which
+  large messages could exhaust.
+- CalDAV, CardDAV: items with bare CR line breaks, as Kerio Connect sends,
+  are read.
+- EWS: a bare `--auth-bearer` takes the API key or token from the
+  environment without asking for `--ews-client-id`.
+- `--account-name` as an administrator takes the data account from the
+  principal's `accounts`, as RFC 9670 defines it.
+
 ## [27.1-rc.6]
 
 The sixth release candidate of the 27.1 series: whole domains from Microsoft
