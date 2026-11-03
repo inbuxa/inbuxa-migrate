@@ -50,8 +50,9 @@ REPO_URL = "https://git.coffeylabs.org/inbuxa/inbuxa-migrate"
 # The fork's own copies always win: upstream's versions of these are dropped
 # and main's are put in their place.
 OWNED = ["README.md", "CHANGELOG.md", ".gitignore", ".github", ".gitea"]
-# Upstream's release tooling, which the fork replaced.
-DROPPED = ["dist-workspace.toml", "wix", "assets/importer-exporter.jpg"]
+# Upstream's release tooling, which the fork replaced, and its container build:
+# the fork ships release binaries, checked by their published hashes.
+DROPPED = ["dist-workspace.toml", "wix", "assets/importer-exporter.jpg", "Dockerfile", ".dockerignore"]
 
 # Order matters: the specific forms before the plain name.
 RENAMES = [
