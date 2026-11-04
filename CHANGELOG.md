@@ -7,6 +7,11 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
 
 ## [Unreleased]
 
+## [27.1-rc.11]
+
+The eleventh release candidate of the 27.1 series: upstream v1.0.14, and
+transfers that stall no longer wait out the whole limit.
+
 ### Changed
 - Upstream v1.0.14 is merged in. Its HTTP timeouts are left out, since this
   project already has its own, and so is its Dockerfile.
