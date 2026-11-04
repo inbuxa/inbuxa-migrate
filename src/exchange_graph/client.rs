@@ -498,6 +498,8 @@ mod tests {
             ureq::Timeout::SendBody,
             ureq::Timeout::RecvResponse,
             ureq::Timeout::RecvBody,
+            ureq::Timeout::PerRead,
+            ureq::Timeout::PerWrite,
         ] {
             let err = map_ureq_error(ureq::Error::Timeout(t));
             assert!(matches!(err, GraphError::Transport(_)), "{t:?} -> {err:?}");

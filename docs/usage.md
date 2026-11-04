@@ -55,7 +55,8 @@ a server to trust.
 
 Connections time out rather than wait forever: 30 seconds to connect, 5
 minutes for the server's first byte, and 30 minutes to read a whole
-response. A timed-out request is retried like any other transient failure.
+response. A transfer that goes silent for 5 minutes in either direction also
+times out. A timed-out request is retried like any other transient failure.
 
 Secrets come from the `INBUXA_MIGRATE_*` environment variables or a prompt;
 see [Credentials](../README.md#credentials). The command line takes them too,
