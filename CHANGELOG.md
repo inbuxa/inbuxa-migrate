@@ -7,6 +7,21 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
 
 ## [Unreleased]
 
+### Changed
+- Upstream v1.0.14 is merged in. Its HTTP timeouts are left out, since this
+  project already has its own, and so is its Dockerfile.
+
+### Fixed
+- Google Takeout: Portuguese (Brazil) system labels now map to mailbox roles
+  and keywords, or are dropped, like their English counterparts.
+- Google Takeout: a message labeled neither `Opened` nor `Unread` is now
+  imported as read. Only English and Portuguese (Brazil) labels are recognized,
+  so an unread label in another language becomes a folder and the message
+  imports as read.
+- Google Takeout: a contact without a `UID` is stored once rather than once per
+  contact group file. Archives from an earlier version keep the old copies, so
+  re-import into a fresh archive.
+
 ## [27.1-rc.10]
 
 The tenth release candidate of the 27.1 series: real file names kept
