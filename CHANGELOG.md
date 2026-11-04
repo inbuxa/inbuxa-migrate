@@ -21,6 +21,9 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
 - Google Takeout: a contact without a `UID` is stored once rather than once per
   contact group file. Archives from an earlier version keep the old copies, so
   re-import into a fresh archive.
+- A download or upload that stalls partway now fails after 5 minutes of silence
+  and is retried, rather than waiting out the limit on the whole body: 30
+  minutes for a download, over two hours for the largest uploads.
 
 ## [27.1-rc.10]
 

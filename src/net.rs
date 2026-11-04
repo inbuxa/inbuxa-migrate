@@ -25,9 +25,20 @@ pub const RECV_RESPONSE: Duration = Duration::from_secs(5 * 60);
 
 /// Reading the whole response body. ureq counts this as one budget for the
 /// entire body, not per read, so it has to cover the largest body a client
-/// accepts (512 MiB) on a slow link: 30 minutes is about 300 KB/s. A stalled
-/// transfer is abandoned and retried after at most this long.
+/// accepts (512 MiB) on a slow link: 30 minutes is about 300 KB/s.
 pub const RECV_BODY: Duration = Duration::from_secs(30 * 60);
+
+/// Silence on the socket during any one read, which restarts with every read.
+/// A transfer that stalls partway is abandoned and retried after this long,
+/// rather than waiting out [`RECV_BODY`]. It matches [`RECV_RESPONSE`] so it
+/// never cuts the server's thinking time short.
+pub const PER_READ: Duration = Duration::from_secs(5 * 60);
+
+/// Silence on the socket during any one write, which restarts with every write.
+/// An upload that stalls partway is abandoned and retried after this long,
+/// rather than waiting out its send budget, which runs past two hours for the
+/// largest bodies.
+pub const PER_WRITE: Duration = Duration::from_secs(5 * 60);
 
 /// Sending a request body when its size is not known in advance. Uploads know
 /// their size and get [`send_body_budget`] instead.
@@ -57,6 +68,8 @@ macro_rules! with_timeouts {
             .timeout_send_body(Some($crate::net::SEND_BODY))
             .timeout_recv_response(Some($crate::net::RECV_RESPONSE))
             .timeout_recv_body(Some($crate::net::RECV_BODY))
+            .timeout_per_read(Some($crate::net::PER_READ))
+            .timeout_per_write(Some($crate::net::PER_WRITE))
     };
 }
 pub(crate) use with_timeouts;
@@ -280,5 +293,76 @@ mod tests {
         assert_eq!(t.send_body, Some(SEND_BODY));
         assert_eq!(t.recv_response, Some(RECV_RESPONSE));
         assert_eq!(t.recv_body, Some(RECV_BODY));
+        assert_eq!(config.timeout_per_read(), Some(PER_READ));
+        assert_eq!(config.timeout_per_write(), Some(PER_WRITE));
+    }
+
+    #[test]
+    fn a_stalled_body_times_out_without_waiting_for_the_body_budget() {
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        let (done, wait) = std::sync::mpsc::channel::<()>();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0u8; 1024];
+            let _ = stream.read(&mut request);
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nhalf")
+                .unwrap();
+            let _ = wait.recv();
+        });
+
+        let agent = with_timeouts!(ureq::config::Config::builder())
+            .timeout_per_read(Some(Duration::from_millis(200)))
+            .build()
+            .new_agent();
+        let started = std::time::Instant::now();
+        let err = agent
+            .get(&url)
+            .call()
+            .unwrap()
+            .into_body()
+            .read_to_vec()
+            .unwrap_err();
+        assert!(
+            matches!(err, ureq::Error::Timeout(ureq::Timeout::PerRead)),
+            "got {err:?}"
+        );
+        assert!(started.elapsed() < Duration::from_secs(10));
+
+        drop(done);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn a_stalled_upload_times_out_without_waiting_for_the_send_budget() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        let (done, wait) = std::sync::mpsc::channel::<()>();
+        // Accepts and never reads, so the socket buffers fill and writes stop.
+        let server = std::thread::spawn(move || {
+            let (_stream, _) = listener.accept().unwrap();
+            let _ = wait.recv();
+        });
+
+        let agent = with_timeouts!(ureq::config::Config::builder())
+            .timeout_per_write(Some(Duration::from_millis(200)))
+            .build()
+            .new_agent();
+        let started = std::time::Instant::now();
+        let err = agent
+            .post(&url)
+            .send(&vec![0u8; 64 * 1024 * 1024][..])
+            .unwrap_err();
+        assert!(
+            matches!(err, ureq::Error::Timeout(ureq::Timeout::PerWrite)),
+            "got {err:?}"
+        );
+        assert!(started.elapsed() < Duration::from_secs(30));
+
+        drop(done);
+        server.join().unwrap();
     }
 }
