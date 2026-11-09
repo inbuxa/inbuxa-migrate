@@ -7,6 +7,12 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
 
 ## [Unreleased]
 
+## [27.1-rc.12]
+
+The twelfth release candidate of the 27.1 series: upstream v1.0.15, keywords
+from IMAP `Keywords:` headers, and fixes for Maildir folder names and EWS
+`--mailbox`.
+
 ### Added
 - IMAP: `--mime-keywords` adds the phrases of each message's `Keywords:`
   header as keywords. Exchange shows its categories over IMAP this way.
