@@ -37,6 +37,7 @@ fn imap_config(account: &Account, imap: &Endpoint) -> ImapImportConfig {
         subscribed_only: false,
         automap: true,
         include_deleted: false,
+        mime_keywords: false,
         fetch_batch: 64,
         fetch_batch_bytes: inbuxa_migrate::sync::batch::DEFAULT_BATCH_BYTES,
         imap_connections: 2,
