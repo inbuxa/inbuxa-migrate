@@ -183,6 +183,7 @@ fn dovecot_export_imap_round_trip_converges() {
             subscribed_only: false,
             automap: true,
             include_deleted: false,
+            mime_keywords: false,
             fetch_batch: 64,
             fetch_batch_bytes: inbuxa_migrate::sync::batch::DEFAULT_BATCH_BYTES,
             imap_connections: 1,

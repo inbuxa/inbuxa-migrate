@@ -7,6 +7,25 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
 
 ## [Unreleased]
 
+### Added
+- IMAP: `--mime-keywords` adds the phrases of each message's `Keywords:`
+  header as keywords. Exchange shows its categories over IMAP this way.
+  Each phrase is lowercased and its spaces become `_`. Letters outside ASCII
+  are dropped, and a phrase can't name a system keyword such as `$seen`.
+
+### Changed
+- Upstream v1.0.15 is merged in.
+
+### Fixed
+- Maildir: folder names kept in modified UTF-7 are now decoded in full
+  (`.&ZeVnLIqe-.&U,BTFw-` is `日本語.台北`). Folder selection and role
+  guessing use the decoded name. Before, only the last part of a name was
+  decoded, for display.
+- Exchange EWS: with Basic or delegated OAuth sign-in, `--mailbox` naming
+  another mailbox the user has full access to imported the user's own
+  mailbox instead. Folders are now addressed in the mailbox `--mailbox`
+  names.
+
 ## [27.1-rc.11]
 
 The eleventh release candidate of the 27.1 series: upstream v1.0.14, and
