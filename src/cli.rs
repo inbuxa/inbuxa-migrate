@@ -107,6 +107,21 @@ enum Command {
     Plan(Box<PlanArgs>),
     #[command(about = "Show the contents of a local archive (read-only)")]
     Inspect(Box<InspectArgs>),
+    /// Print a shell completion script to standard output
+    ///
+    /// Source it, or install it where the shell looks:
+    ///   bash: inbuxa-migrate completions bash > /etc/bash_completion.d/inbuxa-migrate
+    ///   zsh:  inbuxa-migrate completions zsh  > "${fpath[1]}/_inbuxa-migrate"
+    ///   fish: inbuxa-migrate completions fish > ~/.config/fish/completions/inbuxa-migrate.fish
+    Completions {
+        /// The shell to generate for
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
+    /// Print a man page, in roff, to standard output
+    ///
+    ///   inbuxa-migrate man > /usr/share/man/man1/inbuxa-migrate.1
+    Man,
 }
 
 #[derive(Subcommand)]
@@ -921,6 +936,8 @@ pub enum Action {
     ExportManageSieve(CommonConfig, ExportManageSieveConfig),
     ExportDav(CommonConfig, ExportDavConfig),
     Inspect(InspectConfig),
+    Completions(clap_complete::Shell),
+    Man,
 }
 
 impl Action {
@@ -1117,6 +1134,8 @@ impl Cli {
             Command::ExportCaldav(args) => resolve_export_dav(*args, DavKindArg::Caldav),
             Command::ExportCarddav(args) => resolve_export_dav(*args, DavKindArg::Carddav),
             Command::Inspect(args) => resolve_inspect(*args),
+            Command::Completions { shell } => Ok(Action::Completions(shell)),
+            Command::Man => Ok(Action::Man),
         }
     }
 }
@@ -2233,6 +2252,36 @@ fn resolve_account(
 mod tests {
     use super::*;
     use std::env;
+
+    #[test]
+    fn completions_resolve_to_the_named_shell() {
+        let cli = Cli::try_parse_from(["inbuxa-migrate", "completions", "bash"])
+            .unwrap_or_else(|e| panic!("clap rejected args: {e}"));
+        assert!(matches!(
+            cli.resolve().unwrap(),
+            Action::Completions(clap_complete::Shell::Bash)
+        ));
+        let cli = Cli::try_parse_from(["inbuxa-migrate", "completions", "zsh"])
+            .unwrap_or_else(|e| panic!("clap rejected args: {e}"));
+        assert!(matches!(
+            cli.resolve().unwrap(),
+            Action::Completions(clap_complete::Shell::Zsh)
+        ));
+    }
+
+    #[test]
+    fn completions_reject_an_unknown_shell() {
+        assert!(Cli::try_parse_from(["inbuxa-migrate", "completions", "powershellx"]).is_err());
+        // The shell is required.
+        assert!(Cli::try_parse_from(["inbuxa-migrate", "completions"]).is_err());
+    }
+
+    #[test]
+    fn man_resolves() {
+        let cli = Cli::try_parse_from(["inbuxa-migrate", "man"])
+            .unwrap_or_else(|e| panic!("clap rejected args: {e}"));
+        assert!(matches!(cli.resolve().unwrap(), Action::Man));
+    }
 
     #[test]
     fn parse_duration_reads_units_and_rejects_nonsense() {

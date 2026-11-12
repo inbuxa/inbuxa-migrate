@@ -125,6 +125,20 @@ so you can confirm it came from us before trusting the checksums.
 
 The same public key signs every inbuxa release (installer, migrate and cli).
 
+## Shell completions and a man page
+
+`inbuxa-migrate completions <shell>` prints a completion script to standard
+output, for `bash`, `zsh`, `fish`, `elvish` or `powershell`. Install it where
+the shell looks:
+
+    inbuxa-migrate completions bash > /etc/bash_completion.d/inbuxa-migrate
+    inbuxa-migrate completions zsh  > "${fpath[1]}/_inbuxa-migrate"
+    inbuxa-migrate completions fish > ~/.config/fish/completions/inbuxa-migrate.fish
+
+`inbuxa-migrate man` prints a man page, in roff, to standard output:
+
+    inbuxa-migrate man > /usr/share/man/man1/inbuxa-migrate.1
+
 ## Building and testing
 
     cargo build --release          the binary is target/release/inbuxa-migrate
