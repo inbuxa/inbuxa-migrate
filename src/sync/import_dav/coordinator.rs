@@ -173,7 +173,15 @@ fn run_into(
                 );
             }
         }
-        let result = run_dry_diff(&conn, &client, &discovery, &config, logger, summary);
+        let result = run_dry_diff(
+            &conn,
+            &client,
+            &discovery,
+            &config,
+            common.estimate,
+            logger,
+            summary,
+        );
         summary.retries_observed = client.retries_observed();
         summary.retry_after_sleeps = client.retry_after_sleeps();
         return result;
@@ -340,6 +348,7 @@ fn run_dry_diff(
     client: &DavClient,
     discovery: &Discovery,
     config: &DavImportConfig,
+    want_sizes: bool,
     logger: Logger,
     summary: &mut Summary,
 ) -> Result<(), Error> {
@@ -387,12 +396,21 @@ fn run_dry_diff(
                 .map_err(super::per_collection_failure)
             {
                 Ok(ms) => {
-                    let new_count = ms
-                        .responses
-                        .iter()
-                        .filter(|r| !r.props.is_collection)
-                        .count();
-                    item_counts.created += new_count as u64;
+                    let mut new_count = 0u64;
+                    let mut bytes = 0u64;
+                    for r in ms.responses.iter().filter(|r| !r.props.is_collection) {
+                        new_count += 1;
+                        // --estimate: getcontentlength comes back in the same
+                        // PROPFIND, so sizing the items costs no extra request.
+                        // A server that omits it leaves those items unsized.
+                        if let Some(n) = r.props.content_length {
+                            bytes += n;
+                        }
+                    }
+                    item_counts.created += new_count;
+                    if want_sizes {
+                        item_counts.bytes += bytes;
+                    }
                     if logger.enabled(LEVEL_DEFAULT) {
                         eprintln!("  {} items: {new_count}", coll.href.as_str());
                     }
