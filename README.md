@@ -35,8 +35,11 @@ server can be gone before the new one exists.
 
 Both commands converge. An interrupted run picks up where it stopped, and a
 later `import` into the same archive adds what arrived since. Every command
-takes `--dry-run` and then only reports the plan. `inspect` reads an archive
-and changes nothing.
+takes `--dry-run` and then only reports the plan. An `import` also takes
+`--estimate`, which connects to the source and reports how much is new to
+fetch — counts, bytes and a rough time — before committing, and writes
+nothing. It reports sizes for `imap` and `maildir`; other sources fall back to
+a plain dry-run. `inspect` reads an archive and changes nothing.
 
 The archive is also a backup. Import on a schedule, keep the file, and
 restore it later with `export`. An archive remembers which account filled it

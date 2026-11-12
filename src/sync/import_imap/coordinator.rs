@@ -388,6 +388,7 @@ fn run_into(
             &mut client,
             &control_ctx,
             &resolved,
+            common.estimate,
             logger,
         )?;
         return Ok(());
@@ -1282,6 +1283,7 @@ fn dry_run_summary(
     client: &mut ImapClient,
     control_ctx: &ControlCtx,
     folders: &[ResolvedFolder],
+    want_sizes: bool,
     logger: Logger,
 ) -> Result<Summary, Error> {
     let mut mailbox = TypeCounts::default();
@@ -1377,6 +1379,11 @@ fn dry_run_summary(
         email.created += diff.new.len() as u64;
         email.deleted += diff.vanished.len() as u64;
         email.fetched += diff.new.len() as u64;
+        // --estimate: size the new messages without downloading them.
+        if want_sizes && !diff.new.is_empty() {
+            let sizes = fetch_sizes(client, control_ctx, &folder.name, &diff.new, logger);
+            email.bytes += sizes.values().sum::<u64>();
+        }
         let uv_note = if uv_changed {
             format!(
                 " (UIDVALIDITY {} -> {})",

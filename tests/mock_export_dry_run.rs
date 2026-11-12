@@ -61,6 +61,7 @@ fn dry_run(archive: &Path, base: &str) -> Summary {
             archive: archive.to_path_buf(),
             threads: 2,
             dry_run: true,
+            estimate: false,
             max_retries: 0,
             allow_invalid_certs: false,
             logger: Logger::from_flags(true, 0),
