@@ -156,8 +156,9 @@ struct GlobalArgs {
         help = "Preview an import: counts, sizes and a rough time, before any writes",
         long_help = "Preview an import before committing: for each type, how much is new since \
             the archive was last filled, how many bytes that is, and a rough time.\n  \
-            Available for imap and maildir today; other sources fall back to --dry-run with a \
-            note. It implies --dry-run, so it never writes. On an export it is just --dry-run."
+            Available for imap, maildir, caldav and carddav today; other sources fall back to \
+            --dry-run with a note. It implies --dry-run, so it never writes. On an export it is \
+            just --dry-run."
     )]
     estimate: bool,
 
@@ -918,14 +919,19 @@ impl Action {
     }
 
     /// Whether this import can give the size-and-time estimate: the source
-    /// enumerates messages in its dry run and can size them cheaply. The
+    /// enumerates its items in its dry run and can size them cheaply. The
     /// others fall back to a plain dry run with a note; adding them is
     /// per-source follow-up work.
     pub fn estimate_available(&self) -> bool {
-        matches!(
-            self,
-            Action::ImportImap(c, _) | Action::ImportMaildir(c, _) if c.estimate
-        )
+        match self {
+            Action::ImportImap(c, _) | Action::ImportMaildir(c, _) => c.estimate,
+            // CalDAV and CardDAV size their items from the getcontentlength
+            // the enumeration PROPFIND already returns. WebDAV files go
+            // through the same command but report differently, so they stay
+            // on the fallback for now.
+            Action::ImportDav(c, cfg) => c.estimate && !matches!(cfg.kind, DavKindArg::Webdav),
+            _ => false,
+        }
     }
 }
 

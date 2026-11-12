@@ -122,6 +122,7 @@ pub fn propfind_dav_items() -> String {
          <d:resourcetype/>\
          <d:getetag/>\
          <d:getcontenttype/>\
+         <d:getcontentlength/>\
          <d:getlastmodified/>\
          </d:prop>\
          </d:propfind>",
@@ -304,5 +305,12 @@ mod tests {
         assert!(body.contains("<d:getlastmodified/>"));
         assert!(body.contains("<d:getcontentlength/>"));
         assert!(body.contains("<d:creationdate/>"));
+    }
+
+    #[test]
+    fn dav_items_request_a_content_length_so_estimate_can_size_them() {
+        let body = propfind_dav_items();
+        assert!(body.contains("<d:getcontentlength/>"));
+        assert!(body.contains("<d:getetag/>"));
     }
 }
