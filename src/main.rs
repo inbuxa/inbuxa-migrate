@@ -141,8 +141,13 @@ fn run() -> i32 {
             return match migrate::run(config) {
                 Ok(outcome) => {
                     if !json {
+                        let passes = if outcome.passes > 1 {
+                            format!(" after {} passes", outcome.passes)
+                        } else {
+                            String::new()
+                        };
                         println!(
-                            "accounts: {} done, {} not finished; report: {}",
+                            "accounts: {} done, {} not finished{passes}; report: {}",
                             outcome.done,
                             outcome.unfinished,
                             outcome.report.display()

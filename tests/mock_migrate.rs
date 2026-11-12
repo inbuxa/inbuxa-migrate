@@ -44,6 +44,9 @@ fn config(plan: &Path, work: &Path) -> MigrateConfig {
         program: PathBuf::from(env!("CARGO_BIN_EXE_inbuxa-migrate")),
         logger: Logger::from_flags(true, 0),
         progress_json: false,
+        repeat: None,
+        max_passes: None,
+        until_quiet: false,
     }
 }
 
@@ -148,6 +151,64 @@ fn accounts_run_their_steps_resume_and_run_again() {
     let third = migrate::run(again).unwrap();
     assert_eq!(report(&third), ["ann@example.org,mail,done,1,1"]);
     assert_eq!(emails(&work.join("ann@example.org/archive.sqlite")), 2);
+}
+
+#[test]
+fn repeat_runs_several_passes_and_stops_when_the_source_is_quiet() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    message(&root.join("mail/ann"), "m1", "First");
+    let plan = root.join("plan.json");
+    write_plan(
+        &plan,
+        json!([{"name": "mail", "args": ["import", "maildir", "mail/{local}", "{archive}"]}]),
+    );
+    let work = root.join("work");
+
+    // --repeat with a bound: every pass re-runs the import. The first moves
+    // the one message; later passes find nothing new, so with --until-quiet
+    // the run stops on the first quiet pass -- here the second -- without
+    // reaching the three-pass ceiling.
+    let mut cfg = config(&plan, &work);
+    cfg.only = vec!["ann@example.org".into()];
+    cfg.repeat = Some(std::time::Duration::from_millis(5));
+    cfg.max_passes = Some(3);
+    cfg.until_quiet = true;
+
+    let out = migrate::run(cfg).unwrap();
+    assert_eq!(
+        out.passes, 2,
+        "pass 1 moves mail, pass 2 is quiet and stops"
+    );
+    assert_eq!((out.done, out.unfinished), (1, 0));
+    // The message landed once, not once per pass.
+    assert_eq!(emails(&work.join("ann@example.org/archive.sqlite")), 1);
+    // The final report is the quiet pass: the re-run found nothing new.
+    assert_eq!(report(&out), ["ann@example.org,mail,done,0,0"]);
+}
+
+#[test]
+fn repeat_with_a_ceiling_runs_exactly_that_many_passes() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    message(&root.join("mail/ann"), "m1", "First");
+    let plan = root.join("plan.json");
+    write_plan(
+        &plan,
+        json!([{"name": "mail", "args": ["import", "maildir", "mail/{local}", "{archive}"]}]),
+    );
+    let work = root.join("work");
+
+    // Without --until-quiet the run keeps going to the ceiling even though
+    // later passes are quiet, and the message is still imported only once.
+    let mut cfg = config(&plan, &work);
+    cfg.only = vec!["ann@example.org".into()];
+    cfg.repeat = Some(std::time::Duration::from_millis(5));
+    cfg.max_passes = Some(3);
+
+    let out = migrate::run(cfg).unwrap();
+    assert_eq!(out.passes, 3);
+    assert_eq!(emails(&work.join("ann@example.org/archive.sqlite")), 1);
 }
 
 #[test]
