@@ -298,8 +298,12 @@ fn run_into(
     }
 
     if ctx.dry_run() {
-        print_dry_run(&dry_rows);
-        *summary = Summary::default();
+        // A plain dry run prints its own table and discards the counts; an
+        // estimate keeps the per-type summary so the caller can render it.
+        if !ctx.estimate() {
+            print_dry_run(&dry_rows);
+            *summary = Summary::default();
+        }
         return Ok(());
     }
 
@@ -399,6 +403,10 @@ fn reconcile_type(
             d.vanished.len() as u64,
             d.present.len() as u64,
         ));
+        // --estimate keeps the summary (counts only; JMAP would need a body
+        // fetch per object to size it, which an estimate does not do), so the
+        // new-object count has to land in the per-type row the caller pushes.
+        counts.fetched = d.new.len() as u64;
         return Ok(());
     }
 

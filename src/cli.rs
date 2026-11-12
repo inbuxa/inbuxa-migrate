@@ -156,9 +156,10 @@ struct GlobalArgs {
         help = "Preview an import: counts, sizes and a rough time, before any writes",
         long_help = "Preview an import before committing: for each type, how much is new since \
             the archive was last filled, how many bytes that is, and a rough time.\n  \
-            Available for imap, maildir, caldav, carddav, exchange (EWS) and takeout (mail, \
-            events and contacts) today; other sources fall back to --dry-run with a note. It \
-            implies --dry-run, so it never writes. On an export it is just --dry-run."
+            Sizes for imap, maildir, caldav, carddav, exchange (EWS) and takeout (mail, events \
+            and contacts); counts only for jmap and Graph (a size there needs a body fetch per \
+            object). Other sources fall back to --dry-run with a note. It implies --dry-run, so \
+            it never writes. On an export it is just --dry-run."
     )]
     estimate: bool,
 
@@ -936,6 +937,10 @@ impl Action {
             // EWS FindItem returns item:Size, so mail, calendars and contacts
             // are all counted and sized from the enumeration.
             Action::ImportExchangeEws(c, _) => c.estimate,
+            // JMAP and Graph report counts only: the dry-run enumeration gives
+            // the new-object count for free, but a size would cost a body fetch
+            // per object, which an estimate does not do.
+            Action::Import(c, _) | Action::ImportExchangeGraph(c, _) => c.estimate,
             _ => false,
         }
     }

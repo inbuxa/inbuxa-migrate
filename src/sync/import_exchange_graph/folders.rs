@@ -341,7 +341,7 @@ pub fn reconcile_address_books(
     Ok(out)
 }
 
-fn default_contact_folder(ctx: &GraphCoordinator<'_>) -> Option<Value> {
+pub(crate) fn default_contact_folder(ctx: &GraphCoordinator<'_>) -> Option<Value> {
     match ctx.client.get_json(&ctx.endpoints.default_contact_folder()) {
         Ok(value) if value.get("id").and_then(Value::as_str).is_some() => return Some(value),
         Ok(_) => {}
