@@ -98,8 +98,19 @@ Secrets are read from the environment, or asked for at a prompt:
     INBUXA_MIGRATE_GOOGLE_KEY             a Google service account's JSON key,
                                           for --google-key-from-env
 
+Any of these can instead be read from a file, by setting the same name with
+`_FILE` appended to the file's path -- the Docker, Compose and systemd secrets
+convention:
+
+    INBUXA_MIGRATE_PASSWORD_FILE=/run/secrets/imap-password
+    INBUXA_MIGRATE_API_KEY_FILE=/run/secrets/token
+
+The file holds the secret and nothing else; one trailing newline is ignored.
+Setting both a variable and its `_FILE` form is an error. (A Google key is
+already a file: `--google-key <path>`.)
+
 The command line takes them too, but a secret there ends up in the shell's
-history and in the process list. Use the environment or the prompt.
+history and in the process list. Use a file, the environment, or the prompt.
 
 ## Installing
 

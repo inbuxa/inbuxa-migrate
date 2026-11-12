@@ -58,9 +58,10 @@ minutes for the server's first byte, and 30 minutes to read a whole
 response. A transfer that goes silent for 5 minutes in either direction also
 times out. A timed-out request is retried like any other transient failure.
 
-Secrets come from the `INBUXA_MIGRATE_*` environment variables or a prompt;
-see [Credentials](../README.md#credentials). The command line takes them too,
-but should not be given them.
+Secrets come from the `INBUXA_MIGRATE_*` environment variables, a file named
+by the same variable with `_FILE` appended (the Docker and systemd secrets
+convention), or a prompt; see [Credentials](../README.md#credentials). The
+command line takes them too, but should not be given them.
 
 ## Import
 

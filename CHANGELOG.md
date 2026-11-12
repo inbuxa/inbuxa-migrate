@@ -11,6 +11,12 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
 - `completions <shell>` prints a shell completion script (bash, zsh, fish,
   elvish or powershell) to standard output, and `man` prints a man page in
   roff. Both are generated from the command itself and reach no server.
+- Every secret read from an `INBUXA_MIGRATE_*` variable can instead be read
+  from a file named by the same variable with `_FILE` appended, the Docker
+  and systemd secrets convention (`INBUXA_MIGRATE_PASSWORD_FILE`,
+  `INBUXA_MIGRATE_API_KEY_FILE`, and so on). One trailing newline is ignored;
+  setting both a variable and its `_FILE` form is an error. This keeps a
+  secret out of both the environment and the command line.
 
 ## [27.1-rc.12]
 
