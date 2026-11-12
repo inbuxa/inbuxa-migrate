@@ -1822,6 +1822,14 @@ pub struct ExchangeEwsImportArgs {
 
     #[arg(
         long,
+        value_name = "RPS",
+        value_parser = parse_max_rps,
+        help = "Cap requests per second across all connections (proactive throttle for a rate-limited server)"
+    )]
+    max_rps: Option<f64>,
+
+    #[arg(
+        long,
         value_name = "N",
         default_value_t = 20,
         help = "ItemIds per GetItem batch"
@@ -1884,6 +1892,7 @@ fn resolve_exchange_ews_import(args: ExchangeEwsImportArgs) -> Result<Action, Er
         mailbox_kind,
         auth,
         ews_connections,
+        max_rps: args.max_rps,
         getitem_batch: args.ews_getitem_batch.max(1),
         getitem_batch_bytes: args
             .ews_getitem_batch_mib
@@ -2038,6 +2047,14 @@ pub struct ExchangeGraphImportArgs {
 
     #[arg(
         long,
+        value_name = "RPS",
+        value_parser = parse_max_rps,
+        help = "Cap requests per second across all connections (proactive throttle for a rate-limited tenant)"
+    )]
+    max_rps: Option<f64>,
+
+    #[arg(
+        long,
         value_name = "N",
         default_value_t = 100,
         help = "Per-page size ($top query parameter, range [1, 1000])"
@@ -2103,6 +2120,14 @@ fn parse_event_body_format(s: &str) -> Result<EventBodyFormat, String> {
     EventBodyFormat::parse(s).map_err(|e| e.to_string())
 }
 
+/// A requests-per-second cap: a positive, finite number.
+fn parse_max_rps(s: &str) -> Result<f64, String> {
+    match s.parse::<f64>() {
+        Ok(v) if v.is_finite() && v > 0.0 => Ok(v),
+        _ => Err("expected a positive number of requests per second".to_owned()),
+    }
+}
+
 fn resolve_exchange_graph_import(args: ExchangeGraphImportArgs) -> Result<Action, Error> {
     let common = common_config(&args.global, args.archive.clone());
     let mailbox_kind = args.mailbox_kind;
@@ -2134,6 +2159,7 @@ fn resolve_exchange_graph_import(args: ExchangeGraphImportArgs) -> Result<Action
             surfaces,
             event_body_format,
             graph_connections,
+            max_rps: args.max_rps,
             top,
             exception_window_years: args.exception_window_years,
             contact_photos: !args.skip_contact_photos,
@@ -2280,6 +2306,59 @@ mod tests {
         let cli = Cli::try_parse_from(["inbuxa-migrate", "man"])
             .unwrap_or_else(|e| panic!("clap rejected args: {e}"));
         assert!(matches!(cli.resolve().unwrap(), Action::Man));
+    }
+
+    #[test]
+    fn graph_max_rps_is_off_by_default_and_parsed_when_given() {
+        assert_eq!(graph_config(&[]).unwrap().max_rps, None);
+        assert_eq!(
+            graph_config(&["--max-rps", "8.5"]).unwrap().max_rps,
+            Some(8.5)
+        );
+    }
+
+    #[test]
+    fn graph_max_rps_must_be_positive() {
+        for bad in ["0", "-3", "abc", "inf"] {
+            assert!(
+                Cli::try_parse_from([
+                    "inbuxa-migrate",
+                    "import",
+                    "exchange-graph",
+                    "--access-token",
+                    "tok",
+                    "--max-rps",
+                    bad,
+                    "archive.sqlite",
+                ])
+                .is_err(),
+                "--max-rps {bad} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn ews_max_rps_is_off_by_default_and_parsed_when_given() {
+        let config = |extra: &[&str]| -> EwsImportConfig {
+            let mut argv = vec![
+                "inbuxa-migrate",
+                "import",
+                "exchange-ews",
+                "--url",
+                "https://ews.example.com/EWS/Exchange.asmx",
+                "--auth-bearer",
+                "tok",
+            ];
+            argv.extend_from_slice(extra);
+            argv.push("archive.sqlite");
+            let cli = Cli::try_parse_from(argv).unwrap_or_else(|e| panic!("clap rejected: {e}"));
+            match cli.resolve().unwrap() {
+                Action::ImportExchangeEws(_, c) => c,
+                _ => panic!("expected ImportExchangeEws"),
+            }
+        };
+        assert_eq!(config(&[]).max_rps, None);
+        assert_eq!(config(&["--max-rps", "4"]).max_rps, Some(4.0));
     }
 
     #[test]

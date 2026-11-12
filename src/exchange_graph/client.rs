@@ -18,7 +18,7 @@ use ureq::{ResponseExt, http::Uri};
 use crate::exchange_graph::error::GraphError;
 use crate::exchange_graph::retry::{HttpClass, classify_http_status, is_throttled};
 use crate::jmap::http::{RetryPolicy, cross_host, retry_after_header};
-use crate::jmap::retry::{self, RateLimitState};
+use crate::jmap::retry::{self, Pacer, RateLimitState};
 use crate::logging::{HttpCall, LEVEL_BODIES, LEVEL_DEFAULT, LEVEL_PROGRESS, Logger};
 use crate::net::{CertOverride, tls, with_timeouts};
 
@@ -68,6 +68,7 @@ struct Inner {
     bearer: Mutex<String>,
     retry: RetryPolicy,
     rate_limit: RateLimitState,
+    pace: Pacer,
     log_level: AtomicU8,
     retries_total: AtomicU64,
     retry_after_sleeps: AtomicU64,
@@ -122,6 +123,7 @@ impl GraphClient {
                 bearer: Mutex::new(bearer),
                 retry,
                 rate_limit: RateLimitState::new(),
+                pace: Pacer::new(),
                 log_level: AtomicU8::new(LEVEL_DEFAULT),
                 retries_total: AtomicU64::new(0),
                 retry_after_sleeps: AtomicU64::new(0),
@@ -143,6 +145,12 @@ impl GraphClient {
         self.inner
             .log_level
             .store(logger.level(), Ordering::Relaxed);
+    }
+
+    /// Cap how often a request may start, in requests per second, across all
+    /// worker connections. `None` or a non-positive rate leaves it uncapped.
+    pub fn set_max_rps(&self, max_rps: Option<f64>) {
+        self.inner.pace.set_per_second(max_rps);
     }
 
     fn logger(&self) -> Logger {
@@ -210,6 +218,7 @@ impl GraphClient {
         let mut attempt: u32 = 0;
         loop {
             self.inner.rate_limit.cooldown().wait();
+            self.inner.pace.wait();
             self.inner.requests_total.fetch_add(1, Ordering::Relaxed);
             let outcome = self.one_attempt(method, url, accept, extra_prefer);
             match outcome {
