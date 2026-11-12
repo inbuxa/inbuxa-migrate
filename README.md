@@ -39,8 +39,9 @@ takes `--dry-run` and then only reports the plan. An `import` also takes
 `--estimate`, which connects to the source and reports how much is new to
 fetch — counts, bytes and a rough time — before committing, and writes
 nothing. It reports sizes for `imap`, `maildir`, `caldav`, `carddav`, Exchange
-(`ews`) and a `takeout`'s mail (which it reads to count); other sources fall
-back to a plain dry-run. `inspect` reads an archive and changes nothing.
+(`ews`) and a `takeout` (whose files it reads to count the mail, events and
+contacts that are new); other sources fall back to a plain dry-run. `inspect`
+reads an archive and changes nothing.
 
 The archive is also a backup. Import on a schedule, keep the file, and
 restore it later with `export`. An archive remembers which account filled it
