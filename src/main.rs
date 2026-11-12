@@ -31,6 +31,13 @@ fn run() -> i32 {
         Err(err) => return fail(&err),
     };
 
+    let do_estimate = action.estimate_available();
+    if action.estimate_requested() && !do_estimate {
+        eprintln!(
+            "note: --estimate isn't available for this source yet; running --dry-run instead \
+             (its plan is below). Estimates work for imap and maildir today."
+        );
+    }
     let mut quiet_report = false;
     let mut partial = "some objects failed; the archive is consistent and resumable";
     let (outcome, logger) = match action {
@@ -174,7 +181,11 @@ fn run() -> i32 {
         }
     };
 
-    if !quiet_report {
+    if do_estimate {
+        if outcome.error.is_none() {
+            print!("{}", sync::estimate::render(&outcome.summary));
+        }
+    } else if !quiet_report {
         report(&outcome.summary);
     }
     match outcome.error {

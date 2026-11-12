@@ -170,6 +170,7 @@ fn run_export(archive: &Path, base: &str, threads: usize) -> TypeCounts {
             archive: archive.to_path_buf(),
             threads,
             dry_run: false,
+            estimate: false,
             max_retries: 1,
             allow_invalid_certs: false,
             logger: Logger::from_flags(true, 0),

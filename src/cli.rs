@@ -152,6 +152,16 @@ struct GlobalArgs {
     dry_run: bool,
 
     #[arg(
+        long,
+        help = "Preview an import: counts, sizes and a rough time, before any writes",
+        long_help = "Preview an import before committing: for each type, how much is new since \
+            the archive was last filled, how many bytes that is, and a rough time.\n  \
+            Available for imap and maildir today; other sources fall back to --dry-run with a \
+            note. It implies --dry-run, so it never writes. On an export it is just --dry-run."
+    )]
+    estimate: bool,
+
+    #[arg(
         short = 'v',
         long,
         action = ArgAction::Count,
@@ -887,6 +897,36 @@ pub enum Action {
     ExportManageSieve(CommonConfig, ExportManageSieveConfig),
     ExportDav(CommonConfig, ExportDavConfig),
     Inspect(InspectConfig),
+}
+
+impl Action {
+    /// Whether `--estimate` was asked for on an import at all. On an export it
+    /// is just a dry run, so this is false there.
+    pub fn estimate_requested(&self) -> bool {
+        match self {
+            Action::Import(c, _)
+            | Action::ImportImap(c, _)
+            | Action::ImportDav(c, _)
+            | Action::ImportManageSieve(c, _)
+            | Action::ImportMaildir(c, _)
+            | Action::ImportTakeout(c, _)
+            | Action::ImportFiles(c, _)
+            | Action::ImportExchangeEws(c, _)
+            | Action::ImportExchangeGraph(c, _) => c.estimate,
+            _ => false,
+        }
+    }
+
+    /// Whether this import can give the size-and-time estimate: the source
+    /// enumerates messages in its dry run and can size them cheaply. The
+    /// others fall back to a plain dry run with a note; adding them is
+    /// per-source follow-up work.
+    pub fn estimate_available(&self) -> bool {
+        matches!(
+            self,
+            Action::ImportImap(c, _) | Action::ImportMaildir(c, _) if c.estimate
+        )
+    }
 }
 
 #[derive(Args)]
@@ -2062,7 +2102,9 @@ fn common_config(global: &GlobalArgs, archive: PathBuf) -> CommonConfig {
     CommonConfig {
         archive,
         threads,
-        dry_run: global.dry_run,
+        // --estimate is a dry run that also measures sizes, so it implies it.
+        dry_run: global.dry_run || global.estimate,
+        estimate: global.estimate,
         max_retries: global.max_retries,
         allow_invalid_certs: global.allow_invalid_certs,
         logger: Logger::from_flags(global.quiet, global.verbose),

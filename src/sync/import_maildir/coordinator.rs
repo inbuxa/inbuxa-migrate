@@ -135,7 +135,7 @@ fn run_into(
     );
 
     if common.dry_run {
-        *summary = build_dry_run_summary(&conn, source_id, &resolved, logger)?;
+        *summary = build_dry_run_summary(&conn, source_id, &resolved, common.estimate, logger)?;
         return Ok(());
     }
 
@@ -420,6 +420,7 @@ fn build_dry_run_summary(
     conn: &Connection,
     source_id: i64,
     folders: &[ResolvedFolder],
+    want_sizes: bool,
     logger: Logger,
 ) -> Result<Summary, Error> {
     let mut mailbox = TypeCounts::default();
@@ -478,6 +479,16 @@ fn build_dry_run_summary(
         email.fetched += new_count;
         email.deleted += vanished_count;
         email.skipped += present_count;
+        // --estimate: the new messages' sizes are free from the filesystem.
+        if want_sizes {
+            for entry in &listing.entries {
+                if !local.contains_key(&entry.unique_id)
+                    && let Ok(meta) = std::fs::metadata(&entry.path)
+                {
+                    email.bytes += meta.len();
+                }
+            }
+        }
     }
     for name in &vanished_folder_names {
         if source_id >= 0 {

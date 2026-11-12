@@ -140,6 +140,7 @@ fn export_email_already_exists_is_matched_not_failed() {
             archive: archive.clone(),
             threads: 1,
             dry_run: false,
+            estimate: false,
             max_retries: 1,
             allow_invalid_certs: false,
             logger: Logger::from_flags(true, 0),
@@ -282,6 +283,7 @@ fn export_mailbox_name_collision_merges_without_create() {
             archive: archive.clone(),
             threads: 1,
             dry_run: false,
+            estimate: false,
             max_retries: 1,
             allow_invalid_certs: false,
             logger: Logger::from_flags(true, 0),
@@ -441,6 +443,7 @@ fn export_mailbox_already_exists_maps_existing_id() {
             archive: archive.clone(),
             threads: 1,
             dry_run: false,
+            estimate: false,
             max_retries: 1,
             allow_invalid_certs: false,
             logger: Logger::from_flags(true, 0),
@@ -607,6 +610,7 @@ fn export_email_blob_not_found_reuploads_and_retries() {
             archive: archive.clone(),
             threads: 1,
             dry_run: false,
+            estimate: false,
             max_retries: 1,
             allow_invalid_certs: false,
             logger: Logger::from_flags(true, 0),
@@ -709,6 +713,7 @@ fn common(archive: &Path) -> CommonConfig {
         archive: archive.to_path_buf(),
         threads: 1,
         dry_run: false,
+        estimate: false,
         max_retries: 1,
         allow_invalid_certs: false,
         logger: Logger::from_flags(true, 0),
@@ -718,6 +723,7 @@ fn common(archive: &Path) -> CommonConfig {
 fn common_dry(archive: &Path) -> CommonConfig {
     CommonConfig {
         dry_run: true,
+        estimate: false,
         ..common(archive)
     }
 }
@@ -4330,6 +4336,7 @@ fn export_aborts_with_exit_two_when_the_advertised_api_url_is_unreachable() {
             archive: archive.clone(),
             threads: 1,
             dry_run: false,
+            estimate: false,
             max_retries: 0,
             allow_invalid_certs: false,
             logger: Logger::from_flags(true, 0),
@@ -4500,6 +4507,7 @@ fn run_export(archive: &Path, base: &str, max_retries: u32) -> sync::Summary {
             archive: archive.to_path_buf(),
             threads: 1,
             dry_run: false,
+            estimate: false,
             max_retries,
             allow_invalid_certs: false,
             logger: Logger::from_flags(true, 0),

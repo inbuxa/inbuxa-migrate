@@ -45,6 +45,7 @@ fn common(archive: &Path, dry_run: bool) -> CommonConfig {
         archive: archive.to_path_buf(),
         threads: 4,
         dry_run,
+        estimate: false,
         max_retries: 5,
         allow_invalid_certs: true,
         logger: Logger::from_flags(false, 0),

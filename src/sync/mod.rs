@@ -7,6 +7,7 @@
 
 pub mod batch;
 pub mod emailmeta;
+pub mod estimate;
 pub mod export;
 pub mod export_dav;
 pub mod export_imap;
@@ -55,6 +56,10 @@ pub struct CommonConfig {
     pub archive: PathBuf,
     pub threads: usize,
     pub dry_run: bool,
+    /// `--estimate`: a dry run that also measures how much there is to fetch
+    /// -- counts and bytes -- and reports it, before any writes. It implies
+    /// `dry_run`, so an estimate never changes anything.
+    pub estimate: bool,
     pub max_retries: u32,
     pub allow_invalid_certs: bool,
     pub logger: Logger,
@@ -90,6 +95,9 @@ pub struct TypeCounts {
     pub deleted: u64,
     pub skipped: u64,
     pub failed: u64,
+    /// Bytes an `--estimate` run measured for what it would fetch, without
+    /// downloading it. Zero on an ordinary run, which never counts them.
+    pub bytes: u64,
 }
 
 impl TypeCounts {
@@ -175,6 +183,10 @@ impl Context {
 
     pub fn dry_run(&self) -> bool {
         self.common.dry_run
+    }
+
+    pub fn estimate(&self) -> bool {
+        self.common.estimate
     }
 }
 
