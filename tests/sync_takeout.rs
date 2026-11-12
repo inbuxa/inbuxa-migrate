@@ -282,7 +282,7 @@ fn synthetic_takeout_imports_expected_row_counts() {
 }
 
 #[test]
-fn estimate_counts_new_mail_and_sizes_it() {
+fn estimate_counts_new_objects_and_sizes_them() {
     let td = TempDir::new().unwrap();
     SyntheticTakeout::build(td.path());
     let archive = td.path().join("a.sqlite");
@@ -293,27 +293,58 @@ fn estimate_counts_new_mail_and_sizes_it() {
         c.estimate = true;
         c
     };
-    let email_of = |summary: &inbuxa_migrate::sync::Summary| {
+    let by = |summary: &inbuxa_migrate::sync::Summary, t: &str| {
         summary
             .per_type
             .iter()
-            .find(|(n, _)| *n == "email")
+            .find(|(n, _)| *n == t)
             .unwrap()
             .1
             .clone()
     };
 
-    // A fresh archive: every synthetic message is new, and it is sized.
+    // A fresh archive: every synthetic object is new, across all three kinds,
+    // and each kind is sized.
     let first = run(estimate_cfg(&archive), config_for(td.path().to_path_buf())).unwrap();
-    let email = email_of(&first);
+
+    let email = by(&first, "email");
     assert_eq!(email.fetched, 9, "all 9 synthetic messages are new");
     assert!(email.bytes > 0, "new mail is sized: {}", email.bytes);
     assert_eq!(email.failed, 0);
 
-    // After a real import, a re-estimate finds nothing new.
+    let events = by(&first, "calendarevent");
+    assert!(events.fetched >= 2, "the .ics events are new: {events:?}");
+    assert!(events.bytes > 0, "new events are sized: {}", events.bytes);
+    assert_eq!(events.failed, 0);
+
+    // The two .vcf files carry the same cards; UID dedup collapses them to the
+    // four the import creates, so the estimate must report four, not eight.
+    let cards = by(&first, "contactcard");
+    assert_eq!(
+        cards.fetched, 4,
+        "cards dedup by UID across the two .vcf files"
+    );
+    assert!(cards.bytes > 0, "new cards are sized: {}", cards.bytes);
+    assert_eq!(cards.failed, 0);
+
+    // After a real import, a re-estimate finds nothing new of any kind.
     run(common_for(&archive), config_for(td.path().to_path_buf())).unwrap();
     let again = run(estimate_cfg(&archive), config_for(td.path().to_path_buf())).unwrap();
-    assert_eq!(email_of(&again).fetched, 0, "nothing new after importing");
+    assert_eq!(
+        by(&again, "email").fetched,
+        0,
+        "no new mail after importing"
+    );
+    assert_eq!(
+        by(&again, "calendarevent").fetched,
+        0,
+        "no new events after importing"
+    );
+    assert_eq!(
+        by(&again, "contactcard").fetched,
+        0,
+        "no new cards after importing"
+    );
 }
 
 #[test]

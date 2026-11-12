@@ -25,6 +25,7 @@ use super::labels::MappingOptions;
 use super::mail;
 use super::mbox::MessageIterator;
 use super::walk::{self, FileKind};
+use crate::sync::import_dav::calcard;
 
 #[derive(Debug)]
 pub struct TakeoutImportConfig {
@@ -366,26 +367,51 @@ fn dry_run_summary(
             "  existing in archive: emails={local_emails} events={local_events} cards={local_cards}"
         );
     }
-    // --estimate: a plain dry run counts files; an estimate reads the mbox
-    // files to count the messages that are actually new and sum their bytes.
-    // Calendars and contacts are not itemized yet -- the file counts above
-    // stand in for them.
-    let email = if want_sizes {
-        estimate_mail(conn, source_id, walk_result, logger)
+    // --estimate: a plain dry run counts files; an estimate reads them to count
+    // the objects that are actually new since the archive was last filled and
+    // sum their bytes -- messages from the mboxes, events from the .ics files,
+    // cards from the .vcf files -- deduplicated by the same key the import uses.
+    let (email, events, cards) = if want_sizes {
+        (
+            estimate_mail(conn, source_id, walk_result, logger),
+            estimate_calendar(conn, source_id, walk_result, logger),
+            estimate_contacts(conn, source_id, walk_result, logger),
+        )
     } else {
-        TypeCounts::default()
+        Default::default()
     };
     Summary {
         per_type: vec![
             ("mailbox", TypeCounts::default()),
             ("email", email),
             ("calendar", TypeCounts::default()),
-            ("calendarevent", TypeCounts::default()),
+            ("calendarevent", events),
             ("addressbook", TypeCounts::default()),
-            ("contactcard", TypeCounts::default()),
+            ("contactcard", cards),
         ],
         retries_observed: 0,
         retry_after_sleeps: 0,
+    }
+}
+
+/// Loads the external ids (content hashes, event/card UIDs) the archive already
+/// holds for `type_name`, as the dedup set an estimate scans against. An empty
+/// set on a fresh or unreadable archive just means everything reads as new.
+fn archived_keys(
+    conn: &Connection,
+    source_id: i64,
+    type_name: &str,
+    logger: Logger,
+) -> HashSet<String> {
+    if source_id < 0 {
+        return HashSet::new();
+    }
+    match takeout_ids::all_for_type(conn, source_id, type_name) {
+        Ok(m) => m.into_keys().collect(),
+        Err(e) => {
+            logger.warn(&format!("dry-run: reading archived {type_name} ids: {e}"));
+            HashSet::new()
+        }
     }
 }
 
@@ -401,17 +427,7 @@ fn estimate_mail(
     logger: Logger,
 ) -> TypeCounts {
     let mut email = TypeCounts::default();
-    let mut seen: HashSet<String> = if source_id < 0 {
-        HashSet::new()
-    } else {
-        match takeout_ids::all_for_type(conn, source_id, takeout_ids::EMAIL) {
-            Ok(m) => m.into_keys().collect(),
-            Err(e) => {
-                logger.warn(&format!("dry-run: reading archived message ids: {e}"));
-                HashSet::new()
-            }
-        }
-    };
+    let mut seen = archived_keys(conn, source_id, takeout_ids::EMAIL, logger);
     for file in walk_result.by_kind(FileKind::Mbox) {
         let reader = match File::open(&file.path) {
             Ok(f) => BufReader::new(f),
@@ -446,6 +462,107 @@ fn estimate_mail(
         }
     }
     email
+}
+
+/// Scans the `.ics` files for `--estimate`: counts the events not already in
+/// the archive and sums the bytes of the JSCalendar record each would store.
+/// It derives each event's UID exactly as the import does -- the event's own
+/// UID, or one synthesised from the file path and ordinal when it has none --
+/// so the same event in two files, or one already imported, counts once. It
+/// parses the iCalendar but writes nothing.
+fn estimate_calendar(
+    conn: &Connection,
+    source_id: i64,
+    walk_result: &walk::WalkResult,
+    logger: Logger,
+) -> TypeCounts {
+    let mut events = TypeCounts::default();
+    let mut seen = archived_keys(conn, source_id, takeout_ids::CALENDAR_EVENT, logger);
+    for file in walk_result.by_kind(FileKind::Ics) {
+        let text = match std::fs::read_to_string(&file.path) {
+            Ok(s) => s,
+            Err(e) => {
+                logger.warn(&format!("dry-run read {:?}: {e}", file.path));
+                events.failed += 1;
+                continue;
+            }
+        };
+        let entries = match calcard::ical_to_jscalendar_entries(&text) {
+            Ok(v) => v,
+            Err(calcard::CalcardError::NoEntries) => continue,
+            Err(e) => {
+                logger.warn(&format!("dry-run {:?}: iCalendar parse: {e}", file.path));
+                events.failed += 1;
+                continue;
+            }
+        };
+        for (ordinal, mut entry) in entries.into_iter().enumerate() {
+            let (_is_draft, _use_default_alerts, uid_field) =
+                calcard::strip_extracted_fields_from_event(&mut entry.data);
+            let uid = match uid_field
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                Some(u) => u.to_owned(),
+                None => {
+                    calcard::synthesise_uid(&format!("{}#{ordinal}", file.path.to_string_lossy()))
+                }
+            };
+            let size = entry.data.to_string().len() as u64;
+            if seen.insert(uid) {
+                events.created += 1;
+                events.fetched += 1;
+                events.bytes += size;
+            } else {
+                events.skipped += 1;
+            }
+        }
+    }
+    events
+}
+
+/// Scans the `.vcf` files for `--estimate`: counts the contacts not already in
+/// the archive and sums the bytes of the JSContact record each would store,
+/// deduplicating by the card's UID, the same key the import keeps. It parses
+/// the vCards but writes nothing.
+fn estimate_contacts(
+    conn: &Connection,
+    source_id: i64,
+    walk_result: &walk::WalkResult,
+    logger: Logger,
+) -> TypeCounts {
+    let mut cards = TypeCounts::default();
+    let mut seen = archived_keys(conn, source_id, takeout_ids::CONTACT_CARD, logger);
+    for file in walk_result.by_kind(FileKind::Vcf) {
+        let text = match std::fs::read_to_string(&file.path) {
+            Ok(s) => s,
+            Err(e) => {
+                logger.warn(&format!("dry-run read {:?}: {e}", file.path));
+                cards.failed += 1;
+                continue;
+            }
+        };
+        for chunk in contacts::split_vcards(&text) {
+            match calcard::vcard_to_jscontact(&chunk, &chunk) {
+                Ok(card) => {
+                    let size = card.data.to_string().len() as u64;
+                    if seen.insert(card.uid) {
+                        cards.created += 1;
+                        cards.fetched += 1;
+                        cards.bytes += size;
+                    } else {
+                        cards.skipped += 1;
+                    }
+                }
+                Err(e) => {
+                    logger.warn(&format!("dry-run {:?}: vCard parse: {e}", file.path));
+                    cards.failed += 1;
+                }
+            }
+        }
+    }
+    cards
 }
 
 fn count_rows(conn: &Connection, source_id: i64, type_name: &str) -> u64 {
