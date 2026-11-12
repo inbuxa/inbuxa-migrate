@@ -1947,12 +1947,11 @@ fn resolve_exchange_ews_auth(args: &ExchangeEwsImportArgs) -> Result<EwsAuth, Er
             client_secret: secret.to_owned(),
         }));
     }
-    if let Some(token) = secret::from_env(secret::API_KEY_VARS) {
+    if let Some(token) = secret::from_env(secret::API_KEY_VARS)? {
         return Ok(EwsAuth::Bearer { token });
     }
     if let Some(client_id) = args.ews_client_id.clone()
-        && let Ok(client_secret) = std::env::var("INBUXA_MIGRATE_EWS_CLIENT_SECRET")
-        && !client_secret.is_empty()
+        && let Some(client_secret) = secret::from_env(&["INBUXA_MIGRATE_EWS_CLIENT_SECRET"])?
     {
         return Ok(EwsAuth::OAuth(OAuthFlow::ClientCredentials {
             tenant: tenant(),
