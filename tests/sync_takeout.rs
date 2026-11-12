@@ -282,6 +282,41 @@ fn synthetic_takeout_imports_expected_row_counts() {
 }
 
 #[test]
+fn estimate_counts_new_mail_and_sizes_it() {
+    let td = TempDir::new().unwrap();
+    SyntheticTakeout::build(td.path());
+    let archive = td.path().join("a.sqlite");
+
+    let estimate_cfg = |archive: &Path| {
+        let mut c = common_for(archive);
+        c.dry_run = true;
+        c.estimate = true;
+        c
+    };
+    let email_of = |summary: &inbuxa_migrate::sync::Summary| {
+        summary
+            .per_type
+            .iter()
+            .find(|(n, _)| *n == "email")
+            .unwrap()
+            .1
+            .clone()
+    };
+
+    // A fresh archive: every synthetic message is new, and it is sized.
+    let first = run(estimate_cfg(&archive), config_for(td.path().to_path_buf())).unwrap();
+    let email = email_of(&first);
+    assert_eq!(email.fetched, 9, "all 9 synthetic messages are new");
+    assert!(email.bytes > 0, "new mail is sized: {}", email.bytes);
+    assert_eq!(email.failed, 0);
+
+    // After a real import, a re-estimate finds nothing new.
+    run(common_for(&archive), config_for(td.path().to_path_buf())).unwrap();
+    let again = run(estimate_cfg(&archive), config_for(td.path().to_path_buf())).unwrap();
+    assert_eq!(email_of(&again).fetched, 0, "nothing new after importing");
+}
+
+#[test]
 fn label_mapping_produces_expected_mailbox_tree() {
     let td = TempDir::new().unwrap();
     SyntheticTakeout::build(td.path());

@@ -35,7 +35,7 @@ fn run() -> i32 {
     if action.estimate_requested() && !do_estimate {
         eprintln!(
             "note: --estimate isn't available for this source yet; running --dry-run instead \
-             (its plan is below). Estimates work for imap, maildir, caldav and carddav today."
+             (its plan is below). Estimates work for imap, maildir, caldav, carddav and takeout today."
         );
     }
     let mut quiet_report = false;

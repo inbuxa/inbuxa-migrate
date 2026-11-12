@@ -4,7 +4,9 @@
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::fs::File;
+use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, params};
@@ -21,6 +23,7 @@ use super::calendar;
 use super::contacts;
 use super::labels::MappingOptions;
 use super::mail;
+use super::mbox::MessageIterator;
 use super::walk::{self, FileKind};
 
 #[derive(Debug)]
@@ -104,7 +107,7 @@ fn run_into(
     };
 
     if common.dry_run {
-        *summary = dry_run_summary(&conn, source_id, &walk_result, logger);
+        *summary = dry_run_summary(&conn, source_id, &walk_result, common.estimate, logger);
         return Ok(());
     }
 
@@ -336,6 +339,7 @@ fn dry_run_summary(
     conn: &Connection,
     source_id: i64,
     walk_result: &walk::WalkResult,
+    want_sizes: bool,
     logger: Logger,
 ) -> Summary {
     let mbox_n = walk_result.by_kind(FileKind::Mbox).count();
@@ -362,10 +366,19 @@ fn dry_run_summary(
             "  existing in archive: emails={local_emails} events={local_events} cards={local_cards}"
         );
     }
+    // --estimate: a plain dry run counts files; an estimate reads the mbox
+    // files to count the messages that are actually new and sum their bytes.
+    // Calendars and contacts are not itemized yet -- the file counts above
+    // stand in for them.
+    let email = if want_sizes {
+        estimate_mail(conn, source_id, walk_result, logger)
+    } else {
+        TypeCounts::default()
+    };
     Summary {
         per_type: vec![
             ("mailbox", TypeCounts::default()),
-            ("email", TypeCounts::default()),
+            ("email", email),
             ("calendar", TypeCounts::default()),
             ("calendarevent", TypeCounts::default()),
             ("addressbook", TypeCounts::default()),
@@ -374,6 +387,65 @@ fn dry_run_summary(
         retries_observed: 0,
         retry_after_sleeps: 0,
     }
+}
+
+/// Scans the mbox files for `--estimate`: counts the messages not already in
+/// the archive and sums their bytes, deduplicating by the same content hash
+/// the import uses, so a message that appears in two mboxes counts once. It
+/// reads the mbox bodies -- there is no metadata to ask, the files are the
+/// source -- but parses no MIME and writes nothing.
+fn estimate_mail(
+    conn: &Connection,
+    source_id: i64,
+    walk_result: &walk::WalkResult,
+    logger: Logger,
+) -> TypeCounts {
+    let mut email = TypeCounts::default();
+    let mut seen: HashSet<String> = if source_id < 0 {
+        HashSet::new()
+    } else {
+        match takeout_ids::all_for_type(conn, source_id, takeout_ids::EMAIL) {
+            Ok(m) => m.into_keys().collect(),
+            Err(e) => {
+                logger.warn(&format!("dry-run: reading archived message ids: {e}"));
+                HashSet::new()
+            }
+        }
+    };
+    for file in walk_result.by_kind(FileKind::Mbox) {
+        let reader = match File::open(&file.path) {
+            Ok(f) => BufReader::new(f),
+            Err(e) => {
+                logger.warn(&format!("dry-run open {:?}: {e}", file.path));
+                email.failed += 1;
+                continue;
+            }
+        };
+        let mut iter = MessageIterator::new(reader);
+        loop {
+            match iter.next() {
+                None => break,
+                Some(Err(e)) => {
+                    logger.warn(&format!("dry-run {:?}: mbox io: {e}", file.path));
+                    email.failed += 1;
+                    break;
+                }
+                Some(Ok(msg)) => {
+                    let hash = blake3::hash(msg.contents()).to_hex().to_string();
+                    // insert() is true only the first time a hash is seen, so
+                    // archived and duplicate messages are not counted.
+                    if seen.insert(hash) {
+                        email.created += 1;
+                        email.fetched += 1;
+                        email.bytes += msg.contents().len() as u64;
+                    } else {
+                        email.skipped += 1;
+                    }
+                }
+            }
+        }
+    }
+    email
 }
 
 fn count_rows(conn: &Connection, source_id: i64, type_name: &str) -> u64 {
