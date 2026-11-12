@@ -107,6 +107,15 @@ and a `SHA256SUMS` file:
 On arm64, fetch `inbuxa-migrate-linux-arm64.tar.gz` instead. The binary is
 the whole program; put it anywhere on the path.
 
+`SHA256SUMS` is signed with [minisign](https://jedisct1.github.io/minisign/),
+so you can confirm it came from us before trusting the checksums.
+`SHA256SUMS.minisig` is the signature:
+
+    curl -fLO "$base/SHA256SUMS.minisig"
+    minisign -Vm SHA256SUMS -P RWS1yFYwVuJ7MGJTZXLbhv9+hrEsjrC8Zg+7WmPlM86Sjy0qF/xkoCKq
+
+The same public key signs every inbuxa release (installer, migrate and cli).
+
 ## Building and testing
 
     cargo build --release          the binary is target/release/inbuxa-migrate
