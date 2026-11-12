@@ -780,6 +780,28 @@ struct MigrateArgs {
     again: bool,
 
     #[arg(
+        long,
+        value_name = "DURATION",
+        help = "Keep syncing: after each pass wait this long and run again, each pass catching what has arrived since, until interrupted. The new server stays close to the old one, so the cutover moves only the last few minutes. E.g. 30s, 5m, 1h."
+    )]
+    repeat: Option<String>,
+
+    #[arg(
+        long,
+        value_name = "N",
+        requires = "repeat",
+        help = "With --repeat, stop after this many passes instead of running until interrupted"
+    )]
+    max_passes: Option<u32>,
+
+    #[arg(
+        long,
+        requires = "repeat",
+        help = "With --repeat, stop once a pass moves nothing new: the source has gone quiet and the servers are in step"
+    )]
+    until_quiet: bool,
+
+    #[arg(
         long = "account",
         value_name = "EMAIL",
         action = ArgAction::Append,
@@ -1641,6 +1663,13 @@ fn resolve_import_directory(args: ImportDirectoryArgs) -> Result<Action, Error> 
 }
 
 fn resolve_migrate(args: MigrateArgs) -> Result<Action, Error> {
+    let repeat = match args.repeat.as_deref() {
+        Some(s) => Some(parse_duration(s)?),
+        None => None,
+    };
+    if args.max_passes == Some(0) {
+        return Err(Error::Usage("--max-passes must be at least 1".to_owned()));
+    }
     Ok(Action::Migrate(MigrateConfig {
         plan: args.plan,
         work: args.work,
@@ -1651,7 +1680,38 @@ fn resolve_migrate(args: MigrateArgs) -> Result<Action, Error> {
         program: std::env::current_exe()?,
         logger: Logger::from_flags(args.quiet, 0),
         progress_json: args.progress.is_some(),
+        repeat,
+        max_passes: args.max_passes,
+        until_quiet: args.until_quiet,
     }))
+}
+
+/// Parses a plain duration like `30s`, `5m`, `1h`, or a bare number of
+/// seconds, for `--repeat`. Zero is rejected: a pass must not chase its own
+/// tail with no pause.
+fn parse_duration(s: &str) -> Result<std::time::Duration, Error> {
+    let s = s.trim();
+    let (num, unit_secs) = match s.strip_suffix(['s', 'm', 'h']) {
+        Some(rest) => {
+            let mult = match s.chars().last() {
+                Some('s') => 1,
+                Some('m') => 60,
+                Some('h') => 3600,
+                _ => unreachable!(),
+            };
+            (rest.trim(), mult)
+        }
+        None => (s, 1),
+    };
+    let n: u64 = num.parse().map_err(|_| {
+        Error::Usage(format!(
+            "--repeat {s:?}: want a duration like 30s, 5m or 1h"
+        ))
+    })?;
+    if n == 0 {
+        return Err(Error::Usage("--repeat must be more than zero".to_owned()));
+    }
+    Ok(std::time::Duration::from_secs(n * unit_secs))
 }
 
 fn resolve_inspect(args: InspectArgs) -> Result<Action, Error> {
@@ -2173,6 +2233,21 @@ fn resolve_account(
 mod tests {
     use super::*;
     use std::env;
+
+    #[test]
+    fn parse_duration_reads_units_and_rejects_nonsense() {
+        use std::time::Duration;
+        assert_eq!(parse_duration("30s").unwrap(), Duration::from_secs(30));
+        assert_eq!(parse_duration("5m").unwrap(), Duration::from_secs(300));
+        assert_eq!(parse_duration("1h").unwrap(), Duration::from_secs(3600));
+        assert_eq!(parse_duration("45").unwrap(), Duration::from_secs(45));
+        assert_eq!(parse_duration(" 2m ").unwrap(), Duration::from_secs(120));
+        assert!(parse_duration("0s").is_err());
+        assert!(parse_duration("0").is_err());
+        assert!(parse_duration("").is_err());
+        assert!(parse_duration("5x").is_err());
+        assert!(parse_duration("m").is_err());
+    }
 
     fn lock() -> std::sync::MutexGuard<'static, ()> {
         static M: std::sync::Mutex<()> = std::sync::Mutex::new(());

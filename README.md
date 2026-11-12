@@ -62,7 +62,9 @@ list of domains, accounts, groups, lists and aliases to set up again
 elsewhere, without passwords, and `import-directory` sets them up on an
 inbuxa server, with a new password for each user. `migrate` moves many
 accounts with one plan file: the same steps for each account, several at
-once, resuming where it stopped, with one report at the end. `guide`
+once, resuming where it stopped, with one report at the end. With
+`--repeat` it keeps syncing, each pass moving only what arrived since, so
+the new server stays close behind the old one until the cutover. `guide`
 walks through the same move in the browser: it asks where the mail is,
 which accounts and which inbuxa server, previews, and runs the plan it
 writes. The full

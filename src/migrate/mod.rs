@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -43,6 +44,16 @@ pub struct MigrateConfig {
     pub logger: Logger,
     /// Progress as JSON lines on stdout, for a program that runs this one.
     pub progress_json: bool,
+    /// Keep syncing: after each pass wait this long and run the accounts
+    /// again, so the new server stays close to the old one until the cutover.
+    /// `None` is a single pass. Setup runs once, before the first pass.
+    pub repeat: Option<Duration>,
+    /// With `repeat`, stop after this many passes instead of until the run is
+    /// interrupted. `None` is unbounded.
+    pub max_passes: Option<u32>,
+    /// With `repeat`, stop once a pass moves nothing new -- the source has
+    /// gone quiet, so the servers are in step and it is safe to cut over.
+    pub until_quiet: bool,
 }
 
 /// Writes one progress event, a JSON object on a line of its own, when
@@ -68,6 +79,8 @@ pub struct Outcome {
     pub done: usize,
     pub unfinished: usize,
     pub report: PathBuf,
+    /// How many passes ran: 1 for a single run, more under `--repeat`.
+    pub passes: usize,
 }
 
 const STATE_FORMAT: &str = "inbuxa-migrate-state";
@@ -171,6 +184,86 @@ pub fn run(config: MigrateConfig) -> Result<Outcome, Error> {
         }
     }
 
+    let mut pass = 0usize;
+    loop {
+        pass += 1;
+        // A single run keeps its resume behavior (done steps at the front are
+        // skipped); every pass of a --repeat run re-runs the steps, so each
+        // one catches what has arrived at the source since the last.
+        let again = config.again || config.repeat.is_some();
+        let reports = run_accounts_pass(&config, &plan, &work, &accounts, &state, &save, again)?;
+
+        let unfinished = reports
+            .iter()
+            .filter(|(_, steps)| {
+                steps
+                    .iter()
+                    .any(|s| s.result != "done" && s.result != "done earlier")
+            })
+            .count();
+        let changed = reports
+            .iter()
+            .flat_map(|(_, steps)| steps)
+            .any(|s| s.counts.created + s.counts.updated + s.counts.deleted > 0);
+        let report = write_report(&work, &config, &setup_reports, &reports)?;
+        emit(
+            &config,
+            "end",
+            json!({"pass": pass, "done": reports.len() - unfinished,
+                   "unfinished": unfinished, "report": report.display().to_string()}),
+        );
+
+        let Some(interval) = config.repeat else {
+            return done_outcome(reports.len() - unfinished, unfinished, report, pass);
+        };
+        if config.max_passes.is_some_and(|m| pass as u32 >= m) {
+            return done_outcome(reports.len() - unfinished, unfinished, report, pass);
+        }
+        if config.until_quiet && !changed {
+            if config.logger.enabled(crate::logging::LEVEL_DEFAULT) {
+                eprintln!("nothing new this pass: the source is quiet, stopping");
+            }
+            return done_outcome(reports.len() - unfinished, unfinished, report, pass);
+        }
+        emit(&config, "waiting", json!({"seconds": interval.as_secs()}));
+        if config.logger.enabled(crate::logging::LEVEL_DEFAULT) {
+            eprintln!(
+                "pass {pass} done; next in {}s (interrupt to stop)",
+                interval.as_secs()
+            );
+        }
+        std::thread::sleep(interval);
+    }
+}
+
+fn done_outcome(
+    done: usize,
+    unfinished: usize,
+    report: PathBuf,
+    passes: usize,
+) -> Result<Outcome, Error> {
+    Ok(Outcome {
+        done,
+        unfinished,
+        report,
+        passes,
+    })
+}
+
+/// One pass over every account: each account's steps run on a worker, in
+/// parallel up to `parallel`, their reports gathered and sorted into plan
+/// order. A state-save failure stops the pass and surfaces as an error, so
+/// nothing runs unrecorded.
+#[allow(clippy::too_many_arguments)]
+fn run_accounts_pass(
+    config: &MigrateConfig,
+    plan: &Plan,
+    work: &Path,
+    accounts: &[String],
+    state: &Mutex<State>,
+    save: &(dyn Fn(&State) -> Result<(), Error> + Sync),
+    again: bool,
+) -> Result<Vec<(String, Vec<StepReport>)>, Error> {
     let next = AtomicUsize::new(0);
     let finished = AtomicUsize::new(0);
     let reports: Mutex<Vec<(String, Vec<StepReport>)>> = Mutex::new(Vec::new());
@@ -182,11 +275,11 @@ pub fn run(config: MigrateConfig) -> Result<Outcome, Error> {
                 loop {
                     let i = next.fetch_add(1, Ordering::SeqCst);
                     let Some(email) = accounts.get(i) else { break };
-                    match migrate_account(&config, &plan, &work, email, &state, &save) {
+                    match migrate_account(config, plan, work, email, state, save, again) {
                         Ok(steps) => {
                             let n = finished.fetch_add(1, Ordering::SeqCst) + 1;
                             emit(
-                                &config,
+                                config,
                                 "account",
                                 json!({"email": email, "n": n, "total": total,
                                        "result": result_of(&steps)}),
@@ -210,29 +303,9 @@ pub fn run(config: MigrateConfig) -> Result<Outcome, Error> {
     if let Some(e) = lock(&failure).take() {
         return Err(e);
     }
-
     let mut reports = reports.into_inner().unwrap_or_else(|e| e.into_inner());
     reports.sort_by_key(|(email, _)| accounts.iter().position(|a| a == email));
-    let unfinished = reports
-        .iter()
-        .filter(|(_, steps)| {
-            steps
-                .iter()
-                .any(|s| s.result != "done" && s.result != "done earlier")
-        })
-        .count();
-    let report = write_report(&work, &config, &setup_reports, &reports)?;
-    emit(
-        &config,
-        "end",
-        json!({"done": reports.len() - unfinished, "unfinished": unfinished,
-               "report": report.display().to_string()}),
-    );
-    Ok(Outcome {
-        done: reports.len() - unfinished,
-        unfinished,
-        report,
-    })
+    Ok(reports)
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -312,12 +385,13 @@ fn migrate_account(
     email: &str,
     state: &Mutex<State>,
     save: &(dyn Fn(&State) -> Result<(), Error> + Sync),
+    again: bool,
 ) -> Result<Vec<StepReport>, Error> {
     let dir = work.join(email);
     private_dir(&dir)?;
     let archive = dir.join("archive.sqlite");
     let mut reports = Vec::new();
-    let mut running = config.again;
+    let mut running = again;
     let mut stopped = false;
     for step in &plan.steps {
         if stopped {

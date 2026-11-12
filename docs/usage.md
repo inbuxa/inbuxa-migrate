@@ -659,6 +659,7 @@ server and counts what it would create, sends nothing and writes no file;
 
 ```
 inbuxa-migrate migrate --plan <FILE> [--parallel <N>] [--again]
+  [--repeat <DURATION> [--max-passes <N>] [--until-quiet]]
   [--account <EMAIL>]... [--dry-run] [-q] [--progress json] <DIR>
 ```
 
@@ -725,6 +726,17 @@ account, the state a later run resumes from, and the report.
   every account step once more, done or not. Use it for the final pass
   once the old server stops taking mail: the steps converge, so it only
   moves what changed. `--account` limits a run to the accounts named.
+- **Keep syncing until cutover.** `--repeat <DURATION>` runs the accounts
+  again and again, waiting that long between passes (`30s`, `5m`, `1h`),
+  each pass moving only what has arrived at the source since the last. The
+  setup runs once, before the first pass. Leave it running while the old
+  server still takes mail, so the new one stays close behind; then change
+  the MX and stop it, and the last pass is a short catch-up instead of the
+  whole mailbox. Stop it by interrupting it (Ctrl-C): a pass in flight is
+  resumable, so a later run picks up where it left off. `--max-passes <N>`
+  stops after N passes, and `--until-quiet` stops on the first pass that
+  moves nothing new -- the source has gone quiet and the two servers are in
+  step. Each `--repeat` pass re-runs every step, like `--again`.
 - **The report.** `<DIR>/report.csv` has one row per step per account:
   how it ended (`done`, `partial`, `failed`, `not run`, or
   `done earlier`), the counts summed over the step's types, and, for one
@@ -735,8 +747,10 @@ account, the state a later run resumes from, and the report.
   `start` (`accounts`, `parallel`, `dryRun`), `setup` (a setup step ended),
   `step` (an account's step began, or ended with `result`, `counts` and
   `detail`), `account` (an account ended: `email`, `n` of `total`,
-  `result`) and `end` (`done`, `unfinished`, `report`). Messages still go
-  to stderr.
+  `result`) and `end` (`pass`, `done`, `unfinished`, `report`). Under
+  `--repeat`, `end` closes each pass and carries its `pass` number, and a
+  `waiting` event (`seconds`) comes between passes. Messages still go to
+  stderr.
 
 The work directory is made readable by its owner only, and so are the
 logs. With `--dry-run`, each step runs with `--dry-run`, nothing is
