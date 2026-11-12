@@ -535,6 +535,74 @@ fn coordinator_diff_classifies_new_vanished_changed_unchanged() {
 }
 
 #[test]
+fn estimate_counts_new_items_and_sums_their_sizes() {
+    use inbuxa_migrate::db::exchange_ews_ids::ItemRow;
+    use inbuxa_migrate::sync::import_exchange_ews::items::{
+        EnumeratedItem, EnumerationMode, EnumerationOutcome, new_count_and_bytes,
+    };
+    use std::collections::HashMap;
+
+    // Three items on the server; A is already local (not new), B and C are new.
+    let items = vec![
+        EnumeratedItem {
+            element: "Message".into(),
+            id: ItemId::new("A", "ck-1"),
+        },
+        EnumeratedItem {
+            element: "Message".into(),
+            id: ItemId::new("B", "ck-1"),
+        },
+        EnumeratedItem {
+            element: "Message".into(),
+            id: ItemId::new("C", "ck-1"),
+        },
+    ];
+    let mut sizes = HashMap::new();
+    sizes.insert("A".to_string(), 1000u64);
+    sizes.insert("B".to_string(), 2048u64);
+    // C has no reported size: it still counts, but adds no bytes.
+    let outcome = EnumerationOutcome {
+        items,
+        mode: EnumerationMode::Full,
+        sizes,
+    };
+    let local = vec![ItemRow {
+        item_id: "A".into(),
+        change_key: "ck-1".into(),
+        local_id: 1,
+    }];
+
+    let (count, bytes) = new_count_and_bytes(&outcome, &local);
+    assert_eq!(count, 2, "B and C are new; A is already local");
+    assert_eq!(
+        bytes, 2048,
+        "only B's size is known; C has none; A is not new"
+    );
+
+    // Nothing new once everything is local: no count, no bytes.
+    let all_local = vec![
+        ItemRow {
+            item_id: "A".into(),
+            change_key: "ck-1".into(),
+            local_id: 1,
+        },
+        ItemRow {
+            item_id: "B".into(),
+            change_key: "ck-1".into(),
+            local_id: 2,
+        },
+        ItemRow {
+            item_id: "C".into(),
+            change_key: "ck-1".into(),
+            local_id: 3,
+        },
+    ];
+    let (count, bytes) = new_count_and_bytes(&outcome, &all_local);
+    assert_eq!(count, 0);
+    assert_eq!(bytes, 0);
+}
+
+#[test]
 fn source_change_protection_refuses_different_account() {
     use inbuxa_migrate::db;
     use inbuxa_migrate::db::sources::SourceKey;

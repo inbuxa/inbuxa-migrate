@@ -19,7 +19,9 @@ use crate::logging::{LEVEL_DEFAULT, LEVEL_PROGRESS};
 use crate::sync::{CommonConfig, Summary, TypeCounts};
 
 use super::folders::{self, plan_folders};
+use super::items::{self, ItemRunCtx};
 use super::{calendar, contacts, messages};
+use crate::db::exchange_ews_ids;
 use crate::net::CertOverride;
 
 #[derive(Debug, Clone)]
@@ -102,7 +104,16 @@ pub fn run(common: CommonConfig, config: EwsImportConfig) -> Result<Summary, Err
     };
 
     if common.dry_run {
-        let summary = run_dry(&conn, &client, &session_url, &config, logger)?;
+        let source_id = db::sources::find_source(&conn, &key)?.unwrap_or(-1);
+        let summary = run_dry(
+            &conn,
+            &client,
+            &session_url,
+            &config,
+            source_id,
+            common.estimate,
+            logger,
+        )?;
         return Ok(summary);
     }
 
@@ -188,10 +199,12 @@ pub fn run(common: CommonConfig, config: EwsImportConfig) -> Result<Summary, Err
 }
 
 fn run_dry(
-    _conn: &Connection,
+    conn: &Connection,
     client: &EwsClient,
     session_url: &str,
     config: &EwsImportConfig,
+    source_id: i64,
+    want_sizes: bool,
     logger: crate::logging::Logger,
 ) -> Result<Summary, Error> {
     let plan = plan_folders(
@@ -218,7 +231,66 @@ fn run_dry(
     summary.per_type.push(("mailbox", mailbox_counts));
     summary.per_type.push(("calendar", calendar_counts));
     summary.per_type.push(("addressbook", addressbook_counts));
+
+    // --estimate: enumerate each folder's items (FindItem gives item:Size, so
+    // this never fetches a body) and count and size what is new against the
+    // archive. A plain dry run stops at the folder counts above.
+    if want_sizes {
+        let ctx = ItemRunCtx {
+            client,
+            url: session_url,
+            source_id,
+            batch_size: config.getitem_batch.max(1),
+            batch_bytes: config.getitem_batch_bytes.max(1),
+            attachment_batch: config.attachment_batch.max(1),
+            connections: config.ews_connections.clamp(1, 8),
+            // FindItem (not SyncFolderItems) so every enumeration carries sizes.
+            use_syncfolderitems: false,
+            sync_batch: items::SYNC_BATCH_MAX,
+            logger,
+        };
+        let email = estimate_items(conn, &ctx, &plan.mail, exchange_ews_ids::EMAIL);
+        let events = estimate_items(conn, &ctx, &plan.calendar, exchange_ews_ids::CALENDAR_EVENT);
+        let cards = estimate_items(conn, &ctx, &plan.contacts, exchange_ews_ids::CONTACT_CARD);
+        summary.per_type.push(("email", email));
+        summary.per_type.push(("calendarevent", events));
+        summary.per_type.push(("contactcard", cards));
+    }
     Ok(summary)
+}
+
+/// Counts and sizes the items in `folders` that are new against the archive,
+/// for `--estimate`. FindItem returns `item:Size`, so this reads no bodies and
+/// writes nothing; the diff is the same one the import uses, so a re-estimate
+/// against a part-filled archive reports only what is left.
+fn estimate_items(
+    conn: &Connection,
+    ctx: &ItemRunCtx<'_>,
+    folders: &[folders::ClassifiedFolder],
+    item_type: &str,
+) -> TypeCounts {
+    let mut counts = TypeCounts::default();
+    for cf in folders {
+        let fid = &cf.folder.folder_id;
+        let outcome = match items::enumerate_folder(ctx, fid, None) {
+            Ok(o) => o,
+            Err(e) => {
+                ctx.logger.warn(&format!(
+                    "dry-run enumerate {:?}: {e}",
+                    cf.folder.display_name
+                ));
+                counts.failed += 1;
+                continue;
+            }
+        };
+        let local = exchange_ews_ids::items_in_folder(conn, ctx.source_id, item_type, &fid.id)
+            .unwrap_or_default();
+        let (new, bytes) = items::new_count_and_bytes(&outcome, &local);
+        counts.created += new;
+        counts.fetched += new;
+        counts.bytes += bytes;
+    }
+    counts
 }
 
 fn resolve_auth(auth: &EwsAuth) -> Result<(Auth, Option<AcquiredToken>), Error> {

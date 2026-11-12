@@ -156,9 +156,9 @@ struct GlobalArgs {
         help = "Preview an import: counts, sizes and a rough time, before any writes",
         long_help = "Preview an import before committing: for each type, how much is new since \
             the archive was last filled, how many bytes that is, and a rough time.\n  \
-            Available for imap, maildir, caldav, carddav and takeout (its mail) today; other \
-            sources fall back to --dry-run with a note. It implies --dry-run, so it never writes. \
-            On an export it is just --dry-run."
+            Available for imap, maildir, caldav, carddav, exchange (EWS) and takeout (its mail) \
+            today; other sources fall back to --dry-run with a note. It implies --dry-run, so it \
+            never writes. On an export it is just --dry-run."
     )]
     estimate: bool,
 
@@ -933,6 +933,9 @@ impl Action {
             // Takeout reads the mbox files to count mail; its calendars and
             // contacts are not itemized yet.
             Action::ImportTakeout(c, _) => c.estimate,
+            // EWS FindItem returns item:Size, so mail, calendars and contacts
+            // are all counted and sized from the enumeration.
+            Action::ImportExchangeEws(c, _) => c.estimate,
             _ => false,
         }
     }

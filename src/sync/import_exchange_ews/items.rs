@@ -221,6 +221,25 @@ pub fn plan_for(
     }
 }
 
+/// Count the new items an enumeration turned up and sum the sizes the server
+/// reported for them. Sizes come from FindItem's `item:Size`; an item the
+/// server returned without a size still counts, it just adds no bytes. Used by
+/// `--estimate`, which enumerates with FindItem precisely so the sizes are
+/// present.
+pub fn new_count_and_bytes(
+    outcome: &EnumerationOutcome,
+    local: &[crate::db::exchange_ews_ids::ItemRow],
+) -> (u64, u64) {
+    let plan = plan_for(outcome, local);
+    let count = plan.new.len() as u64;
+    let bytes = plan
+        .new
+        .iter()
+        .filter_map(|id| outcome.sizes.get(&id.id).copied())
+        .sum();
+    (count, bytes)
+}
+
 fn diff_delta(
     server_changes: &[EnumeratedItem],
     deletions: &[String],
