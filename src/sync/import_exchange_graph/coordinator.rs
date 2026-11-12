@@ -114,6 +114,30 @@ pub fn run(common: CommonConfig, config: GraphImportConfig) -> Result<Summary, E
     }
 
     if common.dry_run {
+        if common.estimate {
+            let source_id = db::sources::find_source(
+                &conn,
+                &SourceKey {
+                    kind: "exchange_graph".to_owned(),
+                    session_url: session_url.clone(),
+                    account_id: account_id.clone(),
+                },
+            )?
+            .unwrap_or(-1);
+            let ctx = GraphCoordinator {
+                client: &client,
+                endpoints: &endpoints,
+                source_id,
+                top: config.top.clamp(1, 1000),
+                workers: config.graph_connections.clamp(1, 16),
+                logger,
+                event_body_format: config.event_body_format,
+                exception_window_years: config.exception_window_years,
+                contact_photos: config.contact_photos,
+                event_attachments: config.event_attachments,
+            };
+            return super::estimate::run(&conn, &ctx, config.mailbox_kind, &config.surfaces);
+        }
         return run_dry(
             &client,
             &endpoints,
