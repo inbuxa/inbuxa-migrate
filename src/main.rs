@@ -5,7 +5,7 @@
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
 
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 
 use inbuxa_migrate::cli::{Action, Cli};
 use inbuxa_migrate::error::Error;
@@ -30,6 +30,24 @@ fn run() -> i32 {
         Ok(action) => action,
         Err(err) => return fail(&err),
     };
+
+    // Completions and the man page are generated from the command itself and
+    // touch no network, archive or logger, so they come before everything else.
+    match &action {
+        Action::Completions(shell) => {
+            let mut cmd = Cli::command();
+            let name = cmd.get_name().to_string();
+            clap_complete::generate(*shell, &mut cmd, name, &mut std::io::stdout());
+            return 0;
+        }
+        Action::Man => {
+            return match clap_mangen::Man::new(Cli::command()).render(&mut std::io::stdout()) {
+                Ok(()) => 0,
+                Err(err) => fail(&Error::from(err)),
+            };
+        }
+        _ => {}
+    }
 
     let do_estimate = action.estimate_available();
     if action.estimate_requested() && !do_estimate {
@@ -184,6 +202,8 @@ fn run() -> i32 {
                 Err(err) => fail(&err),
             };
         }
+        // Handled before the match, above.
+        Action::Completions(_) | Action::Man => unreachable!(),
     };
 
     if do_estimate {
