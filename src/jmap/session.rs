@@ -22,6 +22,11 @@ pub struct Session {
     pub download_url: String,
     pub capabilities: IndexMap<String, Value>,
     pub accounts: IndexMap<String, Account>,
+    /// The account the user treats as primary for each capability (RFC 8620),
+    /// which lets an import default to the right one without being told. Not
+    /// every server sends it, so it is optional.
+    #[serde(default)]
+    pub primary_accounts: IndexMap<String, String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

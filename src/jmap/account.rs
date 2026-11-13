@@ -17,6 +17,9 @@ use std::fmt::Write;
 pub enum AccountSelector {
     Id(String),
     Name(String),
+    /// The account the session marks primary for mail, or the only one it
+    /// enumerates. Lets a single-account import run without naming it.
+    Primary,
 }
 
 const PRINCIPALS_URN: &str = "urn:ietf:params:jmap:principals";
@@ -35,6 +38,25 @@ pub fn resolve(
                 }
             }
             resolve_via_principal(name, session, client)
+        }
+        AccountSelector::Primary => {
+            const MAIL_URN: &str = "urn:ietf:params:jmap:mail";
+            if let Some(id) = session.primary_accounts.get(MAIL_URN) {
+                return Ok(id.clone());
+            }
+            // No primary named: fall back to the only account, or ask which.
+            let mut ids = session.accounts.keys();
+            match (ids.next(), ids.next()) {
+                (Some(id), None) => Ok(id.clone()),
+                (Some(_), Some(_)) => Err(Error::Account(format!(
+                    "this session has {} accounts and names no primary for mail; \
+                     choose one with --account-name or --account-id",
+                    session.accounts.len()
+                ))),
+                _ => Err(Error::Account(
+                    "this session enumerates no account to import".to_owned(),
+                )),
+            }
         }
     }
 }
@@ -183,6 +205,46 @@ mod tests {
             crate::jmap::http::RetryPolicy::new(0),
             CertOverride::none(),
         )
+    }
+
+    #[test]
+    fn primary_selector_uses_primary_accounts() {
+        let raw = serde_json::json!({
+            "apiUrl": "https://example.org/api",
+            "uploadUrl": "https://example.org/upload",
+            "downloadUrl": "https://example.org/download",
+            "capabilities": {},
+            "accounts": { "a": { "name": "alice" }, "b": { "name": "bob" } },
+            "primaryAccounts": { "urn:ietf:params:jmap:mail": "b" }
+        });
+        let s: Session = serde_json::from_value(raw).unwrap();
+        assert_eq!(
+            resolve(&AccountSelector::Primary, &s, &client()).unwrap(),
+            "b"
+        );
+    }
+
+    #[test]
+    fn primary_selector_falls_back_to_the_sole_account() {
+        // No primaryAccounts, but only one account: that is the one.
+        let s = session_with("alice@example.org", "only");
+        assert_eq!(
+            resolve(&AccountSelector::Primary, &s, &client()).unwrap(),
+            "only"
+        );
+    }
+
+    #[test]
+    fn primary_selector_is_ambiguous_with_several_and_no_primary() {
+        let raw = serde_json::json!({
+            "apiUrl": "https://example.org/api",
+            "uploadUrl": "https://example.org/upload",
+            "downloadUrl": "https://example.org/download",
+            "capabilities": {},
+            "accounts": { "a": { "name": "alice" }, "b": { "name": "bob" } }
+        });
+        let s: Session = serde_json::from_value(raw).unwrap();
+        assert!(resolve(&AccountSelector::Primary, &s, &client()).is_err());
     }
 
     #[test]

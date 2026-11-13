@@ -129,6 +129,16 @@ enum Command {
 enum Source {
     #[command(about = "JMAP server")]
     Jmap(Box<JmapImportArgs>),
+    #[command(
+        about = "Fastmail (JMAP)",
+        name = "fastmail",
+        long_about = "Fastmail, over JMAP: a preset for `import jmap` already pointed at \
+            Fastmail's server, so it needs only an API token. Create one in Fastmail at \
+            Settings > Privacy & Security > API tokens, with read access to Mail, Calendars \
+            and Contacts. What it brings across depends on what that account's JMAP session \
+            offers: mail always, calendars and contacts where Fastmail advertises them."
+    )]
+    Fastmail(Box<FastmailImportArgs>),
     #[command(about = "IMAP server")]
     Imap(Box<ImapImportArgs>),
     #[command(about = "CalDAV server")]
@@ -256,6 +266,52 @@ struct JmapImportArgs {
         help = "API key or bearer token (value optional: falls back to $INBUXA_MIGRATE_API_KEY or prompt)"
     )]
     auth_bearer: Option<Option<String>>,
+
+    #[arg(long, value_name = "ID", help = "Source account id")]
+    account_id: Option<String>,
+
+    #[arg(long, value_name = "NAME", help = "Source account name")]
+    account_name: Option<String>,
+
+    #[arg(
+        long,
+        value_name = "LIST",
+        help = "Comma-separated type list (default: all supported)"
+    )]
+    objects: Option<String>,
+
+    #[arg(
+        long,
+        help = "Permit importing when the archive records a different JMAP source"
+    )]
+    allow_source_change: bool,
+
+    #[command(flatten)]
+    global: GlobalArgs,
+
+    #[arg(
+        value_name = "ARCHIVE",
+        help = "Local SQLite archive (created if absent)"
+    )]
+    archive: PathBuf,
+}
+
+#[derive(Args)]
+struct FastmailImportArgs {
+    #[arg(
+        long,
+        value_name = "TOKEN",
+        num_args = 0..=1,
+        help = "Fastmail API token (value optional: falls back to $INBUXA_MIGRATE_API_KEY or a prompt)"
+    )]
+    token: Option<Option<String>>,
+
+    #[arg(
+        long,
+        value_name = "URL",
+        help = "Override Fastmail's JMAP session URL (default: https://api.fastmail.com/jmap/session)"
+    )]
+    url: Option<String>,
 
     #[arg(long, value_name = "ID", help = "Source account id")]
     account_id: Option<String>,
@@ -1162,6 +1218,7 @@ impl Cli {
 fn resolve_import(source: Source) -> Result<Action, Error> {
     match source {
         Source::Jmap(args) => resolve_jmap_import(*args),
+        Source::Fastmail(args) => resolve_fastmail_import(*args),
         Source::Imap(args) => resolve_imap_import(*args),
         Source::Caldav(args) => resolve_dav_import(*args, DavKindArg::Caldav),
         Source::Carddav(args) => resolve_dav_import(*args, DavKindArg::Carddav),
@@ -1460,6 +1517,35 @@ fn resolve_jmap_import(args: JmapImportArgs) -> Result<Action, Error> {
             connect: ConnectConfig {
                 stay_on_url: args.stay_on_url,
                 url,
+                auth,
+                account,
+            },
+            objects,
+            allow_source_change: args.allow_source_change,
+        },
+    ))
+}
+
+/// Fastmail's JMAP session endpoint. Every Fastmail account reaches JMAP
+/// through this host, custom domains included, so it is a fixed default.
+const FASTMAIL_SESSION_URL: &str = "https://api.fastmail.com/jmap/session";
+
+/// resolve_fastmail_import is resolve_jmap_import with Fastmail's server and
+/// token filled in: the same JMAP import, so what it brings across is whatever
+/// that account's session advertises. Fastmail's JMAP takes a bearer token
+/// only, so there is no --auth-basic here.
+fn resolve_fastmail_import(args: FastmailImportArgs) -> Result<Action, Error> {
+    let common = common_config(&args.global, args.archive);
+    let auth = resolve_auth(None, None, args.token.as_ref(), None)?;
+    let account = resolve_account_or_primary(args.account_id, args.account_name)?;
+    let objects = args.objects.as_deref().map(parse_object_list).transpose()?;
+
+    Ok(Action::Import(
+        common,
+        ImportConfig {
+            connect: ConnectConfig {
+                stay_on_url: false,
+                url: args.url.unwrap_or_else(|| FASTMAIL_SESSION_URL.to_owned()),
                 auth,
                 account,
             },
@@ -2312,6 +2398,22 @@ fn resolve_account(
     }
 }
 
+/// Like resolve_account, but neither given means the session's primary account
+/// -- so a single-account import need not name it.
+fn resolve_account_or_primary(
+    account_id: Option<String>,
+    account_name: Option<String>,
+) -> Result<AccountSelector, Error> {
+    match (account_id, account_name) {
+        (Some(id), None) => Ok(AccountSelector::Id(id)),
+        (None, Some(name)) => Ok(AccountSelector::Name(name)),
+        (None, None) => Ok(AccountSelector::Primary),
+        (Some(_), Some(_)) => Err(Error::Usage(
+            "give only one of --account-id / --account-name".to_owned(),
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2345,6 +2447,69 @@ mod tests {
         let cli = Cli::try_parse_from(["inbuxa-migrate", "man"])
             .unwrap_or_else(|e| panic!("clap rejected args: {e}"));
         assert!(matches!(cli.resolve().unwrap(), Action::Man));
+    }
+
+    #[test]
+    fn fastmail_defaults_to_fastmails_server_with_a_bearer_token() {
+        let cli = Cli::try_parse_from([
+            "inbuxa-migrate",
+            "import",
+            "fastmail",
+            "--token",
+            "fmu-secret",
+            "archive.sqlite",
+        ])
+        .unwrap_or_else(|e| panic!("clap rejected: {e}"));
+        match cli.resolve().unwrap() {
+            Action::Import(_, c) => {
+                assert_eq!(c.connect.url, "https://api.fastmail.com/jmap/session");
+                assert!(!c.connect.stay_on_url);
+                assert!(matches!(c.connect.auth, Auth::Bearer { token } if token == "fmu-secret"));
+                // No --account given: default to the session's primary.
+                assert!(matches!(c.connect.account, AccountSelector::Primary));
+            }
+            _ => panic!("expected Action::Import"),
+        }
+    }
+
+    #[test]
+    fn fastmail_url_can_be_overridden() {
+        let cli = Cli::try_parse_from([
+            "inbuxa-migrate",
+            "import",
+            "fastmail",
+            "--token",
+            "t",
+            "--url",
+            "https://api.messagingengine.com/jmap/session",
+            "archive.sqlite",
+        ])
+        .unwrap_or_else(|e| panic!("clap rejected: {e}"));
+        match cli.resolve().unwrap() {
+            Action::Import(_, c) => {
+                assert_eq!(
+                    c.connect.url,
+                    "https://api.messagingengine.com/jmap/session"
+                );
+            }
+            _ => panic!("expected Action::Import"),
+        }
+    }
+
+    #[test]
+    fn fastmail_takes_no_basic_auth() {
+        // Fastmail's JMAP is bearer-only; --auth-basic is not a flag here.
+        assert!(
+            Cli::try_parse_from([
+                "inbuxa-migrate",
+                "import",
+                "fastmail",
+                "--auth-basic",
+                "someone@fastmail.com",
+                "archive.sqlite",
+            ])
+            .is_err()
+        );
     }
 
     #[test]
