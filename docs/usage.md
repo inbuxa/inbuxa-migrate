@@ -215,6 +215,50 @@ OAuth (SASL XOAUTH2) is not offered here; use `--user`/password over TLS. A
 provider that requires an app-specific password (for an account with
 two-factor sign-in) takes that password the same way.
 
+### Zoho Mail
+
+```
+inbuxa-migrate import zoho \
+  [--region com|eu|in|au|jp] [--host <HOST>] \
+  --user <EMAIL> [--password <PASS>] \
+  [--allow-source-change] \
+  <ARCHIVE>
+```
+
+A preset for `import imap` that fills in Zoho's IMAP server for your region, so
+it needs only your address and password. It imports mail only, over IMAPS on
+993.
+
+Your IMAP host matches the data center your account signs in at: if you sign in
+at `mail.zoho.eu`, your host is `imap.zoho.eu`. Pick it with `--region`
+(`com` is the default, for the US). For a data center not in that list -- a
+Zoho Workplace host such as `imappro.zoho.com`, or another region -- give
+`--host` instead, which overrides `--region`.
+
+In Zoho Mail, enable IMAP under **Settings > Mail Accounts > IMAP Access**. If
+the account signs in with two-factor authentication, create an app-specific
+password and use that. For folder filters and the other IMAP options, use
+`import imap` with `--url imaps://<host>:993`.
+
+### Zimbra
+
+```
+inbuxa-migrate import zimbra \
+  --host <HOST> --user <EMAIL> [--password <PASS>] \
+  [--starttls [--allow-cleartext]] [--allow-source-change] \
+  <ARCHIVE>
+```
+
+A preset for `import imap` pointed at your own Zimbra server, so it needs only
+the host, your address and password. It imports mail only, over IMAPS on 993 by
+default; `--starttls` connects on 143 and upgrades, and `--allow-cleartext`
+(only with `--starttls`) permits a plain connection where STARTTLS is
+unavailable.
+
+IMAP has to be enabled for the account -- `zimbraImapEnabled`, in its class of
+service or account features. For folder filters and the other IMAP options, use
+`import imap` with the same URL.
+
 ### CalDAV
 
 ```

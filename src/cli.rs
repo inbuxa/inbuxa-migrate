@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 
-use clap::{ArgAction, Args, Parser, Subcommand};
+use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
 use regex::Regex;
 
 use crate::error::Error;
@@ -153,6 +153,27 @@ enum Source {
             once the server no longer has it."
     )]
     Pop3(Box<Pop3ImportArgs>),
+    #[command(
+        about = "Zoho Mail (IMAP)",
+        name = "zoho",
+        long_about = "Zoho Mail, over IMAP: a preset for `import imap` that fills in Zoho's \
+            server for your region, so it needs only your address and password. Enable IMAP in \
+            Zoho Mail under Settings > Mail Accounts, and if the account has two-factor sign-in \
+            use an app-specific password. Pick the region your account signs in at with \
+            --region, or give --host for a data center not listed (for example a Zoho Workplace \
+            or Canada host)."
+    )]
+    Zoho(Box<ZohoImportArgs>),
+    #[command(
+        about = "Zimbra (IMAP)",
+        name = "zimbra",
+        long_about = "Zimbra Collaboration, over IMAP: a preset for `import imap` pointed at \
+            your Zimbra server, so it needs only the host, your address and password. IMAP must \
+            be enabled for the account (zimbraImapEnabled, in its class of service or account \
+            features). It connects over IMAPS on 993 by default; --starttls uses STARTTLS on \
+            143 instead."
+    )]
+    Zimbra(Box<ZimbraImportArgs>),
     #[command(about = "CalDAV server")]
     Caldav(Box<DavImportArgs>),
     #[command(about = "CardDAV server")]
@@ -1300,6 +1321,8 @@ fn resolve_import(source: Source) -> Result<Action, Error> {
         Source::Fastmail(args) => resolve_fastmail_import(*args),
         Source::Imap(args) => resolve_imap_import(*args),
         Source::Pop3(args) => resolve_pop3_import(*args),
+        Source::Zoho(args) => resolve_zoho_import(*args),
+        Source::Zimbra(args) => resolve_zimbra_import(*args),
         Source::Caldav(args) => resolve_dav_import(*args, DavKindArg::Caldav),
         Source::Carddav(args) => resolve_dav_import(*args, DavKindArg::Carddav),
         Source::Webdav(args) => resolve_dav_import(*args, DavKindArg::Webdav),
@@ -1693,6 +1716,205 @@ fn resolve_imap_import(args: ImapImportArgs) -> Result<Action, Error> {
             imap_connections,
             allow_source_change: args.allow_source_change,
         },
+    ))
+}
+
+/// The IMAP defaults a preset (Zoho, Zimbra) imports with: no folder filters,
+/// automap on, no compression, the shared fetch-batch sizes. A caller who
+/// needs finer control uses `import imap` with the same URL.
+fn imap_preset_config(
+    url: String,
+    auth: ImapAuth,
+    allow_cleartext: bool,
+    allow_source_change: bool,
+    threads: usize,
+) -> ImapImportConfig {
+    ImapImportConfig {
+        url,
+        auth,
+        allow_cleartext,
+        compress: false,
+        include: Vec::new(),
+        exclude: Vec::new(),
+        exclude_special: Vec::new(),
+        folder: Vec::new(),
+        subscribed_only: false,
+        automap: true,
+        include_deleted: false,
+        mime_keywords: false,
+        fetch_batch: 256,
+        fetch_batch_bytes: 32 * 1024 * 1024,
+        imap_connections: threads.clamp(1, 8),
+        allow_source_change,
+    }
+}
+
+/// Zoho's data centers, as the suffix on `imap.zoho.<region>`. Your IMAP host
+/// matches the domain you sign in at (mail.zoho.eu -> imap.zoho.eu). Centers
+/// not listed here are reached with `--host`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum ZohoRegion {
+    /// zoho.com (United States, and the default)
+    Com,
+    /// zoho.eu (Europe)
+    Eu,
+    /// zoho.in (India)
+    In,
+    /// zoho.com.au (Australia)
+    Au,
+    /// zoho.jp (Japan)
+    Jp,
+}
+
+impl ZohoRegion {
+    fn imap_host(self) -> &'static str {
+        match self {
+            ZohoRegion::Com => "imap.zoho.com",
+            ZohoRegion::Eu => "imap.zoho.eu",
+            ZohoRegion::In => "imap.zoho.in",
+            ZohoRegion::Au => "imap.zoho.com.au",
+            ZohoRegion::Jp => "imap.zoho.jp",
+        }
+    }
+}
+
+#[derive(Args)]
+pub struct ZohoImportArgs {
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = ZohoRegion::Com,
+        help = "Zoho data center your account signs in at (sets the IMAP host)"
+    )]
+    region: ZohoRegion,
+
+    #[arg(
+        long,
+        value_name = "HOST",
+        help = "IMAP host, overriding --region (for a data center not listed, e.g. imappro.zoho.com)"
+    )]
+    host: Option<String>,
+
+    #[arg(long, value_name = "USER", help = "Your Zoho email address")]
+    user: String,
+
+    #[arg(
+        long,
+        value_name = "PASS",
+        help = "Password or app-specific password (prefer $INBUXA_MIGRATE_PASSWORD or the prompt)"
+    )]
+    password: Option<String>,
+
+    #[arg(
+        long,
+        help = "Permit importing when the archive records a different IMAP source"
+    )]
+    allow_source_change: bool,
+
+    #[command(flatten)]
+    global: GlobalArgs,
+
+    #[arg(
+        value_name = "ARCHIVE",
+        help = "Local SQLite archive (created if absent)"
+    )]
+    archive: PathBuf,
+}
+
+fn resolve_zoho_import(args: ZohoImportArgs) -> Result<Action, Error> {
+    let common = common_config(&args.global, args.archive);
+    let password = secret::resolve(
+        args.password.as_deref(),
+        "INBUXA_MIGRATE_PASSWORD",
+        "password",
+    )?;
+    let host = args
+        .host
+        .unwrap_or_else(|| args.region.imap_host().to_owned());
+    let url = format!("imaps://{host}:993");
+    let auth = ImapAuth::Basic {
+        user: args.user,
+        password,
+    };
+    let threads = common.threads;
+    Ok(Action::ImportImap(
+        common,
+        imap_preset_config(url, auth, false, args.allow_source_change, threads),
+    ))
+}
+
+#[derive(Args)]
+pub struct ZimbraImportArgs {
+    #[arg(long, value_name = "HOST", help = "Your Zimbra server's hostname")]
+    host: String,
+
+    #[arg(long, value_name = "USER", help = "Your full Zimbra email address")]
+    user: String,
+
+    #[arg(
+        long,
+        value_name = "PASS",
+        help = "Password (prefer $INBUXA_MIGRATE_PASSWORD or the prompt)"
+    )]
+    password: Option<String>,
+
+    #[arg(long, help = "Use STARTTLS on port 143 instead of IMAPS on 993")]
+    starttls: bool,
+
+    #[arg(
+        long,
+        help = "With --starttls, permit a cleartext connection if STARTTLS is unavailable"
+    )]
+    allow_cleartext: bool,
+
+    #[arg(
+        long,
+        help = "Permit importing when the archive records a different IMAP source"
+    )]
+    allow_source_change: bool,
+
+    #[command(flatten)]
+    global: GlobalArgs,
+
+    #[arg(
+        value_name = "ARCHIVE",
+        help = "Local SQLite archive (created if absent)"
+    )]
+    archive: PathBuf,
+}
+
+fn resolve_zimbra_import(args: ZimbraImportArgs) -> Result<Action, Error> {
+    let common = common_config(&args.global, args.archive);
+    let password = secret::resolve(
+        args.password.as_deref(),
+        "INBUXA_MIGRATE_PASSWORD",
+        "password",
+    )?;
+    if args.allow_cleartext && !args.starttls {
+        return Err(Error::Usage(
+            "--allow-cleartext applies only with --starttls (IMAPS on 993 is always encrypted)"
+                .to_owned(),
+        ));
+    }
+    let url = if args.starttls {
+        format!("imap://{}:143", args.host)
+    } else {
+        format!("imaps://{}:993", args.host)
+    };
+    let auth = ImapAuth::Basic {
+        user: args.user,
+        password,
+    };
+    let threads = common.threads;
+    Ok(Action::ImportImap(
+        common,
+        imap_preset_config(
+            url,
+            auth,
+            args.allow_cleartext,
+            args.allow_source_change,
+            threads,
+        ),
     ))
 }
 
@@ -2614,6 +2836,118 @@ mod tests {
         }
         // The archive is required.
         assert!(Cli::try_parse_from(["inbuxa-migrate", "reconcile"]).is_err());
+    }
+
+    fn imap_from(argv: &[&str]) -> ImapImportConfig {
+        let cli = Cli::try_parse_from(argv).unwrap_or_else(|e| panic!("clap rejected: {e}"));
+        match cli.resolve().unwrap() {
+            Action::ImportImap(_, cfg) => cfg,
+            _ => panic!("expected Action::ImportImap"),
+        }
+    }
+
+    #[test]
+    fn zoho_region_sets_the_imap_host_and_defaults_to_com() {
+        let cfg = imap_from(&[
+            "inbuxa-migrate",
+            "import",
+            "zoho",
+            "--region",
+            "eu",
+            "--user",
+            "me@zoho.eu",
+            "--password",
+            "x",
+            "a.sqlite",
+        ]);
+        assert_eq!(cfg.url, "imaps://imap.zoho.eu:993");
+        assert!(matches!(cfg.auth, ImapAuth::Basic { ref user, .. } if user == "me@zoho.eu"));
+        // No region: the US host.
+        let cfg = imap_from(&[
+            "inbuxa-migrate",
+            "import",
+            "zoho",
+            "--user",
+            "me@zoho.com",
+            "--password",
+            "x",
+            "a.sqlite",
+        ]);
+        assert_eq!(cfg.url, "imaps://imap.zoho.com:993");
+    }
+
+    #[test]
+    fn zoho_host_override_beats_the_region() {
+        let cfg = imap_from(&[
+            "inbuxa-migrate",
+            "import",
+            "zoho",
+            "--region",
+            "jp",
+            "--host",
+            "imappro.zoho.com",
+            "--user",
+            "me",
+            "--password",
+            "x",
+            "a.sqlite",
+        ]);
+        assert_eq!(cfg.url, "imaps://imappro.zoho.com:993");
+    }
+
+    #[test]
+    fn zimbra_is_imaps_993_by_default_and_starttls_143_on_request() {
+        let cfg = imap_from(&[
+            "inbuxa-migrate",
+            "import",
+            "zimbra",
+            "--host",
+            "mail.example.com",
+            "--user",
+            "me@example.com",
+            "--password",
+            "x",
+            "a.sqlite",
+        ]);
+        assert_eq!(cfg.url, "imaps://mail.example.com:993");
+        assert!(!cfg.allow_cleartext);
+
+        let cfg = imap_from(&[
+            "inbuxa-migrate",
+            "import",
+            "zimbra",
+            "--host",
+            "mail.example.com",
+            "--starttls",
+            "--user",
+            "me@example.com",
+            "--password",
+            "x",
+            "a.sqlite",
+        ]);
+        assert_eq!(cfg.url, "imap://mail.example.com:143");
+    }
+
+    #[test]
+    fn zimbra_allow_cleartext_needs_starttls() {
+        let cli = Cli::try_parse_from([
+            "inbuxa-migrate",
+            "import",
+            "zimbra",
+            "--host",
+            "h",
+            "--user",
+            "u",
+            "--password",
+            "x",
+            "--allow-cleartext",
+            "a.sqlite",
+        ])
+        .unwrap();
+        assert!(
+            cli.resolve().is_err(),
+            "cleartext over IMAPS is meaningless"
+        );
     }
 
     #[test]
