@@ -7,6 +7,12 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
 
 ## [Unreleased]
 
+## [27.1-rc.14]
+
+The fourteenth release candidate of the 27.1 series: POP3, Fastmail, Zoho and
+Zimbra sources, a `reconcile` report that a migration was complete, and
+upstream v1.0.16's Exchange fixes.
+
 ### Added
 - `import pop3` imports from a POP3 server: the whole maildrop into one INBOX,
   keyed by each message's UIDL so a later run adds only what arrived since.
