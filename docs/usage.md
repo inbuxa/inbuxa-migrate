@@ -179,6 +179,42 @@ the variable that holds it as `"secrets": {"googleKey": "..."}`.
 Each connection signs in with a token for that user, and takes a new one
 when the last is close to running out.
 
+### POP3
+
+```
+inbuxa-migrate import pop3 \
+  --url pop3s://host[:port] | pop3://host[:port] \
+  --user <USER> [--password <PASS>] \
+  [--allow-cleartext] [--allow-source-change] \
+  <ARCHIVE>
+```
+
+Imports mail, and only mail, from a POP3 server. POP3 has no folders and no
+flags, so the whole maildrop lands in one INBOX. Each message is keyed by its
+UIDL -- the stable unique-id POP3 gives it -- so a later run into the same
+archive adds only what arrived since.
+
+`pop3s://` is TLS from the first byte (port 995 by default). `pop3://` (port
+110) upgrades with STLS before the password is sent; `--allow-cleartext`
+permits a plain `pop3://` connection with no STLS, sending the password in the
+clear, for a trusted local network only. The password comes from `--password`,
+`$INBUXA_MIGRATE_PASSWORD`, or the prompt (prefer the last two; a password on
+the command line is visible in the shell history and the process list).
+
+Two things set POP3 apart from the other sources:
+
+- **It is additive.** A message that is in the archive but no longer on the
+  server is kept, not deleted. POP3 mailboxes are routinely emptied after
+  download -- that is the protocol's own model -- so a message leaving the
+  server says nothing about whether the archive should still hold it. This is
+  the one importer that does not mirror deletions.
+- **It never changes the source.** There is no `DELE`: a run only reads, so it
+  is safe to repeat and leaves the server mailbox exactly as it found it.
+
+OAuth (SASL XOAUTH2) is not offered here; use `--user`/password over TLS. A
+provider that requires an app-specific password (for an account with
+two-factor sign-in) takes that password the same way.
+
 ### CalDAV
 
 ```

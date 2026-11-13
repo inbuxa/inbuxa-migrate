@@ -128,7 +128,7 @@ fn schema_tables() -> impl Iterator<Item = &'static str> {
 pub fn apply_schema(conn: &Connection) -> Result<(), OpenError> {
     // Before the transaction: it turns foreign keys off, which SQLite only
     // allows outside one.
-    ensure_sources_accept_files(conn)?;
+    ensure_sources_kind_current(conn)?;
     let tx = conn.unchecked_transaction()?;
     tx.execute_batch(SCHEMA_SQL)?;
     ensure_calendar_events_data_type(&tx)?;
@@ -253,7 +253,7 @@ fn ensure_dav_ids_share_local_rows(conn: &Connection) -> Result<(), OpenError> {
 /// in place, so an older archive's table is rebuilt. Foreign keys are off
 /// while it is: with them on, dropping the old table would cascade into
 /// every row that came from a source.
-fn ensure_sources_accept_files(conn: &Connection) -> Result<(), OpenError> {
+fn ensure_sources_kind_current(conn: &Connection) -> Result<(), OpenError> {
     let sql: Option<String> = conn
         .query_row(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sources'",
@@ -261,10 +261,14 @@ fn ensure_sources_accept_files(conn: &Connection) -> Result<(), OpenError> {
             |row| row.get(0),
         )
         .optional()?;
-    // Only the table as earlier releases made it: its kind list ended at
-    // `takeout`.
+    // A table from an earlier release whose kind CHECK predates a source we
+    // now write (most recently `pop3`, before that `files`). Rebuilding with
+    // the current list is always safe: the new list is a superset of every
+    // kind we have ever shipped, so copying the rows can violate no CHECK.
     let Some(sql) = sql else { return Ok(()) };
-    if sql.contains("'files'") || !sql.contains("'takeout')") {
+    // Already current, or not a kind CHECK we recognize (every shipped list has
+    // held 'takeout'): leave it. Otherwise rebuild with the current list.
+    if sql.contains("'pop3'") || !sql.contains("'takeout'") {
         return Ok(());
     }
     let foreign_keys: i64 = conn.query_row("PRAGMA foreign_keys", [], |row| row.get(0))?;
@@ -281,7 +285,7 @@ fn rebuild_sources(conn: &Connection) -> Result<(), OpenError> {
     tx.execute_batch(
         "CREATE TABLE sources_new (
              id            INTEGER PRIMARY KEY,
-             kind          TEXT    NOT NULL CHECK (kind IN ('jmap','imap','caldav','carddav','webdav','managesieve','maildir','exchange_ews','exchange_graph','takeout','files')),
+             kind          TEXT    NOT NULL CHECK (kind IN ('jmap','imap','pop3','caldav','carddav','webdav','managesieve','maildir','exchange_ews','exchange_graph','takeout','files')),
              session_url   TEXT    NOT NULL,
              account_id    TEXT    NOT NULL,
              account_name  TEXT,
@@ -556,10 +560,11 @@ mod migration_tests {
     use super::*;
 
     #[test]
-    fn an_older_sources_table_is_rebuilt_to_accept_files_and_keeps_every_row() {
+    fn an_older_sources_table_is_rebuilt_to_accept_pop3_and_keeps_every_row() {
         let conn = Connection::open_in_memory().unwrap();
-        // The table as releases before `import files` made it.
-        let old = SCHEMA_SQL.replace("'takeout','files')", "'takeout')");
+        // The table as releases before `import pop3` made it: every other kind,
+        // but not pop3.
+        let old = SCHEMA_SQL.replace("'imap','pop3',", "'imap',");
         assert_ne!(old, SCHEMA_SQL);
         conn.execute_batch(&old).unwrap();
         conn.pragma_update(None, "foreign_keys", "ON").unwrap();
@@ -572,7 +577,7 @@ mod migration_tests {
         assert!(
             conn.execute(
                 "INSERT INTO sources (kind, session_url, account_id, username)
-                 VALUES ('files', 'file:///e', '/e', '')",
+                 VALUES ('pop3', 'pop3s://h:995', 'a', 'a')",
                 [],
             )
             .is_err(),
@@ -583,10 +588,10 @@ mod migration_tests {
 
         conn.execute(
             "INSERT INTO sources (kind, session_url, account_id, username)
-             VALUES ('files', 'file:///e', '/e', '')",
+             VALUES ('pop3', 'pop3s://h:995', 'a', 'a')",
             [],
         )
-        .expect("files is a source kind now");
+        .expect("pop3 is a source kind now");
         let kept: (String, i64) = conn
             .query_row(
                 "SELECT s.kind, m.local_id FROM sync_id_maildir m JOIN sources s ON s.id = m.source_id",

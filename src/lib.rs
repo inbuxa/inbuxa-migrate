@@ -24,6 +24,7 @@ pub mod logging;
 pub mod managesieve;
 pub mod migrate;
 pub mod net;
+pub mod pop3;
 pub mod profile;
 pub mod reconcile;
 pub mod secret;

@@ -39,12 +39,12 @@ later `import` into the same archive adds what arrived since. Every command
 takes `--dry-run` and then only reports the plan. An `import` also takes
 `--estimate`, which connects to the source and reports how much is new to
 fetch — counts, bytes and a rough time — before committing, and writes
-nothing. It reports sizes for `imap`, `maildir`, `caldav`, `carddav`, Exchange
-(`ews`) and a `takeout` (whose files it reads to count the mail, events and
-contacts that are new). For `jmap` and Microsoft Graph it reports counts only:
-the enumeration gives the new-object count for free, but a size there would
-cost a body fetch per object. The remaining sources fall back to a plain
-dry-run. `inspect` reads an archive and changes nothing, and `reconcile`
+nothing. It reports sizes for `imap`, `pop3`, `maildir`, `caldav`, `carddav`,
+Exchange (`ews`) and a `takeout` (whose files it reads to count the mail,
+events and contacts that are new). For `jmap` and Microsoft Graph it reports
+counts only: the enumeration gives the new-object count for free, but a size
+there would cost a body fetch per object. The remaining sources fall back to a
+plain dry-run. `inspect` reads an archive and changes nothing, and `reconcile`
 reads it folder by folder: a count and a content checksum for each, a checksum
 for the whole, and a check that every message resolves to stored content and a
 real folder. Compare the per-folder counts against the old mailbox to prove the
@@ -83,6 +83,9 @@ command reference is in [docs/usage.md](docs/usage.md).
   token. Mail always; calendars and contacts where the account advertises
   them.
 - **IMAP** -- mail only. Folders are chosen by name or by pattern.
+- **POP3** -- mail only, the whole maildrop into one INBOX, keyed by UIDL. It
+  deletes nothing on the server and keeps a message even once the server no
+  longer has it.
 - **CalDAV, CardDAV** -- calendars and events, address books and contacts.
 - **WebDAV** -- a plain file collection, kept as a file tree.
 - **ManageSieve** -- Sieve scripts only, with the active one recorded.

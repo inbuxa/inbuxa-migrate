@@ -36,6 +36,7 @@ use crate::sync::import_files::FilesImportConfig;
 use crate::sync::import_imap::{ImapAuth, ImapImportConfig};
 use crate::sync::import_maildir::MaildirImportConfig;
 use crate::sync::import_managesieve::{ManageSieveAuth, ManageSieveImportConfig};
+use crate::sync::import_pop3::Pop3ImportConfig;
 use crate::sync::import_takeout::TakeoutImportConfig;
 use crate::sync::{CommonConfig, ConnectConfig, ExportConfig, ImportConfig};
 use crate::types::{ObjectType, parse_object_list};
@@ -144,6 +145,14 @@ enum Source {
     Fastmail(Box<FastmailImportArgs>),
     #[command(about = "IMAP server")]
     Imap(Box<ImapImportArgs>),
+    #[command(
+        about = "POP3 server (mail only)",
+        long_about = "POP3: the whole maildrop into one INBOX, keyed by each message's UIDL so a \
+            later run adds only what arrived since. POP3 has no folders and no flags. This never \
+            deletes anything on the server, and it keeps a message already in the archive even \
+            once the server no longer has it."
+    )]
+    Pop3(Box<Pop3ImportArgs>),
     #[command(about = "CalDAV server")]
     Caldav(Box<DavImportArgs>),
     #[command(about = "CardDAV server")]
@@ -185,7 +194,7 @@ struct GlobalArgs {
         help = "Preview an import: counts, sizes and a rough time, before any writes",
         long_help = "Preview an import before committing: for each type, how much is new since \
             the archive was last filled, how many bytes that is, and a rough time.\n  \
-            Sizes for imap, maildir, caldav, carddav, exchange (EWS) and takeout (mail, events \
+            Sizes for imap, pop3, maildir, caldav, carddav, exchange (EWS) and takeout (mail, events \
             and contacts); counts only for jmap and Graph (a size there needs a body fetch per \
             object). Other sources fall back to --dry-run with a note. It implies --dry-run, so \
             it never writes. On an export it is just --dry-run."
@@ -996,6 +1005,7 @@ struct InspectArgs {
 pub enum Action {
     Import(CommonConfig, ImportConfig),
     ImportImap(CommonConfig, ImapImportConfig),
+    ImportPop3(CommonConfig, Pop3ImportConfig),
     ImportDav(CommonConfig, DavImportConfig),
     ImportManageSieve(CommonConfig, ManageSieveImportConfig),
     ImportMaildir(CommonConfig, MaildirImportConfig),
@@ -1026,6 +1036,7 @@ impl Action {
         match self {
             Action::Import(c, _)
             | Action::ImportImap(c, _)
+            | Action::ImportPop3(c, _)
             | Action::ImportDav(c, _)
             | Action::ImportManageSieve(c, _)
             | Action::ImportMaildir(c, _)
@@ -1044,6 +1055,9 @@ impl Action {
     pub fn estimate_available(&self) -> bool {
         match self {
             Action::ImportImap(c, _) | Action::ImportMaildir(c, _) => c.estimate,
+            // POP3 LIST sizes every new message, paired with UIDL, before any
+            // body is fetched.
+            Action::ImportPop3(c, _) => c.estimate,
             // CalDAV and CardDAV size their items from the getcontentlength
             // the enumeration PROPFIND already returns. WebDAV files go
             // through the same command but report differently, so they stay
@@ -1062,6 +1076,66 @@ impl Action {
             _ => false,
         }
     }
+}
+
+#[derive(Args)]
+pub struct Pop3ImportArgs {
+    #[arg(
+        long,
+        value_name = "URL",
+        help = "pop3s://host[:port] (TLS) or pop3://host[:port] (STLS, or cleartext with --allow-cleartext)"
+    )]
+    url: String,
+
+    #[arg(long, value_name = "USER", help = "The POP3 account to sign in as")]
+    user: String,
+
+    #[arg(
+        long,
+        value_name = "PASS",
+        help = "Password (prefer $INBUXA_MIGRATE_PASSWORD or the prompt)"
+    )]
+    password: Option<String>,
+
+    #[arg(
+        long,
+        help = "Permit a password on pop3:// without STLS (cleartext). Ignored for pop3s://"
+    )]
+    allow_cleartext: bool,
+
+    #[arg(
+        long,
+        help = "Permit importing when the archive records a different POP3 source"
+    )]
+    allow_source_change: bool,
+
+    #[command(flatten)]
+    global: GlobalArgs,
+
+    #[arg(
+        value_name = "ARCHIVE",
+        help = "Local SQLite archive (created if absent)"
+    )]
+    archive: PathBuf,
+}
+
+fn resolve_pop3_import(args: Pop3ImportArgs) -> Result<Action, Error> {
+    let common = common_config(&args.global, args.archive);
+    let password = secret::resolve(
+        args.password.as_deref(),
+        "INBUXA_MIGRATE_PASSWORD",
+        "password",
+    )?;
+    Ok(Action::ImportPop3(
+        common,
+        Pop3ImportConfig {
+            url: args.url,
+            user: args.user,
+            password,
+            allow_cleartext: args.allow_cleartext,
+            allow_source_change: args.allow_source_change,
+        },
+    ))
 }
 
 #[derive(Args)]
@@ -1225,6 +1299,7 @@ fn resolve_import(source: Source) -> Result<Action, Error> {
         Source::Jmap(args) => resolve_jmap_import(*args),
         Source::Fastmail(args) => resolve_fastmail_import(*args),
         Source::Imap(args) => resolve_imap_import(*args),
+        Source::Pop3(args) => resolve_pop3_import(*args),
         Source::Caldav(args) => resolve_dav_import(*args, DavKindArg::Caldav),
         Source::Carddav(args) => resolve_dav_import(*args, DavKindArg::Carddav),
         Source::Webdav(args) => resolve_dav_import(*args, DavKindArg::Webdav),

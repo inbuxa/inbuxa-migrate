@@ -69,6 +69,10 @@ fn run() -> i32 {
             let logger = common.logger;
             (sync::import_imap::run_reporting(common, config), logger)
         }
+        Action::ImportPop3(common, config) => {
+            let logger = common.logger;
+            (sync::import_pop3::run_reporting(common, config), logger)
+        }
         Action::ImportDav(common, config) => {
             let logger = common.logger;
             (sync::import_dav::run_reporting(common, config), logger)
