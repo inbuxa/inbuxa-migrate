@@ -9,6 +9,7 @@ use serde_json::Value;
 
 use crate::db::exchange_ews_ids;
 use crate::error::Error;
+use crate::exchange::date::is_outlook_no_date;
 use crate::exchange_ews::calendar_map::to_jscalendar_with_exceptions;
 use crate::exchange_ews::parse::{CalendarItemRaw, parse_calendar_item};
 use crate::exchange_ews::types::{CalendarItemType, ItemId};
@@ -118,7 +119,8 @@ fn reconcile_one(
                 }
                 return Ok(());
             }
-            let parsed = parse_calendar_item(&msg.inner_xml).map_err(Error::from)?;
+            let parsed = parse_calendar_item(&msg.inner_xml)
+                .map_err(|e| Error::Partial(format!("unparsable item: {e}")))?;
             if parsed.id.id.is_empty() {
                 counts.failed += 1;
                 return Ok(());
@@ -126,7 +128,8 @@ fn reconcile_one(
             if matches!(
                 parsed.calendar_item_type,
                 Some(CalendarItemType::Occurrence) | Some(CalendarItemType::Exception)
-            ) {
+            ) || parsed.start.as_deref().is_some_and(is_outlook_no_date)
+            {
                 counts.skipped += 1;
                 return Ok(());
             }
@@ -178,7 +181,7 @@ fn apply_event(
     counts: &mut TypeCounts,
 ) -> Result<(), Error> {
     let modified_full = fetch_modified_occurrences(ctx, raw);
-    let mut built = to_jscalendar_with_exceptions(raw, &modified_full);
+    let mut built = to_jscalendar_with_exceptions(raw, &modified_full, ctx.owner_smtp);
     attach_calendar_links(conn, ctx, raw, &mut built.data)?;
     let calendar_ids = serde_json::json!([local_folder_id]).to_string();
     let data = built.data.to_string();

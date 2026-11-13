@@ -16,6 +16,7 @@ contacts, identities, Sieve scripts and files.
 
     inbuxa-migrate import imap … alice.sqlite    an account into an archive
     inbuxa-migrate inspect alice.sqlite          what landed
+    inbuxa-migrate reconcile alice.sqlite        folder by folder, is it all there
     inbuxa-migrate export … alice.sqlite         the archive into inbuxa
     inbuxa-migrate export-files alice.sqlite out the archive as plain files
     inbuxa-migrate import files out alice.sqlite those files read back, manifest and all
@@ -35,8 +36,20 @@ server can be gone before the new one exists.
 
 Both commands converge. An interrupted run picks up where it stopped, and a
 later `import` into the same archive adds what arrived since. Every command
-takes `--dry-run` and then only reports the plan. `inspect` reads an archive
-and changes nothing.
+takes `--dry-run` and then only reports the plan. An `import` also takes
+`--estimate`, which connects to the source and reports how much is new to
+fetch — counts, bytes and a rough time — before committing, and writes
+nothing. It reports sizes for `imap`, `pop3`, `maildir`, `caldav`, `carddav`,
+Exchange (`ews`) and a `takeout` (whose files it reads to count the mail,
+events and contacts that are new). For `jmap` and Microsoft Graph it reports
+counts only: the enumeration gives the new-object count for free, but a size
+there would cost a body fetch per object. The remaining sources fall back to a
+plain dry-run. `inspect` reads an archive and changes nothing, and `reconcile`
+reads it folder by folder: a count and a content checksum for each, a checksum
+for the whole, and a check that every message resolves to stored content and a
+real folder. Compare the per-folder counts against the old mailbox to prove the
+move was complete, and the checksum shows two archives hold the very same mail.
+It exits non-zero if a message is missing its content or its folder.
 
 The archive is also a backup. Import on a schedule, keep the file, and
 restore it later with `export`. An archive remembers which account filled it
@@ -55,7 +68,9 @@ list of domains, accounts, groups, lists and aliases to set up again
 elsewhere, without passwords, and `import-directory` sets them up on an
 inbuxa server, with a new password for each user. `migrate` moves many
 accounts with one plan file: the same steps for each account, several at
-once, resuming where it stopped, with one report at the end. `guide`
+once, resuming where it stopped, with one report at the end. With
+`--repeat` it keeps syncing, each pass moving only what arrived since, so
+the new server stays close behind the old one until the cutover. `guide`
 walks through the same move in the browser: it asks where the mail is,
 which accounts and which inbuxa server, previews, and runs the plan it
 writes. The full
@@ -64,7 +79,13 @@ command reference is in [docs/usage.md](docs/usage.md).
 ## Sources
 
 - **JMAP** -- any JMAP account, including an inbuxa or Stalwart server.
+- **Fastmail** -- JMAP, with its server and token filled in: just an API
+  token. Mail always; calendars and contacts where the account advertises
+  them.
 - **IMAP** -- mail only. Folders are chosen by name or by pattern.
+- **POP3** -- mail only, the whole maildrop into one INBOX, keyed by UIDL. It
+  deletes nothing on the server and keeps a message even once the server no
+  longer has it.
 - **CalDAV, CardDAV** -- calendars and events, address books and contacts.
 - **WebDAV** -- a plain file collection, kept as a file tree.
 - **ManageSieve** -- Sieve scripts only, with the active one recorded.
@@ -89,8 +110,42 @@ Secrets are read from the environment, or asked for at a prompt:
     INBUXA_MIGRATE_GOOGLE_KEY             a Google service account's JSON key,
                                           for --google-key-from-env
 
+Any of these can instead be read from a file, by setting the same name with
+`_FILE` appended to the file's path -- the Docker, Compose and systemd secrets
+convention:
+
+    INBUXA_MIGRATE_PASSWORD_FILE=/run/secrets/imap-password
+    INBUXA_MIGRATE_API_KEY_FILE=/run/secrets/token
+
+The file holds the secret and nothing else; one trailing newline is ignored.
+Setting both a variable and its `_FILE` form is an error. (A Google key is
+already a file: `--google-key <path>`.)
+
 The command line takes them too, but a secret there ends up in the shell's
-history and in the process list. Use the environment or the prompt.
+history and in the process list. Use a file, the environment, or the prompt.
+
+### A shared profile for the inbuxa server
+
+`import` (into a JMAP server) and `import-directory` write to an inbuxa
+server. Instead of giving its address and key each time, name it once in
+`~/.config/inbuxa/config.toml`, which `inbuxa-cli` reads too:
+
+    [profile.default]
+    url = "https://mail.example.org"
+    api-key = "API_…"
+
+    [profile.staging]
+    url = "https://staging.example.org"
+    api-key-file = "~/.secrets/staging.key"
+
+A section gives `url` and either `api-key` or `api-key-file` (a path to a file
+holding the key, so the key stays out of the config). Keep the file to
+yourself -- `chmod 600 ~/.config/inbuxa/config.toml`. Without `--profile` or
+`$INBUXA_PROFILE`, the `default` section is used; `--profile staging` picks
+another. A `--url`, or any `INBUXA_MIGRATE_*` variable, still wins, so the
+profile is only the fallback and `--url` becomes optional on these two
+commands when it is set. The other commands connect to IMAP, DAV and the like,
+not to the inbuxa server, so they don't read the profile.
 
 ## Installing
 
@@ -106,6 +161,29 @@ and a `SHA256SUMS` file:
 
 On arm64, fetch `inbuxa-migrate-linux-arm64.tar.gz` instead. The binary is
 the whole program; put it anywhere on the path.
+
+`SHA256SUMS` is signed with [minisign](https://jedisct1.github.io/minisign/),
+so you can confirm it came from us before trusting the checksums.
+`SHA256SUMS.minisig` is the signature:
+
+    curl -fLO "$base/SHA256SUMS.minisig"
+    minisign -Vm SHA256SUMS -P RWS1yFYwVuJ7MGJTZXLbhv9+hrEsjrC8Zg+7WmPlM86Sjy0qF/xkoCKq
+
+The same public key signs every inbuxa release (installer, migrate and cli).
+
+## Shell completions and a man page
+
+`inbuxa-migrate completions <shell>` prints a completion script to standard
+output, for `bash`, `zsh`, `fish`, `elvish` or `powershell`. Install it where
+the shell looks:
+
+    inbuxa-migrate completions bash > /etc/bash_completion.d/inbuxa-migrate
+    inbuxa-migrate completions zsh  > "${fpath[1]}/_inbuxa-migrate"
+    inbuxa-migrate completions fish > ~/.config/fish/completions/inbuxa-migrate.fish
+
+`inbuxa-migrate man` prints a man page, in roff, to standard output:
+
+    inbuxa-migrate man > /usr/share/man/man1/inbuxa-migrate.1
 
 ## Building and testing
 

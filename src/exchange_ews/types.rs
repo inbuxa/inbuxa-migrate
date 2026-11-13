@@ -103,7 +103,6 @@ pub enum ServerVersion {
     Exchange2013,
     Exchange2013Sp1,
     Exchange2016,
-    Exchange2019,
 }
 
 impl ServerVersion {
@@ -116,7 +115,6 @@ impl ServerVersion {
             ServerVersion::Exchange2013 => "Exchange2013",
             ServerVersion::Exchange2013Sp1 => "Exchange2013_SP1",
             ServerVersion::Exchange2016 => "Exchange2016",
-            ServerVersion::Exchange2019 => "Exchange2019",
         }
     }
 
@@ -127,16 +125,12 @@ impl ServerVersion {
             (14, 1) => ServerVersion::Exchange2010Sp1,
             (14, 2 | 3) => ServerVersion::Exchange2010Sp2,
             (15, 0) => ServerVersion::Exchange2013,
-            (15, 1) => ServerVersion::Exchange2016,
-            (15, 2) => ServerVersion::Exchange2019,
-            _ if major >= 15 => ServerVersion::Exchange2019,
             _ => ServerVersion::Exchange2016,
         }
     }
 
     pub fn lower(self) -> Option<ServerVersion> {
         match self {
-            ServerVersion::Exchange2019 => Some(ServerVersion::Exchange2016),
             ServerVersion::Exchange2016 => Some(ServerVersion::Exchange2013Sp1),
             ServerVersion::Exchange2013Sp1 => Some(ServerVersion::Exchange2013),
             ServerVersion::Exchange2013 => Some(ServerVersion::Exchange2010Sp2),
@@ -146,6 +140,27 @@ impl ServerVersion {
             ServerVersion::Exchange2007 => None,
         }
     }
+}
+
+const NON_MAIL_ITEM_CLASSES: [&str; 6] = [
+    "ipm.contact",
+    "ipm.distlist",
+    "ipm.appointment",
+    "ipm.task",
+    "ipm.stickynote",
+    "ipm.activity",
+];
+
+pub fn is_non_mail_item_class(class: &str) -> bool {
+    let class = class.trim();
+    NON_MAIL_ITEM_CLASSES.iter().any(|prefix| {
+        class
+            .get(..prefix.len())
+            .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+            && class
+                .get(prefix.len()..)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
+    })
 }
 
 const SKIPPED_CONTAINER_CLASSES: [&str; 8] = [
@@ -188,6 +203,19 @@ impl FolderClass {
         } else {
             FolderClass::Mail
         }
+    }
+
+    pub fn from_item_classes<'a>(classes: impl IntoIterator<Item = &'a str>) -> FolderClass {
+        for class in classes {
+            let lower = class.trim().to_ascii_lowercase();
+            if class_matches(&lower, "ipm.contact") || class_matches(&lower, "ipm.distlist") {
+                return FolderClass::Contacts;
+            }
+            if class_matches(&lower, "ipm.appointment") {
+                return FolderClass::Calendar;
+            }
+        }
+        FolderClass::Mail
     }
 
     pub fn is_mail_fallback(class: &str) -> bool {
@@ -310,6 +338,54 @@ mod tests {
     use super::*;
 
     #[test]
+    fn non_mail_item_classes() {
+        for class in [
+            "IPM.Contact",
+            "IPM.DistList",
+            "IPM.Appointment",
+            "IPM.Appointment.Custom",
+            "IPM.Task",
+            "ipm.stickynote",
+            "IPM.Activity",
+        ] {
+            assert!(is_non_mail_item_class(class), "{class}");
+        }
+        for class in [
+            "IPM.Note",
+            "IPM.Note.SMIME",
+            "IPM.Schedule.Meeting.Request",
+            "IPM.Schedule.Meeting.Canceled",
+            "IPM.Post",
+            "REPORT.IPM.Note.NDR",
+            "IPM.Contactless",
+            "",
+        ] {
+            assert!(!is_non_mail_item_class(class), "{class}");
+        }
+    }
+
+    #[test]
+    fn folder_kind_from_item_classes() {
+        assert_eq!(
+            FolderClass::from_item_classes(["IPM.Note", "IPM.Contact"]),
+            FolderClass::Contacts
+        );
+        assert_eq!(
+            FolderClass::from_item_classes(["IPM.DistList"]),
+            FolderClass::Contacts
+        );
+        assert_eq!(
+            FolderClass::from_item_classes(["IPM.Appointment"]),
+            FolderClass::Calendar
+        );
+        assert_eq!(
+            FolderClass::from_item_classes(["IPM.Note", "IPM.Schedule.Meeting.Request"]),
+            FolderClass::Mail
+        );
+        assert_eq!(FolderClass::from_item_classes([]), FolderClass::Mail);
+    }
+
+    #[test]
     fn folder_class_mapping() {
         assert_eq!(FolderClass::from_ipf("IPF.Note"), FolderClass::Mail);
         assert_eq!(
@@ -364,11 +440,15 @@ mod tests {
         );
         assert_eq!(
             ServerVersion::from_build(15, 2),
-            ServerVersion::Exchange2019
+            ServerVersion::Exchange2016
+        );
+        assert_eq!(
+            ServerVersion::from_build(15, 20),
+            ServerVersion::Exchange2016
         );
         assert_eq!(
             ServerVersion::from_build(99, 99),
-            ServerVersion::Exchange2019
+            ServerVersion::Exchange2016
         );
     }
 
@@ -396,7 +476,7 @@ mod tests {
 
     #[test]
     fn server_version_ladder_descends_to_floor() {
-        let mut v = ServerVersion::Exchange2019;
+        let mut v = ServerVersion::Exchange2016;
         let mut chain = vec![v];
         while let Some(next) = v.lower() {
             chain.push(next);
@@ -405,7 +485,6 @@ mod tests {
         assert_eq!(
             chain,
             vec![
-                ServerVersion::Exchange2019,
                 ServerVersion::Exchange2016,
                 ServerVersion::Exchange2013Sp1,
                 ServerVersion::Exchange2013,

@@ -171,6 +171,24 @@ jobs:
       - run: |
           (cd dist && sha256sum ./*.tar.gz | sed 's| \./| |' > SHA256SUMS)
           cat dist/SHA256SUMS
+      # Sign SHA256SUMS with the suite's minisign key, so a download can be
+      # verified offline against the public key in the README. Unset secret
+      # (as on a fork, or before the key is added) leaves the release unsigned.
+      - name: Sign SHA256SUMS with minisign
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MINISIGN_SECRET_KEY:-}" ]; then
+            echo "::warning::MINISIGN_SECRET_KEY is not set; this release will be unsigned"
+            exit 0
+          fi
+          sudo apt-get -qq update >/dev/null && sudo apt-get -qq install -y --no-install-recommends minisign >/dev/null
+          umask 077
+          key="$(mktemp)"; printf '%s\n' "$MINISIGN_SECRET_KEY" > "$key"
+          minisign -S -s "$key" -m dist/SHA256SUMS -t "inbuxa $TAG"
+          rm -f "$key"
+          echo "signed dist/SHA256SUMS -> dist/SHA256SUMS.minisig"
       - env:
           GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
         run: |
@@ -181,7 +199,11 @@ jobs:
           for f in inbuxa-migrate-linux-amd64.tar.gz inbuxa-migrate-linux-arm64.tar.gz SHA256SUMS; do
             [ -s "dist/$f" ] || { echo "::error::dist/$f is missing; not creating a release"; exit 1; }
           done
-          files="Binaries for linux/amd64 and linux/arm64. Verify with SHA256SUMS."
+          if [ -e dist/SHA256SUMS.minisig ]; then
+            files="Binaries for linux/amd64 and linux/arm64. Verify with SHA256SUMS (signed as SHA256SUMS.minisig; minisign public key in the README)."
+          else
+            files="Binaries for linux/amd64 and linux/arm64. Verify with SHA256SUMS."
+          fi
           notes="$(awk -v v="${TAG#v}" 'index($0, "## [" v "]") == 1 {f = 1; next}
                                          f && (/^## / || /^---$/) {exit}
                                          f' CHANGELOG.md | sed -e '/./,$!d')"
