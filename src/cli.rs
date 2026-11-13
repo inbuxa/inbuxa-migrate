@@ -24,6 +24,7 @@ use crate::jmap::http::Auth;
 use crate::logging::Logger;
 use crate::migrate::MigrateConfig;
 use crate::profile::Profile;
+use crate::reconcile::ReconcileConfig;
 use crate::secret;
 use crate::sync::export_dav::ExportDavConfig;
 use crate::sync::export_imap::ExportImapConfig;
@@ -108,6 +109,8 @@ enum Command {
     Plan(Box<PlanArgs>),
     #[command(about = "Show the contents of a local archive (read-only)")]
     Inspect(Box<InspectArgs>),
+    #[command(about = "Check a local archive folder by folder and report its contents (read-only)")]
+    Reconcile(Box<ReconcileArgs>),
     /// Print a shell completion script to standard output
     ///
     /// Source it, or install it where the shell looks:
@@ -1011,6 +1014,7 @@ pub enum Action {
     ExportManageSieve(CommonConfig, ExportManageSieveConfig),
     ExportDav(CommonConfig, ExportDavConfig),
     Inspect(InspectConfig),
+    Reconcile(ReconcileConfig),
     Completions(clap_complete::Shell),
     Man,
 }
@@ -1209,6 +1213,7 @@ impl Cli {
             Command::ExportCaldav(args) => resolve_export_dav(*args, DavKindArg::Caldav),
             Command::ExportCarddav(args) => resolve_export_dav(*args, DavKindArg::Carddav),
             Command::Inspect(args) => resolve_inspect(*args),
+            Command::Reconcile(args) => resolve_reconcile(*args),
             Command::Completions { shell } => Ok(Action::Completions(shell)),
             Command::Man => Ok(Action::Man),
         }
@@ -1873,6 +1878,18 @@ fn resolve_inspect(args: InspectArgs) -> Result<Action, Error> {
 }
 
 #[derive(Args)]
+struct ReconcileArgs {
+    #[arg(value_name = "ARCHIVE", help = "Local SQLite archive")]
+    archive: PathBuf,
+}
+
+fn resolve_reconcile(args: ReconcileArgs) -> Result<Action, Error> {
+    Ok(Action::Reconcile(ReconcileConfig {
+        archive: args.archive,
+    }))
+}
+
+#[derive(Args)]
 #[command(group(clap::ArgGroup::new("ews_auth").required(true).args([
     "auth_basic", "auth_bearer",
 ])))]
@@ -2510,6 +2527,18 @@ mod tests {
             ])
             .is_err()
         );
+    }
+
+    #[test]
+    fn reconcile_resolves_with_its_archive() {
+        let cli = Cli::try_parse_from(["inbuxa-migrate", "reconcile", "alice.sqlite"])
+            .unwrap_or_else(|e| panic!("clap rejected args: {e}"));
+        match cli.resolve().unwrap() {
+            Action::Reconcile(cfg) => assert_eq!(cfg.archive, PathBuf::from("alice.sqlite")),
+            _ => panic!("expected a reconcile action"),
+        }
+        // The archive is required.
+        assert!(Cli::try_parse_from(["inbuxa-migrate", "reconcile"]).is_err());
     }
 
     #[test]

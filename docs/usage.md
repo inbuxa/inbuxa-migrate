@@ -13,7 +13,7 @@ and how to install it.
 ## Commands and global flags
 
 ```
-inbuxa-migrate <import|export|export-imap|export-managesieve|export-caldav|export-carddav|export-files|export-directory|import-directory|migrate|guide|plan|inspect> [args...]
+inbuxa-migrate <import|export|export-imap|export-managesieve|export-caldav|export-carddav|export-files|export-directory|import-directory|migrate|guide|plan|inspect|reconcile> [args...]
 ```
 
 Every command takes a few global flags -- verbosity, worker pool size, retry
@@ -895,6 +895,25 @@ Read-only dump of a local archive. This command never opens a network connection
 - Omit `TYPE` for a per-type summary (counts of every object kind plus blob storage stats).
 - Pass an object type to dump it: `mailbox`, `email`, `identity`, `sievescript`, `addressbook`, `contactcard`, `calendar`, `calendarevent`, `participantidentity`, `filenode`.
 - `mailbox` and `filenode` render as a tree (`--limit`/`--offset` are ignored); all other types use a paginated list and respect `--limit` and `--offset`.
+
+
+## Reconcile
+
+```
+inbuxa-migrate reconcile <ARCHIVE>
+```
+
+Read-only report that an archive holds what it should, folder by folder. Like `inspect`, it never opens a network connection and never writes to the archive; while another run holds the archive it says the archive is in use instead of reading it.
+
+It prints, in order:
+
+- **Folders** -- one row per mailbox, by full path, with its message count and a content checksum. A message filed in more than one folder is counted in each. The checksum is over the content of the messages in that folder, so two folders -- or two archives -- with the same mail share a checksum, regardless of order.
+- **Totals** -- the message count, the number of folders, the stored content size and blob count, and a single checksum over the whole archive's mail.
+- **Integrity** -- either `ok`, or a line for each problem found: messages that point at content not in the archive, empty stored blobs, messages filed in no folder, and messages filed in a folder that is not in the archive.
+
+Two uses. To prove a migration was complete, compare the per-folder counts against the old mailbox. To prove two archives hold the very same mail -- an export and a re-import, or a backup and its source -- compare their checksums.
+
+Exit codes: `0` when the archive reconciles cleanly, `8` when an integrity check found a problem (past the `1`--`7` the other commands use, so a script can tell a reconciliation failure from any other error), and `7` when the archive can't be opened or read.
 
 
 ## Live tests
