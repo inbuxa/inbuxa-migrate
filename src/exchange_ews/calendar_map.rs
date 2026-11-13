@@ -5,9 +5,11 @@
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
 
+use chrono::NaiveDate;
 use serde_json::{Map, Value, json};
 
 use crate::exchange::address::{as_smtp_address, extract_smtp_address};
+use crate::exchange::date::nearest_midnight;
 use crate::exchange::jscalendar::{
     drop_calendar_address_dependents, is_override_ignored, synthetic_attendee_address,
 };
@@ -22,20 +24,24 @@ pub struct EventValue {
 }
 
 pub fn to_jscalendar(raw: &CalendarItemRaw) -> EventValue {
-    to_jscalendar_with_exceptions(raw, &[])
+    to_jscalendar_with_exceptions(raw, &[], None)
 }
 
 pub fn to_jscalendar_with_exceptions(
     raw: &CalendarItemRaw,
     modified_full: &[CalendarItemRaw],
+    owner_smtp: Option<&str>,
 ) -> EventValue {
     let iana = raw
         .start_tz
         .as_deref()
         .map(|tz| resolve_to_iana(tz).unwrap_or_else(|| "Etc/UTC".to_owned()));
-    let mut event = build_event_map(raw, iana.as_deref());
-    if let Some(overrides) = build_recurrence_overrides(&event, raw, modified_full, iana.as_deref())
-    {
+    let ctx = EventCtx {
+        iana: iana.as_deref(),
+        owner_smtp,
+    };
+    let mut event = build_event_map(raw, ctx);
+    if let Some(overrides) = build_recurrence_overrides(&event, raw, modified_full, ctx) {
         event.insert("recurrenceOverrides".to_owned(), overrides);
     }
     EventValue {
@@ -45,7 +51,14 @@ pub fn to_jscalendar_with_exceptions(
     }
 }
 
-fn build_event_map(raw: &CalendarItemRaw, iana: Option<&str>) -> Map<String, Value> {
+#[derive(Clone, Copy)]
+struct EventCtx<'a> {
+    iana: Option<&'a str>,
+    owner_smtp: Option<&'a str>,
+}
+
+fn build_event_map(raw: &CalendarItemRaw, ctx: EventCtx<'_>) -> Map<String, Value> {
+    let iana = ctx.iana;
     let mut event = Map::new();
     event.insert("@type".to_owned(), Value::String("Event".to_owned()));
     if let Some(uid) = raw.uid.as_ref() {
@@ -100,18 +113,12 @@ fn build_event_map(raw: &CalendarItemRaw, iana: Option<&str>) -> Map<String, Val
         event.insert("keywords".to_owned(), Value::Object(kw));
     }
     if let Some(true) = raw.is_all_day_event {
-        if let Some(start) = raw.start.as_ref() {
-            let date_only = start.split('T').next().unwrap_or(start.as_str());
-            event.insert(
-                "start".to_owned(),
-                Value::String(format!("{date_only}T00:00:00")),
-            );
+        let start = raw.start.as_deref().and_then(|s| nearest_midnight(s, iana));
+        if let Some(start) = start {
+            event.insert("start".to_owned(), Value::String(all_day_key(start)));
         }
         event.insert("showWithoutTime".to_owned(), Value::Bool(true));
-        let days = match (raw.start.as_ref(), raw.end.as_ref()) {
-            (Some(s), Some(e)) => all_day_span_days(s, e).max(1),
-            _ => 1,
-        };
+        let days = all_day_span_days(start, raw.end.as_deref(), iana);
         event.insert("duration".to_owned(), Value::String(format!("P{days}D")));
     } else {
         if let Some(start) = raw.start.as_ref() {
@@ -128,6 +135,12 @@ fn build_event_map(raw: &CalendarItemRaw, iana: Option<&str>) -> Map<String, Val
         if let Some(tz) = iana {
             event.insert("timeZone".to_owned(), Value::String(tz.to_owned()));
         }
+    }
+    if let Some(sensitivity) = raw.sensitivity.as_deref() {
+        event.insert(
+            "privacy".to_owned(),
+            Value::String(privacy_for(sensitivity).to_owned()),
+        );
     }
     if let Some(status) = raw.legacy_free_busy_status.as_ref() {
         let mapped = match status.as_str() {
@@ -185,6 +198,25 @@ fn build_event_map(raw: &CalendarItemRaw, iana: Option<&str>) -> Map<String, Val
         &raw.resources,
         AttendeeRole::Resource,
     );
+    if let Some(owner) = ctx.owner_smtp
+        && let Some(status) = raw
+            .my_response_type
+            .as_deref()
+            .and_then(own_response_status)
+    {
+        for p in participants.values_mut().filter_map(Value::as_object_mut) {
+            let is_owner = p
+                .get("email")
+                .and_then(Value::as_str)
+                .is_some_and(|email| email.eq_ignore_ascii_case(owner));
+            if is_owner && p.contains_key("expectReply") {
+                p.insert(
+                    "participationStatus".to_owned(),
+                    Value::String(status.to_owned()),
+                );
+            }
+        }
+    }
     if !participants.is_empty() {
         if !event.contains_key("organizerCalendarAddress") {
             drop_calendar_address_dependents(&mut participants);
@@ -307,15 +339,8 @@ fn add_attendees(
             } else {
                 p.insert("expectReply".to_owned(), Value::Bool(true));
             }
-            if let Some(rt) = att.response_type.as_ref() {
-                let mapped = match rt.as_str() {
-                    "Accept" => "accepted",
-                    "Tentative" => "tentative",
-                    "Decline" => "declined",
-                    "Organizer" => "accepted",
-                    "NoResponseReceived" => "needs-action",
-                    _ => "needs-action",
-                };
+            if let Some(rt) = att.response_type.as_deref() {
+                let mapped = participation_status(rt).unwrap_or("needs-action");
                 p.insert(
                     "participationStatus".to_owned(),
                     Value::String(mapped.to_owned()),
@@ -324,6 +349,35 @@ fn add_attendees(
         }
         out.insert(key, Value::Object(p));
     }
+}
+
+fn participation_status(response_type: &str) -> Option<&'static str> {
+    hashify::fnc_map!(
+        response_type.as_bytes(),
+        "Accept" => { return Some("accepted"); },
+        "Tentative" => { return Some("tentative"); },
+        "Decline" => { return Some("declined"); },
+        "Organizer" => { return Some("accepted"); },
+        _ => {}
+    );
+    None
+}
+
+fn own_response_status(my_response_type: &str) -> Option<&'static str> {
+    if my_response_type == "Organizer" {
+        return None;
+    }
+    participation_status(my_response_type)
+}
+
+fn privacy_for(sensitivity: &str) -> &'static str {
+    hashify::fnc_map!(
+        sensitivity.as_bytes(),
+        "Private" => { return "private"; },
+        "Confidential" => { return "secret"; },
+        _ => {}
+    );
+    "public"
 }
 
 const NOT_PATCHED_PER_OCCURRENCE: &[&str] = &["created", "updated"];
@@ -336,8 +390,9 @@ fn build_recurrence_overrides(
     base_event: &Map<String, Value>,
     raw: &CalendarItemRaw,
     modified_full: &[CalendarItemRaw],
-    iana: Option<&str>,
+    ctx: EventCtx<'_>,
 ) -> Option<Value> {
+    let iana = ctx.iana;
     if raw.modified_occurrences.is_empty() && raw.deleted_occurrences.is_empty() {
         return None;
     }
@@ -347,7 +402,7 @@ fn build_recurrence_overrides(
             .original_start
             .as_deref()
             .or(occ.start.as_deref())
-            .map(|s| to_local_datetime_in(s, iana))
+            .map(|s| occurrence_key(raw, s, iana))
         else {
             continue;
         };
@@ -356,15 +411,15 @@ fn build_recurrence_overrides(
             .find(|f| !occ.item_id.id.is_empty() && f.id.id == occ.item_id.id);
         let patch = match full {
             Some(full) => {
-                let occ_event = build_event_map(full, iana);
+                let occ_event = build_event_map(full, ctx);
                 override_patch(&occ_event, base_event, &key)
             }
-            None => time_only_patch(occ, iana),
+            None => time_only_patch(raw, occ, iana),
         };
         map.insert(key, Value::Object(patch));
     }
     for occ in &raw.deleted_occurrences {
-        let Some(key) = occ.start.as_deref().map(|s| to_local_datetime_in(s, iana)) else {
+        let Some(key) = occ.start.as_deref().map(|s| occurrence_key(raw, s, iana)) else {
             continue;
         };
         map.insert(key, json!({"excluded": true}));
@@ -407,8 +462,23 @@ fn override_patch(
     patch
 }
 
-fn time_only_patch(occ: &RawOccurrence, iana: Option<&str>) -> Map<String, Value> {
+fn time_only_patch(
+    series: &CalendarItemRaw,
+    occ: &RawOccurrence,
+    iana: Option<&str>,
+) -> Map<String, Value> {
     let mut o = Map::new();
+    if series.is_all_day_event == Some(true) {
+        let start = occ.start.as_deref().and_then(|s| nearest_midnight(s, iana));
+        if let Some(start) = start {
+            o.insert("start".to_owned(), Value::String(all_day_key(start)));
+        }
+        if occ.end.is_some() {
+            let days = all_day_span_days(start, occ.end.as_deref(), iana);
+            o.insert("duration".to_owned(), Value::String(format!("P{days}D")));
+        }
+        return o;
+    }
     if let Some(s) = occ.start.as_ref() {
         o.insert(
             "start".to_owned(),
@@ -421,6 +491,19 @@ fn time_only_patch(occ: &RawOccurrence, iana: Option<&str>) -> Map<String, Value
         o.insert("duration".to_owned(), Value::String(dur));
     }
     o
+}
+
+fn occurrence_key(series: &CalendarItemRaw, start: &str, iana: Option<&str>) -> String {
+    if series.is_all_day_event == Some(true)
+        && let Some(date) = nearest_midnight(start, iana)
+    {
+        return all_day_key(date);
+    }
+    to_local_datetime_in(start, iana)
+}
+
+fn all_day_key(date: NaiveDate) -> String {
+    format!("{date}T00:00:00")
 }
 
 fn normalise_utc_datetime(s: &str) -> String {
@@ -487,32 +570,11 @@ fn convert_utc_to_local(s: &str, iana: &str) -> Option<String> {
     Some(local.format("%Y-%m-%dT%H:%M:%S").to_string())
 }
 
-fn all_day_span_days(start: &str, end: &str) -> u32 {
-    fn date_only(s: &str) -> &str {
-        s.split('T').next().unwrap_or(s)
+fn all_day_span_days(start: Option<NaiveDate>, end: Option<&str>, iana: Option<&str>) -> i64 {
+    match (start, end.and_then(|e| nearest_midnight(e, iana))) {
+        (Some(start), Some(end)) => (end - start).num_days().max(1),
+        _ => 1,
     }
-    fn ymd(s: &str) -> Option<(i64, u32, u32)> {
-        let mut p = s.split('-');
-        let y: i64 = p.next()?.parse().ok()?;
-        let m: u32 = p.next()?.parse().ok()?;
-        let d: u32 = p.next()?.parse().ok()?;
-        Some((y, m, d))
-    }
-    fn to_days(y: i64, m: u32, d: u32) -> i64 {
-        let (mut y, m) = if m <= 2 {
-            (y - 1, m as i64 + 12)
-        } else {
-            (y, m as i64)
-        };
-        y += 4800;
-        let mm = m + 1;
-        365 * y + y / 4 - y / 100 + y / 400 + 30 * mm + 3 * (mm + 1) / 5 + d as i64 - 32045
-    }
-    let (Some(s), Some(e)) = (ymd(date_only(start)), ymd(date_only(end))) else {
-        return 1;
-    };
-    let diff = to_days(e.0, e.1, e.2) - to_days(s.0, s.1, s.2);
-    if diff <= 0 { 1 } else { diff as u32 }
 }
 
 fn duration_iso8601(start: &str, end: &str) -> Option<String> {
@@ -844,7 +906,7 @@ mod tests {
             end: Some("2025-06-18T14:30:00Z".to_owned()),
             ..CalendarItemRaw::default()
         };
-        let v = to_jscalendar_with_exceptions(&master, std::slice::from_ref(&full_occ)).data;
+        let v = to_jscalendar_with_exceptions(&master, std::slice::from_ref(&full_occ), None).data;
         let ov = &v["recurrenceOverrides"]["2025-06-18T14:00:00"];
         assert_eq!(
             ov["title"], "Sprint Retro",
@@ -1108,6 +1170,80 @@ mod tests {
         assert_eq!(bob["roles"]["required"], true);
     }
 
+    fn invited_raw(my_response: &str) -> CalendarItemRaw {
+        CalendarItemRaw {
+            uid: Some("uid-mine".to_owned()),
+            start: Some("2025-06-15T14:00:00Z".to_owned()),
+            end: Some("2025-06-15T15:00:00Z".to_owned()),
+            organizer_smtp: Some("alice@example.com".to_owned()),
+            my_response_type: Some(my_response.to_owned()),
+            required_attendees: vec![
+                crate::exchange_ews::parse::RawAttendee {
+                    email: Some("Me@Example.com".to_owned()),
+                    routing_type: None,
+                    name: None,
+                    response_type: Some("Unknown".to_owned()),
+                },
+                crate::exchange_ews::parse::RawAttendee {
+                    email: Some("bob@example.com".to_owned()),
+                    routing_type: None,
+                    name: None,
+                    response_type: Some("Unknown".to_owned()),
+                },
+            ],
+            ..CalendarItemRaw::default()
+        }
+    }
+
+    fn status_of(v: &Value, email: &str) -> Value {
+        v["participants"]
+            .as_object()
+            .unwrap()
+            .values()
+            .find(|p| p["email"] == email)
+            .unwrap()["participationStatus"]
+            .clone()
+    }
+
+    #[test]
+    fn own_response_sets_the_mailbox_owner_participation_status() {
+        let raw = invited_raw("Accept");
+        let v = to_jscalendar_with_exceptions(&raw, &[], Some("me@example.com")).data;
+        assert_eq!(status_of(&v, "Me@Example.com"), "accepted");
+        assert_eq!(status_of(&v, "bob@example.com"), "needs-action");
+        let v = to_jscalendar(&raw).data;
+        assert_eq!(status_of(&v, "Me@Example.com"), "needs-action");
+        let raw = invited_raw("NoResponseReceived");
+        let v = to_jscalendar_with_exceptions(&raw, &[], Some("me@example.com")).data;
+        assert_eq!(status_of(&v, "Me@Example.com"), "needs-action");
+    }
+
+    #[test]
+    fn sensitivity_maps_to_privacy() {
+        for (sensitivity, privacy) in [
+            ("Private", "private"),
+            ("Confidential", "secret"),
+            ("Personal", "public"),
+            ("Normal", "public"),
+        ] {
+            let raw = CalendarItemRaw {
+                uid: Some("uid-p".to_owned()),
+                sensitivity: Some(sensitivity.to_owned()),
+                ..CalendarItemRaw::default()
+            };
+            assert_eq!(
+                to_jscalendar(&raw).data["privacy"],
+                privacy,
+                "{sensitivity}"
+            );
+        }
+        let raw = CalendarItemRaw {
+            uid: Some("uid-p".to_owned()),
+            ..CalendarItemRaw::default()
+        };
+        assert!(to_jscalendar(&raw).data.get("privacy").is_none());
+    }
+
     #[test]
     fn attendees_lose_calendar_addresses_when_no_organizer_is_known() {
         let raw = CalendarItemRaw {
@@ -1140,9 +1276,65 @@ mod tests {
 
     #[test]
     fn all_day_span_helper_is_inclusive_of_start() {
-        assert_eq!(all_day_span_days("2025-07-04", "2025-07-04"), 1);
-        assert_eq!(all_day_span_days("2025-07-04", "2025-07-05"), 1);
-        assert_eq!(all_day_span_days("2025-07-04", "2025-07-07"), 3);
-        assert_eq!(all_day_span_days("bad", "input"), 1);
+        let start = NaiveDate::from_ymd_opt(2025, 7, 4);
+        assert_eq!(all_day_span_days(start, Some("2025-07-04"), None), 1);
+        assert_eq!(all_day_span_days(start, Some("2025-07-05"), None), 1);
+        assert_eq!(all_day_span_days(start, Some("2025-07-07"), None), 3);
+        assert_eq!(all_day_span_days(None, Some("2025-07-07"), None), 1);
+        assert_eq!(all_day_span_days(start, Some("bad"), None), 1);
+    }
+
+    #[test]
+    fn all_day_event_east_of_utc_keeps_its_local_date() {
+        let raw = CalendarItemRaw {
+            uid: Some("uid-paris".to_owned()),
+            is_all_day_event: Some(true),
+            start: Some("2026-11-11T23:00:00Z".to_owned()),
+            end: Some("2026-11-12T23:00:00Z".to_owned()),
+            start_tz: Some("Romance Standard Time".to_owned()),
+            ..CalendarItemRaw::default()
+        };
+        let v = to_jscalendar(&raw).data;
+        assert_eq!(v["start"], "2026-11-12T00:00:00");
+        assert_eq!(v["duration"], "P1D");
+        assert!(v.get("timeZone").is_none());
+    }
+
+    #[test]
+    fn all_day_series_exceptions_match_generated_occurrences() {
+        let raw = CalendarItemRaw {
+            uid: Some("uid-paris-series".to_owned()),
+            is_all_day_event: Some(true),
+            start: Some("2026-11-11T23:00:00Z".to_owned()),
+            end: Some("2026-11-12T23:00:00Z".to_owned()),
+            start_tz: Some("Romance Standard Time".to_owned()),
+            recurrence: Some(crate::exchange_ews::parse::RawRecurrence {
+                pattern: Some(RecurrencePattern::Daily { interval: 1 }),
+                range: Some(RecurrenceRange::Numbered {
+                    start_date: "2026-11-12".to_owned(),
+                    number_of_occurrences: 5,
+                }),
+            }),
+            modified_occurrences: vec![RawOccurrence {
+                item_id: Default::default(),
+                start: Some("2026-11-14T23:00:00Z".to_owned()),
+                end: Some("2026-11-15T23:00:00Z".to_owned()),
+                original_start: Some("2026-11-12T23:00:00Z".to_owned()),
+            }],
+            deleted_occurrences: vec![RawOccurrence {
+                item_id: Default::default(),
+                start: Some("2026-11-13T23:00:00Z".to_owned()),
+                end: None,
+                original_start: None,
+            }],
+            ..CalendarItemRaw::default()
+        };
+        let v = to_jscalendar(&raw).data;
+        assert_eq!(v["start"], "2026-11-12T00:00:00");
+        let over = v["recurrenceOverrides"].as_object().unwrap();
+        assert_eq!(over.len(), 2);
+        assert_eq!(over["2026-11-13T00:00:00"]["start"], "2026-11-15T00:00:00");
+        assert_eq!(over["2026-11-13T00:00:00"]["duration"], "P1D");
+        assert_eq!(over["2026-11-14T00:00:00"]["excluded"], true);
     }
 }

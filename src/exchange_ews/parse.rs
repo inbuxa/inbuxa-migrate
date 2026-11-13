@@ -263,6 +263,7 @@ pub struct FolderEntry {
     pub folder_class: String,
     pub total_count: Option<u32>,
     pub child_count: Option<u32>,
+    pub is_hidden: bool,
 }
 
 impl Default for FolderEntry {
@@ -278,6 +279,7 @@ impl Default for FolderEntry {
             folder_class: String::new(),
             total_count: None,
             child_count: None,
+            is_hidden: false,
         }
     }
 }
@@ -409,6 +411,7 @@ fn parse_folder_element<R: BufRead>(
     let mut buf = Vec::new();
     let mut depth: u32 = 1;
     let mut current: Option<&'static str> = None;
+    let mut in_hidden_ext = false;
     let mut cur = String::new();
     loop {
         buf.clear();
@@ -447,6 +450,14 @@ fn parse_folder_element<R: BufRead>(
                     } else if local.eq_ignore_ascii_case("ChildFolderCount") {
                         current = Some("childCount");
                         cur.clear();
+                    } else if local.eq_ignore_ascii_case("ExtendedFieldURI") {
+                        in_hidden_ext = attr_value(e, "PropertyTag").is_some_and(|tag| {
+                            let tag = tag.trim();
+                            tag.eq_ignore_ascii_case("0x10f4") || tag == "4340"
+                        });
+                    } else if in_hidden_ext && local.eq_ignore_ascii_case("Value") {
+                        current = Some("hidden");
+                        cur.clear();
                     } else {
                         current = None;
                     }
@@ -463,6 +474,7 @@ fn parse_folder_element<R: BufRead>(
                         "folderClass" => entry.folder_class = text.trim().to_owned(),
                         "totalCount" => entry.total_count = text.trim().parse().ok(),
                         "childCount" => entry.child_count = text.trim().parse().ok(),
+                        "hidden" => entry.is_hidden = matches!(text.trim(), "true" | "1"),
                         _ => {}
                     }
                 }
@@ -505,6 +517,7 @@ pub struct ItemEntry {
     pub id: ItemId,
     /// `item:Size` in bytes, when the server returned it.
     pub size: Option<u64>,
+    pub item_class: Option<String>,
 }
 
 pub fn parse_find_item_response(body: &[u8]) -> Result<FindItemResponse, EwsError> {
@@ -513,6 +526,9 @@ pub fn parse_find_item_response(body: &[u8]) -> Result<FindItemResponse, EwsErro
     let mut buf = Vec::new();
     let mut out = FindItemResponse::default();
     let mut in_root = false;
+    let mut depth = ItemDepth::default();
+    let mut items_level: Option<usize> = None;
+    let mut reading_class = false;
     let mut reading_size = false;
     loop {
         buf.clear();
@@ -520,6 +536,7 @@ pub fn parse_find_item_response(body: &[u8]) -> Result<FindItemResponse, EwsErro
         let ns_kind = classify(&ns);
         match ev {
             Event::Start(ref e) | Event::Empty(ref e) => {
+                let level = depth.open(matches!(ev, Event::Empty(_)));
                 let local = e.local_name().as_ref().to_owned();
                 if is(ns_kind, &local, Ns::Messages, "RootFolder") {
                     in_root = true;
@@ -530,22 +547,33 @@ pub fn parse_find_item_response(body: &[u8]) -> Result<FindItemResponse, EwsErro
                         out.more = !matches!(v.trim(), "true" | "1");
                     }
                 } else if in_root && ns_kind == Ns::Types {
-                    if is_item_element(&local) {
+                    if items_level.is_none() && local.eq_ignore_ascii_case("Items") {
+                        items_level = Some(level);
+                    } else if items_level.is_some_and(|items| level == items + 1) {
+                        depth.enter_item(level);
                         out.items.push(ItemEntry {
                             element: local.clone(),
                             id: ItemId::default(),
                             size: None,
+                            item_class: None,
                         });
-                    } else if local.eq_ignore_ascii_case("Size")
-                        && matches!(ev, Event::Start(_))
-                        && !out.items.is_empty()
-                    {
-                        reading_size = true;
-                    } else if local.eq_ignore_ascii_case("ItemId")
-                        && let Some(last) = out.items.last_mut()
-                    {
-                        capture_id_attrs(e, &mut last.id.id, &mut last.id.change_key);
+                    } else if depth.is_item_child(level) {
+                        if local.eq_ignore_ascii_case("ItemId")
+                            && let Some(last) = out.items.last_mut()
+                        {
+                            capture_id_attrs(e, &mut last.id.id, &mut last.id.change_key);
+                        } else if local.eq_ignore_ascii_case("ItemClass") {
+                            reading_class = !matches!(ev, Event::Empty(_));
+                        } else if local.eq_ignore_ascii_case("Size") {
+                            reading_size = !matches!(ev, Event::Empty(_));
+                        }
                     }
+                }
+            }
+            Event::Text(ref t) if reading_class => {
+                if let Some(last) = out.items.last_mut() {
+                    let text: &str = t;
+                    last.item_class = Some(text.trim().to_owned());
                 }
             }
             Event::Text(ref t) if reading_size => {
@@ -555,11 +583,13 @@ pub fn parse_find_item_response(body: &[u8]) -> Result<FindItemResponse, EwsErro
                 }
             }
             Event::End(e) => {
+                depth.close();
+                reading_class = false;
+                reading_size = false;
                 let local = e.local_name().as_ref().to_owned();
                 if local.eq_ignore_ascii_case("RootFolder") {
                     in_root = false;
-                } else if local.eq_ignore_ascii_case("Size") {
-                    reading_size = false;
+                    items_level = None;
                 }
             }
             Event::Eof => break,
@@ -584,18 +614,49 @@ pub(crate) fn entity_to_char(g: &BytesRef) -> Option<char> {
 }
 
 fn is_item_element(local: &str) -> bool {
-    matches!(
-        local.to_ascii_lowercase().as_str(),
-        "message"
-            | "calendaritem"
-            | "contact"
-            | "distributionlist"
-            | "meetingrequest"
-            | "meetingresponse"
-            | "meetingmessage"
-            | "meetingcancellation"
-            | "item"
+    hashify::set_ignore_case!(
+        local.as_bytes(),
+        "Item",
+        "Message",
+        "SharingMessage",
+        "CalendarItem",
+        "Contact",
+        "DistributionList",
+        "MeetingMessage",
+        "MeetingRequest",
+        "MeetingResponse",
+        "MeetingCancellation",
+        "Task",
+        "PostItem",
     )
+}
+
+#[derive(Default)]
+struct ItemDepth {
+    depth: usize,
+    item_level: Option<usize>,
+}
+
+impl ItemDepth {
+    fn open(&mut self, is_empty: bool) -> usize {
+        let level = self.depth + 1;
+        if !is_empty {
+            self.depth = level;
+        }
+        level
+    }
+
+    fn close(&mut self) {
+        self.depth = self.depth.saturating_sub(1);
+    }
+
+    fn enter_item(&mut self, level: usize) {
+        self.item_level = Some(level);
+    }
+
+    fn is_item_child(&self, level: usize) -> bool {
+        self.item_level.is_some_and(|item| level == item + 1)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -816,10 +877,23 @@ pub struct SyncFolderItemsResponse {
 
 #[derive(Debug, Clone)]
 pub enum SyncChange {
-    Create { id: ItemId, element: String },
-    Update { id: ItemId, element: String },
-    Delete { id: ItemId },
-    ReadFlagChange { id: ItemId, is_read: bool },
+    Create {
+        id: ItemId,
+        element: String,
+        item_class: Option<String>,
+    },
+    Update {
+        id: ItemId,
+        element: String,
+        item_class: Option<String>,
+    },
+    Delete {
+        id: ItemId,
+    },
+    ReadFlagChange {
+        id: ItemId,
+        is_read: bool,
+    },
 }
 
 pub fn parse_sync_folder_items_response(body: &[u8]) -> Result<SyncFolderItemsResponse, EwsError> {
@@ -834,6 +908,7 @@ pub fn parse_sync_folder_items_response(body: &[u8]) -> Result<SyncFolderItemsRe
     let mut current_change: Option<SyncChange> = None;
     let mut reading_is_read = false;
     let mut pending_is_read: Option<bool> = None;
+    let mut reading_item_class = false;
     loop {
         buf.clear();
         let (ns, ev) = xml.read_resolved_event_into(&mut buf)?;
@@ -853,11 +928,13 @@ pub fn parse_sync_folder_items_response(body: &[u8]) -> Result<SyncFolderItemsRe
                         current_change = Some(SyncChange::Create {
                             id: ItemId::default(),
                             element: String::new(),
+                            item_class: None,
                         });
                     } else if local.eq_ignore_ascii_case("Update") {
                         current_change = Some(SyncChange::Update {
                             id: ItemId::default(),
                             element: String::new(),
+                            item_class: None,
                         });
                     } else if local.eq_ignore_ascii_case("Delete") {
                         current_change = Some(SyncChange::Delete {
@@ -876,6 +953,8 @@ pub fn parse_sync_folder_items_response(body: &[u8]) -> Result<SyncFolderItemsRe
                         }
                     } else if local.eq_ignore_ascii_case("IsRead") {
                         reading_is_read = true;
+                    } else if local.eq_ignore_ascii_case("ItemClass") {
+                        reading_item_class = !is_empty;
                     } else if is_item_element(&local) {
                         match current_change.as_mut() {
                             Some(SyncChange::Create { element, .. })
@@ -905,6 +984,7 @@ pub fn parse_sync_folder_items_response(body: &[u8]) -> Result<SyncFolderItemsRe
                         }
                     }
                     "isread" => reading_is_read = false,
+                    "itemclass" => reading_item_class = false,
                     "changes" => in_changes = false,
                     _ => {}
                 }
@@ -914,6 +994,14 @@ pub fn parse_sync_folder_items_response(body: &[u8]) -> Result<SyncFolderItemsRe
                 let text = t.into_inner().into_owned();
                 if reading_is_read {
                     pending_is_read = Some(matches!(text.trim(), "true" | "1"));
+                }
+                if reading_item_class
+                    && let Some(
+                        SyncChange::Create { item_class, .. }
+                        | SyncChange::Update { item_class, .. },
+                    ) = current_change.as_mut()
+                {
+                    *item_class = Some(text.trim().to_owned());
                 }
                 match current_text {
                     Some("syncState") => sync_state = text,
@@ -958,7 +1046,6 @@ pub struct MessageItem {
     pub date_time_received: Option<String>,
     pub is_read: Option<bool>,
     pub is_draft: Option<bool>,
-    pub is_read_receipt_requested: Option<bool>,
     pub categories: Vec<String>,
     pub flag_status: Option<String>,
 }
@@ -973,6 +1060,7 @@ pub fn parse_message_item(inner_xml: &str) -> Result<MessageItem, EwsError> {
     let mut category_collecting = false;
     let mut in_flag = false;
     let mut in_flagstatus_ext = false;
+    let mut depth = ItemDepth::default();
     let mut cur = String::new();
     loop {
         buf.clear();
@@ -982,12 +1070,16 @@ pub fn parse_message_item(inner_xml: &str) -> Result<MessageItem, EwsError> {
             Event::Start(ref e) | Event::Empty(ref e) => {
                 let local = e.local_name().as_ref().to_owned();
                 let is_empty = matches!(ev, Event::Empty(_));
+                let level = depth.open(is_empty);
                 if item.element.is_empty() && is_item_element(&local) {
                     item.element = local.clone();
+                    depth.enter_item(level);
                 } else if ns_kind == Ns::Types {
                     cur.clear();
                     if local.eq_ignore_ascii_case("ItemId") {
-                        capture_id_attrs(e, &mut item.id.id, &mut item.id.change_key);
+                        if depth.is_item_child(level) {
+                            capture_id_attrs(e, &mut item.id.id, &mut item.id.change_key);
+                        }
                     } else if local.eq_ignore_ascii_case("ParentFolderId") {
                         let mut pid = String::new();
                         let mut ck = String::new();
@@ -1006,8 +1098,6 @@ pub fn parse_message_item(inner_xml: &str) -> Result<MessageItem, EwsError> {
                         current = Some("isRead");
                     } else if local.eq_ignore_ascii_case("IsDraft") {
                         current = Some("isDraft");
-                    } else if local.eq_ignore_ascii_case("IsReadReceiptRequested") {
-                        current = Some("readReceipt");
                     } else if local.eq_ignore_ascii_case("Categories") {
                         category_collecting = true;
                     } else if category_collecting && local.eq_ignore_ascii_case("String") {
@@ -1032,6 +1122,7 @@ pub fn parse_message_item(inner_xml: &str) -> Result<MessageItem, EwsError> {
                 }
             }
             Event::End(e) => {
+                depth.close();
                 let local = e.local_name().as_ref().to_owned();
                 let lower = local.to_ascii_lowercase();
                 if let Some(field) = current.take() {
@@ -1045,10 +1136,6 @@ pub fn parse_message_item(inner_xml: &str) -> Result<MessageItem, EwsError> {
                         "received" => item.date_time_received = Some(text),
                         "isRead" => item.is_read = Some(matches!(text.trim(), "true" | "1")),
                         "isDraft" => item.is_draft = Some(matches!(text.trim(), "true" | "1")),
-                        "readReceipt" => {
-                            item.is_read_receipt_requested =
-                                Some(matches!(text.trim(), "true" | "1"));
-                        }
                         "category" => item.categories.push(text),
                         "flagStatus" => item.flag_status = Some(text),
                         "flagStatusExt" if text.trim() == "2" => {
@@ -1096,6 +1183,8 @@ pub struct CalendarItemRaw {
     pub original_start: Option<String>,
     pub is_all_day_event: Option<bool>,
     pub legacy_free_busy_status: Option<String>,
+    pub my_response_type: Option<String>,
+    pub sensitivity: Option<String>,
     pub location: Option<String>,
     pub calendar_item_type: Option<CalendarItemType>,
     pub recurrence_id: Option<String>,
@@ -1218,6 +1307,7 @@ pub fn parse_calendar_item(inner_xml: &str) -> Result<CalendarItemRaw, EwsError>
     let mut recurrence_text: Option<&'static str> = None;
     let mut recurrence = RawRecurrence::default();
     let mut pending = PendingRecurrence::default();
+    let mut depth = ItemDepth::default();
     let mut cur = String::new();
 
     loop {
@@ -1228,8 +1318,10 @@ pub fn parse_calendar_item(inner_xml: &str) -> Result<CalendarItemRaw, EwsError>
             Event::Start(ref e) | Event::Empty(ref e) => {
                 let local = e.local_name().as_ref().to_owned();
                 let is_empty = matches!(ev, Event::Empty(_));
+                let level = depth.open(is_empty);
                 if item.element.is_empty() && is_item_element(&local) {
                     item.element = local.clone();
+                    depth.enter_item(level);
                     continue;
                 }
                 if ns_kind != Ns::Types {
@@ -1290,7 +1382,7 @@ pub fn parse_calendar_item(inner_xml: &str) -> Result<CalendarItemRaw, EwsError>
                         if let Some(occ) = deleted_stack.last_mut() {
                             capture_id_attrs(e, &mut occ.item_id.id, &mut occ.item_id.change_key);
                         }
-                    } else {
+                    } else if depth.is_item_child(level) {
                         capture_id_attrs(e, &mut item.id.id, &mut item.id.change_key);
                     }
                 } else if local.eq_ignore_ascii_case("ParentFolderId") {
@@ -1326,6 +1418,10 @@ pub fn parse_calendar_item(inner_xml: &str) -> Result<CalendarItemRaw, EwsError>
                     text_target = Some("isAllDay");
                 } else if local.eq_ignore_ascii_case("LegacyFreeBusyStatus") {
                     text_target = Some("freeBusy");
+                } else if local.eq_ignore_ascii_case("MyResponseType") {
+                    text_target = Some("myResponse");
+                } else if local.eq_ignore_ascii_case("Sensitivity") {
+                    text_target = Some("sensitivity");
                 } else if local.eq_ignore_ascii_case("Location") {
                     text_target = Some("location");
                 } else if local.eq_ignore_ascii_case("CalendarItemType") {
@@ -1424,6 +1520,7 @@ pub fn parse_calendar_item(inner_xml: &str) -> Result<CalendarItemRaw, EwsError>
                 }
             }
             Event::End(e) => {
+                depth.close();
                 let local = e.local_name().as_ref().to_owned();
                 let lower = local.to_ascii_lowercase();
                 if !recurrence_path.is_empty() {
@@ -1448,6 +1545,8 @@ pub fn parse_calendar_item(inner_xml: &str) -> Result<CalendarItemRaw, EwsError>
                             item.is_all_day_event = Some(matches!(text.trim(), "true" | "1"));
                         }
                         "freeBusy" => item.legacy_free_busy_status = Some(text),
+                        "myResponse" => item.my_response_type = Some(text.trim().to_owned()),
+                        "sensitivity" => item.sensitivity = Some(text.trim().to_owned()),
                         "location" => item.location = Some(text),
                         "calendarItemType" => {
                             item.calendar_item_type = CalendarItemType::parse(text.trim());
@@ -1724,6 +1823,7 @@ pub fn parse_contact_item(inner_xml: &str) -> Result<ContactItemRaw, EwsError> {
     let mut in_members = false;
     let mut member_mailbox = false;
     let mut current_member: Option<RawGroupMember> = None;
+    let mut depth = ItemDepth::default();
     let mut cur = String::new();
     loop {
         buf.clear();
@@ -1733,11 +1833,13 @@ pub fn parse_contact_item(inner_xml: &str) -> Result<ContactItemRaw, EwsError> {
             Event::Start(ref e) | Event::Empty(ref e) => {
                 let local = e.local_name().as_ref().to_owned();
                 let is_empty = matches!(ev, Event::Empty(_));
+                let level = depth.open(is_empty);
                 if !seen_root_contact
                     && (local.eq_ignore_ascii_case("Contact")
                         || local.eq_ignore_ascii_case("DistributionList"))
                 {
                     seen_root_contact = true;
+                    depth.enter_item(level);
                     if local.eq_ignore_ascii_case("DistributionList") {
                         item.is_group = true;
                     }
@@ -1748,7 +1850,9 @@ pub fn parse_contact_item(inner_xml: &str) -> Result<ContactItemRaw, EwsError> {
                 }
                 cur.clear();
                 if local.eq_ignore_ascii_case("ItemId") {
-                    capture_id_attrs(e, &mut item.id.id, &mut item.id.change_key);
+                    if depth.is_item_child(level) {
+                        capture_id_attrs(e, &mut item.id.id, &mut item.id.change_key);
+                    }
                 } else if local.eq_ignore_ascii_case("ParentFolderId") {
                     let mut pid = String::new();
                     let mut ck = String::new();
@@ -1868,6 +1972,7 @@ pub fn parse_contact_item(inner_xml: &str) -> Result<ContactItemRaw, EwsError> {
                 }
             }
             Event::End(e) => {
+                depth.close();
                 let local = e.local_name().as_ref().to_owned();
                 let lower = local.to_ascii_lowercase();
                 if let Some(at) = address_text {
@@ -2236,6 +2341,162 @@ mod tests {
         assert_eq!(r.folders[0].parent_id.as_deref(), Some("ROOT"));
         assert_eq!(r.folders[1].element, FolderElement::CalendarFolder);
         assert!(!r.more);
+        assert!(!r.folders[0].is_hidden);
+    }
+
+    #[test]
+    fn find_folder_reads_pr_attr_hidden() {
+        let body = format!(
+            "<m:FindFolderResponse{NS}><m:ResponseMessages><m:FindFolderResponseMessage ResponseClass=\"Success\">\
+             <m:ResponseCode>NoError</m:ResponseCode>\
+             <m:RootFolder TotalItemsInView=\"2\" IncludesLastItemInRange=\"true\">\
+             <t:Folders>\
+             <t:ContactsFolder><t:FolderId Id=\"RC\"/><t:ParentFolderId Id=\"CONTACTS\"/>\
+               <t:FolderClass>IPF.Contact</t:FolderClass><t:DisplayName>Recipient Cache</t:DisplayName>\
+               <t:ExtendedProperty><t:ExtendedFieldURI PropertyTag=\"0x10f4\" PropertyType=\"Boolean\"/>\
+               <t:Value>true</t:Value></t:ExtendedProperty></t:ContactsFolder>\
+             <t:Folder><t:FolderId Id=\"F1\"/><t:ParentFolderId Id=\"ROOT\"/>\
+               <t:FolderClass>IPF.Note</t:FolderClass><t:DisplayName>Inbox</t:DisplayName>\
+               <t:ExtendedProperty><t:ExtendedFieldURI PropertyTag=\"0x10f4\" PropertyType=\"Boolean\"/>\
+               <t:Value>false</t:Value></t:ExtendedProperty></t:Folder>\
+             </t:Folders></m:RootFolder></m:FindFolderResponseMessage></m:ResponseMessages></m:FindFolderResponse>"
+        );
+        let r = parse_find_folder_response(body.as_bytes()).unwrap();
+        assert_eq!(r.folders.len(), 2);
+        assert!(r.folders[0].is_hidden);
+        assert_eq!(r.folders[0].display_name, "Recipient Cache");
+        assert!(!r.folders[1].is_hidden);
+        assert_eq!(r.folders[1].display_name, "Inbox");
+    }
+
+    #[test]
+    fn find_item_reads_item_class() {
+        let body = format!(
+            "<m:FindItemResponse{NS}><m:ResponseMessages><m:FindItemResponseMessage ResponseClass=\"Success\">\
+             <m:ResponseCode>NoError</m:ResponseCode>\
+             <m:RootFolder TotalItemsInView=\"2\" IncludesLastItemInRange=\"true\"><t:Items>\
+             <t:Contact><t:ItemId Id=\"C1\" ChangeKey=\"k\"/><t:ItemClass>IPM.Contact</t:ItemClass></t:Contact>\
+             <t:Message><t:ItemId Id=\"M1\" ChangeKey=\"k\"/></t:Message>\
+             </t:Items></m:RootFolder></m:FindItemResponseMessage></m:ResponseMessages></m:FindItemResponse>"
+        );
+        let r = parse_find_item_response(body.as_bytes()).unwrap();
+        assert_eq!(r.items[0].item_class.as_deref(), Some("IPM.Contact"));
+        assert_eq!(r.items[1].item_class, None);
+    }
+
+    #[test]
+    fn sync_folder_items_reads_item_class() {
+        let body = format!(
+            "<m:SyncFolderItemsResponse{NS}><m:ResponseMessages><m:SyncFolderItemsResponseMessage ResponseClass=\"Success\">\
+             <m:ResponseCode>NoError</m:ResponseCode>\
+             <m:SyncState>AAAA</m:SyncState>\
+             <m:IncludesLastItemInRange>true</m:IncludesLastItemInRange>\
+             <m:Changes>\
+               <t:Create><t:Task><t:ItemId Id=\"T1\"/><t:ItemClass>IPM.Task</t:ItemClass></t:Task></t:Create>\
+               <t:Update><t:Message><t:ItemId Id=\"M1\"/><t:ItemClass>IPM.Note</t:ItemClass></t:Message></t:Update>\
+             </m:Changes></m:SyncFolderItemsResponseMessage></m:ResponseMessages></m:SyncFolderItemsResponse>"
+        );
+        let r = parse_sync_folder_items_response(body.as_bytes()).unwrap();
+        let classes: Vec<Option<&str>> =
+            r.changes
+                .iter()
+                .map(|c| match c {
+                    SyncChange::Create { item_class, .. }
+                    | SyncChange::Update { item_class, .. } => item_class.as_deref(),
+                    _ => None,
+                })
+                .collect();
+        assert_eq!(classes, [Some("IPM.Task"), Some("IPM.Note")]);
+    }
+
+    #[test]
+    fn find_item_opens_an_entry_for_every_item_element() {
+        let body = format!(
+            "<m:FindItemResponse{NS}><m:ResponseMessages><m:FindItemResponseMessage ResponseClass=\"Success\">\
+             <m:ResponseCode>NoError</m:ResponseCode>\
+             <m:RootFolder TotalItemsInView=\"4\" IncludesLastItemInRange=\"true\"><t:Items>\
+             <t:Message><t:ItemId Id=\"M1\" ChangeKey=\"k\"/></t:Message>\
+             <t:Task><t:ItemId Id=\"T1\" ChangeKey=\"k\"/></t:Task>\
+             <t:PostItem><t:ItemId Id=\"P1\" ChangeKey=\"k\"/></t:PostItem>\
+             <t:FutureItem><t:ItemId Id=\"F1\" ChangeKey=\"k\"/></t:FutureItem>\
+             </t:Items></m:RootFolder></m:FindItemResponseMessage></m:ResponseMessages></m:FindItemResponse>"
+        );
+        let r = parse_find_item_response(body.as_bytes()).unwrap();
+        let ids: Vec<(&str, &str)> = r
+            .items
+            .iter()
+            .map(|i| (i.element.as_str(), i.id.id.as_str()))
+            .collect();
+        assert_eq!(
+            ids,
+            [
+                ("Message", "M1"),
+                ("Task", "T1"),
+                ("PostItem", "P1"),
+                ("FutureItem", "F1")
+            ]
+        );
+    }
+
+    #[test]
+    fn find_item_ignores_item_ids_nested_in_mailboxes() {
+        let body = format!(
+            "<m:FindItemResponse{NS}><m:ResponseMessages><m:FindItemResponseMessage ResponseClass=\"Success\">\
+             <m:ResponseCode>NoError</m:ResponseCode>\
+             <m:RootFolder TotalItemsInView=\"1\" IncludesLastItemInRange=\"true\"><t:Items>\
+             <t:CalendarItem><t:ItemId Id=\"E1\" ChangeKey=\"k\"/>\
+             <t:Organizer><t:Mailbox><t:EmailAddress>bob@example.com</t:EmailAddress>\
+             <t:ItemId Id=\"CONTACT-BOB\"/></t:Mailbox></t:Organizer></t:CalendarItem>\
+             </t:Items></m:RootFolder></m:FindItemResponseMessage></m:ResponseMessages></m:FindItemResponse>"
+        );
+        let r = parse_find_item_response(body.as_bytes()).unwrap();
+        assert_eq!(r.items.len(), 1);
+        assert_eq!(r.items[0].id.id, "E1");
+    }
+
+    #[test]
+    fn calendar_item_keeps_its_own_id_when_attendees_carry_contact_ids() {
+        let xml = "<m:Items xmlns:m=\"http://schemas.microsoft.com/exchange/services/2006/messages\" \
+                   xmlns:t=\"http://schemas.microsoft.com/exchange/services/2006/types\">\
+                   <t:CalendarItem><t:ItemId Id=\"EVENT-A\" ChangeKey=\"CK\"/>\
+                   <t:Organizer><t:Mailbox><t:EmailAddress>alice@example.com</t:EmailAddress>\
+                   <t:MailboxType>Contact</t:MailboxType><t:ItemId Id=\"CONTACT-ALICE\"/></t:Mailbox></t:Organizer>\
+                   <t:RequiredAttendees><t:Attendee><t:Mailbox>\
+                   <t:EmailAddress>bob@example.com</t:EmailAddress>\
+                   <t:MailboxType>Contact</t:MailboxType><t:ItemId Id=\"CONTACT-BOB\"/>\
+                   </t:Mailbox></t:Attendee></t:RequiredAttendees></t:CalendarItem></m:Items>";
+        let item = parse_calendar_item(xml).unwrap();
+        assert_eq!(item.id.id, "EVENT-A");
+        assert_eq!(item.id.change_key, "CK");
+        assert_eq!(item.required_attendees.len(), 1);
+    }
+
+    #[test]
+    fn message_item_keeps_its_own_id_when_recipients_carry_contact_ids() {
+        let xml = "<m:Items xmlns:m=\"http://schemas.microsoft.com/exchange/services/2006/messages\" \
+                   xmlns:t=\"http://schemas.microsoft.com/exchange/services/2006/types\">\
+                   <t:MeetingRequest><t:ItemId Id=\"MSG-A\" ChangeKey=\"CK\"/>\
+                   <t:ToRecipients><t:Mailbox><t:EmailAddress>bob@example.com</t:EmailAddress>\
+                   <t:ItemId Id=\"CONTACT-BOB\"/></t:Mailbox></t:ToRecipients></t:MeetingRequest></m:Items>";
+        let item = parse_message_item(xml).unwrap();
+        assert_eq!(item.id.id, "MSG-A");
+        assert_eq!(item.element, "MeetingRequest");
+    }
+
+    #[test]
+    fn distribution_list_keeps_its_own_id_when_members_carry_contact_ids() {
+        let xml = "<m:Items xmlns:m=\"http://schemas.microsoft.com/exchange/services/2006/messages\" \
+                   xmlns:t=\"http://schemas.microsoft.com/exchange/services/2006/types\">\
+                   <t:DistributionList><t:ItemId Id=\"DL-A\" ChangeKey=\"CK\"/>\
+                   <t:DisplayName>Team</t:DisplayName><t:Members><t:Member><t:Mailbox>\
+                   <t:Name>Bob</t:Name><t:EmailAddress>bob@example.com</t:EmailAddress>\
+                   <t:MailboxType>Contact</t:MailboxType><t:ItemId Id=\"CONTACT-BOB\"/>\
+                   </t:Mailbox></t:Member></t:Members></t:DistributionList></m:Items>";
+        let item = parse_contact_item(xml).unwrap();
+        assert_eq!(item.id.id, "DL-A");
+        assert!(item.is_group);
+        assert_eq!(item.members.len(), 1);
+        assert_eq!(item.members[0].email.as_deref(), Some("bob@example.com"));
     }
 
     #[test]
@@ -2364,7 +2625,7 @@ mod tests {
         assert!(!r.more);
         assert_eq!(r.changes.len(), 3);
         match &r.changes[0] {
-            SyncChange::Create { id, element } => {
+            SyncChange::Create { id, element, .. } => {
                 assert_eq!(id.id, "I1");
                 assert_eq!(element, "Message");
             }
@@ -2527,6 +2788,31 @@ mod tests {
         assert_eq!(
             parsed.required_attendees[0].email.as_deref(),
             Some("/o=ExLabs/cn=att")
+        );
+    }
+
+    #[test]
+    fn calendar_parses_own_response_sensitivity_and_attachments() {
+        let body = format!(
+            "<t:CalendarItem{NS}>\
+             <t:ItemId Id=\"C1\" ChangeKey=\"K1\"/>\
+             <t:Sensitivity>Private</t:Sensitivity>\
+             <t:Attachments><t:FileAttachment><t:AttachmentId Id=\"ATT1\"/>\
+               <t:Name>agenda.pdf</t:Name><t:ContentType>application/pdf</t:ContentType>\
+               <t:LastModifiedTime>2020-01-01T00:00:00</t:LastModifiedTime>\
+             </t:FileAttachment></t:Attachments>\
+             <t:LastModifiedTime>2025-06-01T00:00:00Z</t:LastModifiedTime>\
+             <t:MyResponseType>Accept</t:MyResponseType>\
+             </t:CalendarItem>"
+        );
+        let parsed = parse_calendar_item(&body).unwrap();
+        assert_eq!(parsed.sensitivity.as_deref(), Some("Private"));
+        assert_eq!(parsed.my_response_type.as_deref(), Some("Accept"));
+        assert_eq!(parsed.attachments.len(), 1);
+        assert_eq!(parsed.attachments[0].attachment_id, "ATT1");
+        assert_eq!(
+            parsed.last_modified.as_deref(),
+            Some("2025-06-01T00:00:00Z")
         );
     }
 
