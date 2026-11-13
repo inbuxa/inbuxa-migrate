@@ -1,6 +1,6 @@
 CREATE TABLE IF NOT EXISTS sources (
     id            INTEGER PRIMARY KEY,
-    kind          TEXT    NOT NULL CHECK (kind IN ('jmap','imap','caldav','carddav','webdav','managesieve','maildir','exchange_ews','exchange_graph','takeout','files')),
+    kind          TEXT    NOT NULL CHECK (kind IN ('jmap','imap','pop3','caldav','carddav','webdav','managesieve','maildir','exchange_ews','exchange_graph','takeout','files')),
     session_url   TEXT    NOT NULL,
     account_id    TEXT    NOT NULL,
     account_name  TEXT,
@@ -91,6 +91,17 @@ CREATE TABLE IF NOT EXISTS sync_id_maildir (
     unique_id   TEXT    NOT NULL,
     local_id    INTEGER NOT NULL,
     PRIMARY KEY (source_id, type_name, folder, unique_id),
+    UNIQUE (source_id, type_name, local_id)
+);
+
+-- POP3 has no folders: one INBOX per source, messages keyed by their stable
+-- UIDL. The mailbox row uses type_name 'mailbox' with unique_id ''.
+CREATE TABLE IF NOT EXISTS sync_id_pop3 (
+    source_id   INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+    type_name   TEXT    NOT NULL CHECK (type_name IN ('mailbox','email')),
+    unique_id   TEXT    NOT NULL,
+    local_id    INTEGER NOT NULL,
+    PRIMARY KEY (source_id, type_name, unique_id),
     UNIQUE (source_id, type_name, local_id)
 );
 

@@ -8,6 +8,13 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
 ## [Unreleased]
 
 ### Added
+- `import pop3` imports from a POP3 server: the whole maildrop into one INBOX,
+  keyed by each message's UIDL so a later run adds only what arrived since.
+  `pop3s://` is TLS, `pop3://` upgrades with STLS (or sends cleartext with
+  `--allow-cleartext`). It is additive -- a message gone from the server is
+  kept, since POP3 mailboxes are routinely emptied after download -- and it
+  deletes nothing on the server. `--estimate` reports counts and sizes from
+  STAT/UIDL/LIST before any body is fetched.
 - `import fastmail` imports from a Fastmail account over JMAP. It is `import
   jmap` with Fastmail's server and bearer-token sign-in filled in, so it needs
   only an API token; with no `--account-*` it imports the account Fastmail

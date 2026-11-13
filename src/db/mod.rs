@@ -17,6 +17,7 @@ pub mod imap_state;
 pub mod init;
 pub mod maildir_ids;
 pub mod managesieve_ids;
+pub mod pop3_ids;
 pub mod roles;
 pub mod sources;
 pub mod sync_state_jmap;

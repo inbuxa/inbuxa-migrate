@@ -20,6 +20,7 @@ pub mod import_imap;
 pub mod import_jmap;
 pub mod import_maildir;
 pub mod import_managesieve;
+pub mod import_pop3;
 pub mod import_takeout;
 pub mod keys;
 pub mod progress;
