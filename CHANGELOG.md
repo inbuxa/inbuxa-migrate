@@ -15,6 +15,12 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
   kept, since POP3 mailboxes are routinely emptied after download -- and it
   deletes nothing on the server. `--estimate` reports counts and sizes from
   STAT/UIDL/LIST before any body is fetched.
+- `import zoho` and `import zimbra` import mail over IMAP, as presets for
+  `import imap`. `zoho` fills in Zoho's server for your region (`--region`, or
+  `--host` for one not listed); `zimbra` points at your own Zimbra host (IMAPS
+  on 993, or `--starttls` on 143). Both take only an address and password (or
+  an app-specific password), reuse the whole IMAP pipeline, and support
+  `--estimate`.
 - `import fastmail` imports from a Fastmail account over JMAP. It is `import
   jmap` with Fastmail's server and bearer-token sign-in filled in, so it needs
   only an API token; with no `--account-*` it imports the account Fastmail

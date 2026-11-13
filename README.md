@@ -86,6 +86,10 @@ command reference is in [docs/usage.md](docs/usage.md).
 - **POP3** -- mail only, the whole maildrop into one INBOX, keyed by UIDL. It
   deletes nothing on the server and keeps a message even once the server no
   longer has it.
+- **Zoho Mail** -- IMAP, with the server for your region filled in: just your
+  address and password (or an app-specific password). Mail only.
+- **Zimbra** -- IMAP against your Zimbra server: the host, your address and
+  password. Mail only.
 - **CalDAV, CardDAV** -- calendars and events, address books and contacts.
 - **WebDAV** -- a plain file collection, kept as a file tree.
 - **ManageSieve** -- Sieve scripts only, with the active one recorded.
