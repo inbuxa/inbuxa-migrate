@@ -23,6 +23,14 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
   limit, alongside the existing honoring of 429/`Retry-After`. Off by
   default (uncapped).
 
+### Changed
+- The `guide` page shows a real progress bar with a running count and
+  percentage while a preview or move runs, reads the counts from the run's
+  structured progress stream rather than scraping its log, and when a run
+  ends it says how many accounts didn't finish and points at the table. A
+  reload reconnects to a run already in progress -- the guide outlives the
+  browser -- and now says so.
+
 ## [27.1-rc.12]
 
 The twelfth release candidate of the 27.1 series: upstream v1.0.15, keywords

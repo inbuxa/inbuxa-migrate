@@ -93,6 +93,18 @@ fn a_maildir_move_previews_runs_and_reports() {
         "{report}"
     );
     assert_eq!(state["job"]["exit"], 0, "{state}");
+    // The page drives its progress bar and counts off the structured events.
+    let events = state["job"]["events"].as_array().unwrap();
+    let kinds: Vec<&str> = events.iter().filter_map(|e| e["event"].as_str()).collect();
+    assert!(
+        kinds.contains(&"start") && kinds.contains(&"account") && kinds.contains(&"end"),
+        "{events:?}"
+    );
+    let start = events.iter().find(|e| e["event"] == "start").unwrap();
+    assert_eq!(start["accounts"], 1, "{start}");
+    let end = events.iter().find(|e| e["event"] == "end").unwrap();
+    assert_eq!(end["done"], 1, "{end}");
+    assert_eq!(end["unfinished"], 0, "{end}");
 
     // The token came once; an empty one keeps it.
     let mut again = form.clone();
@@ -107,6 +119,16 @@ fn a_maildir_move_previews_runs_and_reports() {
         "{report}"
     );
     assert!(report.contains("ann@example.org,export,failed"), "{report}");
+    // The final `end` event counts the account as unfinished, so the page can
+    // say so and point at the table.
+    let end = state["job"]["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|e| e["event"] == "end")
+        .unwrap();
+    assert_eq!(end["unfinished"], 1, "{end}");
     assert!(
         state["command"]
             .as_str()

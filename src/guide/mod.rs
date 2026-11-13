@@ -95,7 +95,11 @@ struct Job {
     kind: Kind,
     /// Where a directory run writes.
     out: Option<PathBuf>,
+    /// The run's stderr: the human log, newest last.
     lines: Vec<String>,
+    /// The run's stdout under `--progress json`: one object per line
+    /// (`start`, `account`, `end`, …), so the page can show real progress.
+    events: Vec<Value>,
     exit: Option<i32>,
     result: Value,
 }
@@ -346,7 +350,7 @@ impl Guide {
         let job = state.job.as_ref().map(|j| {
             json!({
                 "kind": j.kind.name(), "running": j.exit.is_none(), "exit": j.exit,
-                "lines": j.lines, "result": j.result,
+                "lines": j.lines, "events": j.events, "result": j.result,
             })
         });
         json!({
@@ -513,34 +517,52 @@ impl Guide {
             kind,
             out,
             lines: vec![format!("inbuxa-migrate {}", args.join(" "))],
+            events: Vec::new(),
             exit: None,
             result: Value::Null,
         });
-        let readers: Vec<_> = [
+        // stdout carries the `--progress json` events; stderr the human log.
+        let streams: Vec<(bool, Box<dyn Read + Send>)> = [
             child
                 .stdout
                 .take()
-                .map(|o| Box::new(o) as Box<dyn Read + Send>),
+                .map(|o| (true, Box::new(o) as Box<dyn Read + Send>)),
             child
                 .stderr
                 .take()
-                .map(|e| Box::new(e) as Box<dyn Read + Send>),
+                .map(|e| (false, Box::new(e) as Box<dyn Read + Send>)),
         ]
         .into_iter()
         .flatten()
-        .map(|out| {
-            let me = Arc::clone(self);
-            std::thread::spawn(move || {
-                for line in BufReader::new(out).lines().map_while(Result::ok) {
-                    if let Some(job) = lock(&me.state).job.as_mut() {
-                        job.lines.push(line);
-                        let over = job.lines.len().saturating_sub(KEEP_LINES);
-                        job.lines.drain(..over);
-                    }
-                }
-            })
-        })
         .collect();
+        let readers: Vec<_> = streams
+            .into_iter()
+            .map(|(is_stdout, out)| {
+                let me = Arc::clone(self);
+                std::thread::spawn(move || {
+                    for line in BufReader::new(out).lines().map_while(Result::ok) {
+                        let event = is_stdout
+                            .then(|| serde_json::from_str::<Value>(&line).ok())
+                            .flatten()
+                            .filter(Value::is_object);
+                        if let Some(job) = lock(&me.state).job.as_mut() {
+                            match event {
+                                Some(v) => {
+                                    job.events.push(v);
+                                    let over = job.events.len().saturating_sub(KEEP_LINES);
+                                    job.events.drain(..over);
+                                }
+                                None => {
+                                    job.lines.push(line);
+                                    let over = job.lines.len().saturating_sub(KEEP_LINES);
+                                    job.lines.drain(..over);
+                                }
+                            }
+                        }
+                    }
+                })
+            })
+            .collect();
         let me = Arc::clone(self);
         std::thread::spawn(move || {
             for r in readers {
@@ -604,6 +626,9 @@ impl Guide {
             Kind::FinalPass => args.push("--again".into()),
             _ => {}
         }
+        // Structured progress on stdout, so the page can show a real bar and
+        // name what failed; the human log still comes on stderr.
+        args.extend(["--progress".to_owned(), "json".to_owned()]);
         args.push("work".into());
         Ok((args, f.env(), None))
     }
