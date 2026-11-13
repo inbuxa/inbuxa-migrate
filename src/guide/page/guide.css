@@ -98,6 +98,19 @@ button:disabled { opacity: .5; cursor: default; }
 }
 .job .summary { font-weight: 600; margin: .75rem 0 .25rem; }
 
+.progress { display: flex; align-items: center; gap: .6rem; margin: .25rem 0 .5rem; }
+.progress progress {
+  flex: 1; height: .9rem; appearance: none; -webkit-appearance: none;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--page); overflow: hidden;
+}
+.progress progress::-webkit-progress-bar { background: var(--page); }
+.progress progress::-webkit-progress-value { background: var(--accent); }
+.progress progress::-moz-progress-bar { background: var(--accent); }
+.progress-label {
+  font-variant-numeric: tabular-nums; color: var(--muted);
+  font-size: .85rem; white-space: nowrap;
+}
+
 table { border-collapse: collapse; width: 100%; font-size: .85rem; margin-top: .5rem; }
 th, td { text-align: left; padding: .3rem .5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
 td:last-child { overflow-wrap: anywhere; }

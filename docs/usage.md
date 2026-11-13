@@ -795,15 +795,21 @@ opens it. The page asks five things in turn:
    gets a generated password, written to a file only its owner can read.
 4. **Preview:** a dry run. It signs in for each account, counts what would
    move, and creates nothing.
-5. **Move,** with progress, a report, and a final pass for when the old
-   server stops taking mail.
+5. **Move,** with a progress bar that fills as accounts finish and a running
+   count and percentage beside it, a report, and a final pass for when the
+   old server stops taking mail. When a run ends the page says how many
+   accounts didn't finish and points at the report, whose failed rows are
+   marked.
 
 The guide writes an ordinary plan, `<DIR>/plan.json`, and runs it with
 `migrate`, so a move started in the browser can be finished from a
 terminal. The page shows the command. Everything else goes into `<DIR>`
 too: the archives, the logs, `work/report.csv`, the passwords file, and the
 answers so far, in `guide.json`. A guide started again on the same
-directory picks up where it was.
+directory picks up where it was. The guide process also outlives the
+browser: close the tab or reload while a move runs and the page reconnects
+to it and says so. A move that stopped part way starts again from where
+each account left off -- start it once more, or run the final pass.
 
 - **Only this browser.** The page is served on 127.0.0.1 alone, at an
   address with a random token that changes each start. A request without

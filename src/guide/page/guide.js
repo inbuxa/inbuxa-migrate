@@ -5,6 +5,10 @@
 
 const $ = (id) => document.getElementById(id);
 let polling = false;
+let firstRefresh = true;
+// True when the page opened onto a run that was already going: the guide
+// outlives the browser, so a reload reconnects to it rather than losing it.
+let reconnected = false;
 
 function kind() {
   return document.querySelector("input[name=kind]:checked").value;
@@ -144,16 +148,58 @@ function reportTable(csv) {
   return table;
 }
 
-function summary(job) {
-  const progress = job.lines.map((l) => l.match(/^\[(\d+)\/(\d+)\]/)).filter((m) => m).pop();
-  if (job.running) {
-    return progress ? `Running: ${progress[1]} of ${progress[2]} accounts done.` : "Running…";
+// The accounts done and the total, from the structured progress events
+// (a `start` gives the total, each `account` the running count). Falls back
+// to the `[n/total]` markers the run also prints, for an older binary.
+function progressOf(job) {
+  let done = 0, total = 0;
+  for (const e of job.events || []) {
+    if (e.event === "start") total = e.accounts ?? total;
+    else if (e.event === "account") { done = e.n ?? done; total = e.total ?? total; }
   }
+  if (total === 0) {
+    const m = job.lines.map((l) => l.match(/^\[(\d+)\/(\d+)\]/)).filter((x) => x).pop();
+    if (m) { done = Number(m[1]); total = Number(m[2]); }
+  }
+  return { done, total };
+}
+
+function endEvent(job) {
+  return (job.events || []).filter((e) => e.event === "end").pop();
+}
+
+function progressBar(done, total) {
+  const wrap = document.createElement("div");
+  wrap.className = "progress";
+  const bar = document.createElement("progress");
+  bar.max = total;
+  bar.value = done;
+  const label = document.createElement("span");
+  label.className = "progress-label";
+  label.textContent = `${done} / ${total} · ${Math.floor((done / total) * 100)}%`;
+  wrap.append(bar, label);
+  return wrap;
+}
+
+function summary(job) {
   const preview = job.kind === "preview";
+  if (job.running) {
+    const { done, total } = progressOf(job);
+    return total ? `Running: ${done} of ${total} accounts (${Math.floor((done / total) * 100)}%).` : "Running…";
+  }
   const report = (job.result && job.result.report) || "";
   if (/^\(setup\),[^,]*,failed,/m.test(report)) {
     return (preview ? "Setting up the accounts would fail" : "Setting up the accounts failed") +
       ", so no account was " + (preview ? "previewed" : "moved") + ". The table says why.";
+  }
+  const end = endEvent(job);
+  if (end) {
+    const unfinished = end.unfinished ?? 0, total = (end.done ?? 0) + unfinished;
+    if (unfinished === 0) return preview ? "Nothing in the preview failed." : "Every account moved.";
+    const count = `${unfinished} of ${total} account${total === 1 ? "" : "s"}`;
+    return preview
+      ? `${count} would fail. The table says which, and why.`
+      : `${count} didn't finish. Fix what the table shows and start again: it picks up where each stopped.`;
   }
   if (job.exit === 0) return preview ? "Nothing in the preview failed." : "Every account moved.";
   if (job.exit === 5) {
@@ -164,7 +210,7 @@ function summary(job) {
   return (preview ? "The preview" : "The run") + " stopped. The output says why.";
 }
 
-function renderJob(job) {
+function renderJob(job, reconnected) {
   if (job.kind === "directory") {
     if (job.running) status("accounts-status", true, "Reading the list from the server…");
     else if (job.result && job.result.accounts) {
@@ -174,10 +220,18 @@ function renderJob(job) {
     return;
   }
   const box = $(job.kind === "preview" ? "preview-job" : "run-job");
+  const ok = job.running || job.exit === 0;
+  const parts = [];
+  if (reconnected) parts.push(para("note", "Reconnected to a run already in progress — it kept going while the page was away."));
+  parts.push(para("summary " + (ok ? "" : "bad"), summary(job)));
+  if (job.running) {
+    const { done, total } = progressOf(job);
+    if (total) parts.push(progressBar(done, total));
+  }
   const pre = document.createElement("pre");
   pre.textContent = job.lines.slice(-40).join("\n");
-  const ok = job.running || job.exit === 0;
-  box.replaceChildren(para("summary " + (ok ? "" : "bad"), summary(job)), pre);
+  parts.push(pre);
+  box.replaceChildren(...parts);
   const result = job.result || {};
   if (result.report) box.append(reportTable(result.report), para("note", "Report: " + result.reportPath));
   if (result.passwords) box.append(para("note", "The new accounts' passwords are in " + result.passwords));
@@ -186,13 +240,14 @@ function renderJob(job) {
 
 async function refresh() {
   const s = await call("api/state");
+  const running = s.job && s.job.running;
+  if (firstRefresh) { firstRefresh = false; reconnected = !!running; }
   $("dir").textContent = s.dir;
   $("command").textContent = s.command;
   $("src-secret-kept").hidden = !s.hasSourceSecret;
   $("dst-token-kept").hidden = !s.hasTargetToken;
-  const running = s.job && s.job.running;
   for (const id of ["preview", "run", "final", "read-directory"]) $(id).disabled = running;
-  if (s.job) renderJob(s.job);
+  if (s.job) renderJob(s.job, reconnected && running);
   if (running && !polling) {
     polling = true;
     setTimeout(() => { polling = false; refresh(); }, 1000);
