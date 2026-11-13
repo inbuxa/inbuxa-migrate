@@ -19,7 +19,7 @@ use crate::exchange_ews::retry::{FaultDisposition, classify_fault, classify_http
 use crate::exchange_ews::soap::{EnvelopeOptions, soap_action, wrap_envelope};
 use crate::exchange_ews::types::ServerVersion;
 use crate::jmap::http::{Auth, RetryPolicy, retry_after_header};
-use crate::jmap::retry::{self, Disposition, RateLimitState};
+use crate::jmap::retry::{self, Disposition, Pacer, RateLimitState};
 use crate::logging::{HttpCall, LEVEL_BODIES, LEVEL_DEFAULT, LEVEL_PROGRESS, Logger};
 use crate::net::{CertOverride, tls, with_timeouts};
 
@@ -36,6 +36,7 @@ struct Inner {
     affinity_cookie: Mutex<Option<String>>,
     retry: RetryPolicy,
     rate_limit: RateLimitState,
+    pace: Pacer,
     version: Mutex<ServerVersion>,
     log_level: AtomicU8,
     retries_total: AtomicU64,
@@ -90,6 +91,7 @@ impl EwsClient {
                 affinity_cookie: Mutex::new(None),
                 retry,
                 rate_limit: RateLimitState::new(),
+                pace: Pacer::new(),
                 version: Mutex::new(ServerVersion::Exchange2013Sp1),
                 log_level: AtomicU8::new(LEVEL_DEFAULT),
                 retries_total: AtomicU64::new(0),
@@ -122,6 +124,12 @@ impl EwsClient {
         self.inner
             .log_level
             .store(logger.level(), Ordering::Relaxed);
+    }
+
+    /// Cap how often a request may start, in requests per second, across all
+    /// worker connections. `None` or a non-positive rate leaves it uncapped.
+    pub fn set_max_rps(&self, max_rps: Option<f64>) {
+        self.inner.pace.set_per_second(max_rps);
     }
 
     pub fn logger(&self) -> Logger {
@@ -209,6 +217,7 @@ impl EwsClient {
         let mut attempt: u32 = 0;
         loop {
             self.inner.rate_limit.cooldown().wait();
+            self.inner.pace.wait();
             let sent_version = self.server_version();
             let envelope = self.wrap(body);
             let outcome = self.one_attempt(url, &envelope, action);

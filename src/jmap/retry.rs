@@ -6,7 +6,7 @@
 
 use std::cell::Cell;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::jmap::http::RetryPolicy;
@@ -178,6 +178,69 @@ impl RateLimitState {
     }
 }
 
+/// A proactive request-rate cap, shared across worker threads. It spaces the
+/// *start* of successive requests at least one interval apart, so a known
+/// provider limit (Microsoft Graph, Google) is kept to in the first place,
+/// rather than reactively, after the server returns 429 and the [`Cooldown`]
+/// engages. The interval is set once, after the client is built (like a
+/// logger), and a zero interval disables it so there is no cost on the hot
+/// path when no cap is asked for. Requests in flight are not limited — only
+/// how often a new one may begin — so it composes with the connection count.
+#[derive(Debug, Default)]
+pub struct Pacer {
+    /// Minimum spacing between request starts, in nanoseconds; 0 disables.
+    min_interval_nanos: AtomicU64,
+    next: Mutex<Option<Instant>>,
+}
+
+impl Pacer {
+    pub fn new() -> Pacer {
+        Pacer {
+            min_interval_nanos: AtomicU64::new(0),
+            next: Mutex::new(None),
+        }
+    }
+
+    /// Set the cap from a requests-per-second figure. `None`, zero, or a
+    /// non-finite rate disables pacing. A later call replaces the cap.
+    pub fn set_per_second(&self, max_rps: Option<f64>) {
+        let nanos = match max_rps {
+            Some(rps) if rps.is_finite() && rps > 0.0 => {
+                (1.0e9 / rps).round().clamp(1.0, u64::MAX as f64) as u64
+            }
+            _ => 0,
+        };
+        self.min_interval_nanos.store(nanos, Ordering::Relaxed);
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.min_interval_nanos.load(Ordering::Relaxed) != 0
+    }
+
+    /// Block until this thread may start its request, then reserve its slot.
+    /// Holding the lock across the sleep is deliberate: it serializes the
+    /// reservations, so N waiters leave one interval apart instead of all at
+    /// once. An idle gap does not bank credit — the next request starts now,
+    /// never a burst.
+    pub fn wait(&self) {
+        let nanos = self.min_interval_nanos.load(Ordering::Relaxed);
+        if nanos == 0 {
+            return;
+        }
+        let interval = Duration::from_nanos(nanos);
+        let mut next = self.next.lock().unwrap_or_else(|p| p.into_inner());
+        let now = Instant::now();
+        let start = match *next {
+            Some(t) if t > now => {
+                std::thread::sleep(t - now);
+                t
+            }
+            _ => now,
+        };
+        *next = Some(start + interval);
+    }
+}
+
 pub fn throttle_backoff(policy: &RetryPolicy, level: u32) -> Duration {
     let shift = level.saturating_sub(1).min(20);
     let scaled = THROTTLE_BASE
@@ -339,5 +402,62 @@ mod tests {
         let d = s.on_throttle(&p, Some(Duration::from_millis(750)));
         assert_eq!(d, Duration::from_millis(750));
         assert_eq!(s.level(), 1);
+    }
+
+    #[test]
+    fn pacer_disabled_by_default_and_by_zero_or_none() {
+        let p = Pacer::new();
+        assert!(!p.is_enabled());
+        p.set_per_second(Some(10.0));
+        assert!(p.is_enabled());
+        p.set_per_second(None);
+        assert!(!p.is_enabled());
+        p.set_per_second(Some(0.0));
+        assert!(!p.is_enabled());
+        p.set_per_second(Some(-5.0));
+        assert!(!p.is_enabled());
+        p.set_per_second(Some(f64::NAN));
+        assert!(!p.is_enabled());
+    }
+
+    #[test]
+    fn pacer_spaces_successive_waits_by_the_interval() {
+        // 50 rps -> 20ms apart. The first wait returns at once (no prior
+        // slot); the next few are each spaced ~one interval on.
+        let p = Pacer::new();
+        p.set_per_second(Some(50.0));
+        let start = Instant::now();
+        for _ in 0..4 {
+            p.wait();
+        }
+        // Three gaps of 20ms = 60ms minimum after the immediate first.
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed >= Duration::from_millis(55),
+            "four 50rps waits took {elapsed:?}, expected >= ~60ms"
+        );
+    }
+
+    #[test]
+    fn pacer_wait_is_immediate_when_disabled() {
+        let p = Pacer::new();
+        let start = Instant::now();
+        for _ in 0..1000 {
+            p.wait();
+        }
+        assert!(start.elapsed() < Duration::from_millis(50));
+    }
+
+    #[test]
+    fn pacer_does_not_bank_credit_over_an_idle_gap() {
+        // After a pause longer than the interval, the next request still
+        // starts immediately (one slot), not a burst of pre-earned slots.
+        let p = Pacer::new();
+        p.set_per_second(Some(100.0)); // 10ms
+        p.wait(); // takes a slot now
+        std::thread::sleep(Duration::from_millis(40));
+        let start = Instant::now();
+        p.wait(); // next is in the past -> immediate
+        assert!(start.elapsed() < Duration::from_millis(5));
     }
 }

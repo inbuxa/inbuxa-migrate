@@ -38,6 +38,7 @@ pub struct EwsImportConfig {
     pub mailbox_kind: MailboxKind,
     pub auth: EwsAuth,
     pub ews_connections: usize,
+    pub max_rps: Option<f64>,
     pub getitem_batch: usize,
     /// Byte cap for one GetItem batch; see `sync::batch`.
     pub getitem_batch_bytes: u64,
@@ -85,6 +86,7 @@ pub fn run(common: CommonConfig, config: EwsImportConfig) -> Result<Summary, Err
         certs.narrowed_to(&discovery.ews_url),
     );
     client.set_logger(logger);
+    client.set_max_rps(config.max_rps);
     if matches!(config.mailbox_kind, MailboxKind::PublicFolders) {
         client.set_anchor_mailbox(None);
     } else {

@@ -266,7 +266,8 @@ inbuxa-migrate import exchange-ews \
   (--auth-basic <USER> [--auth-password <PASS>] \
    | --auth-bearer [TOKEN] [--ews-tenant <T> --ews-client-id <ID> \
                             (--ews-device-code | --ews-client-secret <SECRET>)]) \
-  [--ews-connections <1..8>] [--ews-getitem-batch <N>] [--ews-getitem-batch-mib <MIB>] \
+  [--ews-connections <1..8>] [--max-rps <RPS>] \
+  [--ews-getitem-batch <N>] [--ews-getitem-batch-mib <MIB>] \
   [--ews-attachment-batch <N>] \
   [--ews-no-syncfolderitems] \
   <ARCHIVE>
@@ -283,6 +284,11 @@ time. The byte cap applies where Exchange reports each item's size, which it
 does on a full listing; items found through an incremental sync are batched
 by count.
 
+The server throttles on its own, and a 429 or 503 is honored (its
+`Retry-After`, then a shared backoff across the workers). To stay under a
+known limit in the first place, `--max-rps` caps how many requests start per
+second across all connections; leave it off to run uncapped.
+
 For Exchange Online, use `exchange-graph` instead. Microsoft is retiring EWS in Exchange Online: from October 1, 2026 it is blocked unless a tenant administrator sets `EwsEnabled` to `True` and adds the client id to `EwsAllowedAppIDs`, and on April 1, 2027 it is switched off for every tenant. On-premises Exchange Server is not affected.
 
 ### Microsoft Exchange (Graph)
@@ -294,12 +300,17 @@ inbuxa-migrate import exchange-graph \
   [--mailbox-kind primary|archive] \
   [--objects mail,calendar,contacts] \
   [--event-body-format text|html] \
-  [--graph-connections <1..16>] [--top <1..1000>] \
+  [--graph-connections <1..16>] [--max-rps <RPS>] [--top <1..1000>] \
   <ARCHIVE>
 ```
 
 Imports a mailbox from Exchange Online through Microsoft Graph. Without
 `--access-token` it signs in with the interactive device-code flow. `public-folders` is rejected here: Graph does not expose public folders, so they can only be imported with `exchange-ews`, which for Exchange Online is subject to the retirement described above.
+
+Graph throttles per app and per mailbox, and a 429 or 503 is honored (its
+`Retry-After`, then a shared backoff across the workers). `--max-rps` caps how
+many requests start per second across all connections, to stay under a tenant's
+limit before it pushes back; leave it off to run uncapped.
 
 With `--app-only` the app signs in as itself, with its client secret, and
 reads the mailbox `--user` names. No one signs in, so a whole tenant moves

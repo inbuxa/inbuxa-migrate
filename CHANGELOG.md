@@ -17,6 +17,11 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
   `INBUXA_MIGRATE_API_KEY_FILE`, and so on). One trailing newline is ignored;
   setting both a variable and its `_FILE` form is an error. This keeps a
   secret out of both the environment and the command line.
+- `import exchange-graph` and `import exchange-ews` take `--max-rps` to cap
+  how many requests start per second across all worker connections -- a
+  proactive throttle to stay under a rate-limited Microsoft 365 tenant's
+  limit, alongside the existing honoring of 429/`Retry-After`. Off by
+  default (uncapped).
 
 ## [27.1-rc.12]
 

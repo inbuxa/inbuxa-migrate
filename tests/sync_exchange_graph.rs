@@ -292,6 +292,7 @@ fn graph_import_survives_a_full_export_to_stalwart() {
             surfaces: Surfaces::ALL,
             event_body_format: EventBodyFormat::Text,
             graph_connections: 2,
+            max_rps: None,
             top: 100,
             exception_window_years: 5,
             contact_photos: true,

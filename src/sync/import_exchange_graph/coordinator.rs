@@ -50,6 +50,7 @@ pub struct GraphImportConfig {
     pub surfaces: Surfaces,
     pub event_body_format: EventBodyFormat,
     pub graph_connections: usize,
+    pub max_rps: Option<f64>,
     pub top: usize,
     pub exception_window_years: i32,
     pub contact_photos: bool,
@@ -88,6 +89,7 @@ pub fn run(common: CommonConfig, config: GraphImportConfig) -> Result<Summary, E
         CertOverride::for_url(common.allow_invalid_certs, &config.api_base),
     );
     client.set_logger(logger);
+    client.set_max_rps(config.max_rps);
 
     let endpoints = resolve_endpoints(&config, &client)?;
     let principal = resolve_principal(&client, &endpoints, acquired.upn.as_deref())?;
@@ -559,6 +561,7 @@ mod tests {
             surfaces: Surfaces::ALL,
             event_body_format: EventBodyFormat::Text,
             graph_connections: 4,
+            max_rps: None,
             top: 100,
             exception_window_years: 5,
             contact_photos: true,
