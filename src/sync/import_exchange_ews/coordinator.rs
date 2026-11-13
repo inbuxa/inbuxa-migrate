@@ -167,6 +167,8 @@ pub fn run(common: CommonConfig, config: EwsImportConfig) -> Result<Summary, Err
         client: &client,
         url: &session_url,
         source_id,
+        owner_smtp: (!matches!(config.mailbox_kind, MailboxKind::PublicFolders))
+            .then_some(mailbox.as_str()),
         batch_size: config.getitem_batch.max(1),
         batch_bytes: config.getitem_batch_bytes.max(1),
         attachment_batch: config.attachment_batch.max(1),
@@ -242,6 +244,8 @@ fn run_dry(
             client,
             url: session_url,
             source_id,
+            // Only calendar mapping reads it, and the estimate maps nothing.
+            owner_smtp: None,
             batch_size: config.getitem_batch.max(1),
             batch_bytes: config.getitem_batch_bytes.max(1),
             attachment_batch: config.attachment_batch.max(1),
@@ -274,7 +278,7 @@ fn estimate_items(
     let mut counts = TypeCounts::default();
     for cf in folders {
         let fid = &cf.folder.folder_id;
-        let outcome = match items::enumerate_folder(ctx, fid, None) {
+        let mut outcome = match items::enumerate_folder(ctx, fid, None) {
             Ok(o) => o,
             Err(e) => {
                 ctx.logger.warn(&format!(
@@ -285,6 +289,12 @@ fn estimate_items(
                 continue;
             }
         };
+        if item_type == exchange_ews_ids::EMAIL {
+            // As the import does: contacts, appointments and the like in a
+            // mail folder are not stored, so they are not counted either.
+            let skipped = messages::drop_non_mail_items(&mut outcome.items);
+            counts.skipped += skipped.iter().map(|(_, n)| n).sum::<u64>();
+        }
         let local = exchange_ews_ids::items_in_folder(conn, ctx.source_id, item_type, &fid.id)
             .unwrap_or_default();
         let (new, bytes) = items::new_count_and_bytes(&outcome, &local);

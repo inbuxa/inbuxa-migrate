@@ -28,6 +28,39 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
   complete; the checksum shows two archives -- an export and a re-import, say --
   hold the very same mail. It exits 8 when the archive is not sound.
 
+### Changed
+- Upstream v1.0.16 is merged in.
+- Outlook categories become valid JMAP keywords, the same way IMAP
+  `--mime-keywords` does it (`Catégorie Rouge` is `cat_gorie_rouge`), and
+  duplicates are dropped. Before, only the case was lowered, so `Project
+  review` gave a keyword JMAP doesn't allow. A read-receipt request no longer
+  adds `$notified`. This is for EWS and Graph.
+
+### Fixed
+- Exchange EWS and Graph: all-day events and birthdays landed a day early
+  east of UTC. The date is now taken in the event's time zone. Outlook's
+  "no date" (year 4500 or later) is no longer imported as a real date.
+  Archives imported before this keep the wrong dates until the item changes
+  at the source, so re-import into a fresh archive to correct them.
+- Exchange EWS: Exchange 2019 servers were asked for a schema version that
+  doesn't exist, so every call was refused once and sent again.
+- Exchange EWS: hidden system folders (`Recipient Cache`, `GAL Contacts`)
+  were imported as mailboxes and address books. They are skipped now.
+- Exchange EWS: a mail folder under a calendar or contacts folder could stop
+  a later run with a FOREIGN KEY error. It is filed under its nearest mail
+  folder on every run.
+- Exchange EWS: an attendee's or contact's ItemId could replace the item's
+  own, giving `UNIQUE constraint failed`. Tasks and posts in a listing shifted
+  the ids around them. One item that failed to parse or store stopped the rest
+  of its folder; it is now logged and counted, and the folder goes on.
+- Exchange EWS: event attachments, your own response to a meeting and an
+  event's private flag were never fetched. They are imported now.
+- Exchange EWS: a folder with no class (Outlook's `(This computer only)`
+  contacts) was always taken for mail, and contacts, appointments and tasks
+  in a mail folder such as Deleted Items were stored as email. A class-less
+  folder now takes its kind from its items, and mail folders skip non-mail
+  items, also in `--estimate`.
+
 ## [27.1-rc.13]
 
 The thirteenth release candidate of the 27.1 series: shell completions and a

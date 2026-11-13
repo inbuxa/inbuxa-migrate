@@ -64,6 +64,7 @@ pub fn find_folder_body(parent: FolderRef<'_>, traversal: Traversal) -> String {
     out.push_str("<t:FieldURI FieldURI=\"folder:ParentFolderId\"/>");
     out.push_str("<t:FieldURI FieldURI=\"folder:TotalCount\"/>");
     out.push_str("<t:FieldURI FieldURI=\"folder:ChildFolderCount\"/>");
+    out.push_str("<t:ExtendedFieldURI PropertyTag=\"0x10F4\" PropertyType=\"Boolean\"/>");
     out.push_str("</t:AdditionalProperties>");
     out.push_str("</m:FolderShape><m:ParentFolderIds>");
     write_folder_ref(&mut out, parent);
@@ -85,6 +86,9 @@ pub fn get_folder_body(folders: &[FolderRef<'_>], shape: FolderShape) -> String 
     out
 }
 
+const ITEM_CLASS_PROPERTY: &str =
+    "<t:AdditionalProperties><t:FieldURI FieldURI=\"item:ItemClass\"/></t:AdditionalProperties>";
+
 pub fn find_item_body(
     parent: FolderRef<'_>,
     traversal: Traversal,
@@ -94,10 +98,12 @@ pub fn find_item_body(
     let mut out = String::with_capacity(512);
     out.push_str("<m:FindItem Traversal=\"");
     out.push_str(traversal.as_str());
-    // item:Size lets GetItem batches be split by bytes as well as by count.
+    // item:ItemClass decides what a class-less folder holds; item:Size lets
+    // GetItem batches be split by bytes as well as by count.
     out.push_str(
         "\"><m:ItemShape><t:BaseShape>IdOnly</t:BaseShape>\
-         <t:AdditionalProperties><t:FieldURI FieldURI=\"item:Size\"/></t:AdditionalProperties>\
+         <t:AdditionalProperties><t:FieldURI FieldURI=\"item:ItemClass\"/>\
+         <t:FieldURI FieldURI=\"item:Size\"/></t:AdditionalProperties>\
          </m:ItemShape>",
     );
     out.push_str("<m:IndexedPageItemView MaxEntriesReturned=\"");
@@ -124,6 +130,7 @@ pub fn sync_folder_items_body(
     let mut out = String::with_capacity(512);
     out.push_str("<m:SyncFolderItems><m:ItemShape>");
     out.push_str("<t:BaseShape>IdOnly</t:BaseShape>");
+    out.push_str(ITEM_CLASS_PROPERTY);
     out.push_str("</m:ItemShape><m:SyncFolderId>");
     write_folder_id_element(&mut out, folder);
     out.push_str("</m:SyncFolderId>");
@@ -168,7 +175,6 @@ pub fn get_item_body(shape: ItemShape, ids: &[ItemId], version: ServerVersion) -
                     "<t:ExtendedFieldURI PropertyTag=\"0x1090\" PropertyType=\"Integer\"/>",
                 );
             }
-            out.push_str("<t:FieldURI FieldURI=\"message:IsReadReceiptRequested\"/>");
             out.push_str("</t:AdditionalProperties>");
         }
         ItemShape::CalendarItem => {
@@ -216,6 +222,7 @@ const CALENDAR_FIELDS: &[&str] = &[
     "calendar:IsOnlineMeeting",
     "calendar:MeetingWorkspaceUrl",
     "calendar:NetShowUrl",
+    "calendar:MyResponseType",
     "item:ReminderIsSet",
     "item:ReminderMinutesBeforeStart",
     "calendar:Recurrence",
@@ -225,6 +232,8 @@ const CALENDAR_FIELDS: &[&str] = &[
     "item:Subject",
     "item:Body",
     "item:Categories",
+    "item:Sensitivity",
+    "item:Attachments",
     "item:DateTimeCreated",
     "item:LastModifiedTime",
     "item:ParentFolderId",
@@ -302,6 +311,7 @@ mod tests {
         assert!(body.contains("folder:FolderClass"));
         assert!(body.contains("folder:DisplayName"));
         assert!(body.contains("folder:ParentFolderId"));
+        assert!(body.contains("PropertyTag=\"0x10F4\" PropertyType=\"Boolean\""));
     }
 
     #[test]
@@ -318,7 +328,7 @@ mod tests {
         let folder = FolderId::new("FID", "FCK");
         let body = find_item_body(FolderRef::Concrete(&folder), Traversal::Shallow, 0, 50);
         assert!(body.contains(
-            "<t:BaseShape>IdOnly</t:BaseShape><t:AdditionalProperties><t:FieldURI FieldURI=\"item:Size\"/></t:AdditionalProperties></m:ItemShape>"
+            "<t:FieldURI FieldURI=\"item:Size\"/></t:AdditionalProperties></m:ItemShape>"
         ));
     }
 
@@ -395,7 +405,6 @@ mod tests {
             "the extended-property fallback is only used when item:Flag is unavailable"
         );
         assert!(legacy.contains("item:DateTimeReceived"));
-        assert!(legacy.contains("message:IsReadReceiptRequested"));
         assert!(
             modern.contains("\"message:IsRead\"") && !modern.contains("\"item:IsRead\""),
             "IsRead is a MessageType property; its FieldURI is message:IsRead"
@@ -434,6 +443,16 @@ mod tests {
         assert!(body.contains("<m:SyncState>STATE</m:SyncState>"));
         assert!(body.contains("<m:MaxChangesReturned>512</m:MaxChangesReturned>"));
         assert!(body.contains("<m:SyncScope>NormalItems</m:SyncScope>"));
+        assert!(body.contains("FieldURI=\"item:ItemClass\""));
+    }
+
+    #[test]
+    fn find_item_requests_item_class() {
+        let folder = FolderId::new("FID", "FCK");
+        let body = find_item_body(FolderRef::Concrete(&folder), Traversal::Shallow, 0, 10);
+        assert!(body.contains(
+            "<t:BaseShape>IdOnly</t:BaseShape><t:AdditionalProperties><t:FieldURI FieldURI=\"item:ItemClass\"/>"
+        ));
     }
 
     #[test]
@@ -446,6 +465,22 @@ mod tests {
             !legacy.contains("SyncScope"),
             "SyncScope is an Exchange 2010 addition"
         );
+    }
+
+    #[test]
+    fn calendar_shape_requests_attachments_own_response_and_sensitivity() {
+        let body = get_item_body(
+            ItemShape::CalendarItem,
+            &[ItemId::new("X", "")],
+            ServerVersion::Exchange2007,
+        );
+        for field in [
+            "item:Attachments",
+            "calendar:MyResponseType",
+            "item:Sensitivity",
+        ] {
+            assert!(body.contains(&format!("\"{field}\"")), "{field}");
+        }
     }
 
     #[test]

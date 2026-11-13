@@ -5,6 +5,8 @@
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
 
+use std::fmt::Write;
+
 use encodify::base64::LENIENT;
 use rusqlite::{Connection, params};
 use serde_json::{Value, json};
@@ -12,16 +14,17 @@ use serde_json::{Value, json};
 use crate::db::{blobs, exchange_ews_ids};
 use crate::error::Error;
 use crate::exchange_ews::parse::{MessageItem, parse_message_item};
-use crate::exchange_ews::types::ItemId;
+use crate::exchange_ews::types::{ItemId, is_non_mail_item_class};
 use crate::exchange_ews::xml::ItemShape;
-use crate::logging::LEVEL_PROGRESS;
+use crate::logging::{LEVEL_DEFAULT, LEVEL_PROGRESS};
 use crate::sync::TypeCounts;
-use crate::sync::emailmeta::email_meta_from_blob;
+use crate::sync::emailmeta::{email_meta_from_blob, jmap_keyword};
 use crate::sync::keys::index_to_json;
 
 use super::folders::FolderPlan;
 use super::items::{
-    EnumerationMode, ItemRunCtx, delete_vanished, enumerate_folder, for_each_fetched_item, plan_for,
+    EnumeratedItem, EnumerationMode, ItemRunCtx, delete_vanished, enumerate_folder,
+    for_each_fetched_item, plan_for,
 };
 
 pub fn reconcile_all(
@@ -76,7 +79,22 @@ fn reconcile_one_folder(
         &folder.id,
     )
     .map_err(|e| Error::Partial(e.to_string()))?;
-    let outcome = enumerate_folder(ctx, folder, prior.as_deref()).map_err(Error::from)?;
+    let mut outcome = enumerate_folder(ctx, folder, prior.as_deref()).map_err(Error::from)?;
+    let skipped = drop_non_mail_items(&mut outcome.items);
+    if !skipped.is_empty() {
+        let total: u64 = skipped.iter().map(|(_, n)| n).sum();
+        counts.skipped += total;
+        if ctx.logger.enabled(LEVEL_DEFAULT) {
+            let mut summary = String::new();
+            for (class, n) in &skipped {
+                if !summary.is_empty() {
+                    summary.push_str(", ");
+                }
+                let _ = write!(summary, "{class}={n}");
+            }
+            eprintln!("EWS folder {folder_name:?}: skipped {total} non-mail items ({summary})");
+        }
+    }
     let local =
         exchange_ews_ids::items_in_folder(conn, ctx.source_id, exchange_ews_ids::EMAIL, &folder.id)
             .map_err(|e| Error::Partial(e.to_string()))?;
@@ -113,7 +131,8 @@ fn reconcile_one_folder(
                     }
                     return Ok(());
                 }
-                let parsed = parse_message_item(&msg.inner_xml).map_err(Error::from)?;
+                let parsed = parse_message_item(&msg.inner_xml)
+                    .map_err(|e| Error::Partial(format!("unparsable item: {e}")))?;
                 if parsed.id.id.is_empty() {
                     counts.failed += 1;
                     return Ok(());
@@ -247,6 +266,30 @@ fn apply_message(
     Ok(())
 }
 
+/// Drops the non-mail items a mail folder can hold (contacts, appointments,
+/// tasks, notes, journal entries) and returns how many of each class went.
+pub(super) fn drop_non_mail_items(items: &mut Vec<EnumeratedItem>) -> Vec<(String, u64)> {
+    let mut skipped: Vec<(String, u64)> = Vec::new();
+    items.retain(|item| {
+        let Some(class) = item
+            .item_class
+            .as_deref()
+            .filter(|c| is_non_mail_item_class(c))
+        else {
+            return true;
+        };
+        match skipped
+            .iter_mut()
+            .find(|(c, _)| c.eq_ignore_ascii_case(class))
+        {
+            Some((_, n)) => *n += 1,
+            None => skipped.push((class.to_owned(), 1)),
+        }
+        false
+    });
+    skipped
+}
+
 fn keyword_array(item: &MessageItem) -> String {
     let mut kws: Vec<String> = Vec::new();
     if matches!(item.is_read, Some(true)) {
@@ -255,14 +298,13 @@ fn keyword_array(item: &MessageItem) -> String {
     if matches!(item.is_draft, Some(true)) {
         kws.push("$draft".to_owned());
     }
-    if matches!(item.is_read_receipt_requested, Some(true)) {
-        kws.push("$notified".to_owned());
-    }
     if matches!(item.flag_status.as_deref(), Some("Flagged")) {
         kws.push("$flagged".to_owned());
     }
-    for cat in &item.categories {
-        kws.push(cat.to_ascii_lowercase());
+    for keyword in item.categories.iter().filter_map(|cat| jmap_keyword(cat)) {
+        if !kws.contains(&keyword) {
+            kws.push(keyword);
+        }
     }
     let value: Value = Value::Array(kws.into_iter().map(Value::String).collect());
     value.to_string()
@@ -270,8 +312,37 @@ fn keyword_array(item: &MessageItem) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::keyword_array;
+    use super::{drop_non_mail_items, keyword_array};
     use crate::exchange_ews::parse::MessageItem;
+    use crate::exchange_ews::types::ItemId;
+    use crate::sync::import_exchange_ews::items::EnumeratedItem;
+
+    #[test]
+    fn non_mail_items_are_dropped_and_counted_per_class() {
+        let mut items: Vec<EnumeratedItem> = [
+            ("M1", Some("IPM.Note")),
+            ("C1", Some("IPM.Contact")),
+            ("R1", Some("IPM.Schedule.Meeting.Request")),
+            ("C2", Some("IPM.Contact")),
+            ("T1", Some("IPM.Task")),
+            ("P1", Some("IPM.Post")),
+            ("X1", None),
+        ]
+        .into_iter()
+        .map(|(id, class)| EnumeratedItem {
+            element: "Item".to_owned(),
+            id: ItemId::new(id, "K"),
+            item_class: class.map(str::to_owned),
+        })
+        .collect();
+        let skipped = drop_non_mail_items(&mut items);
+        let kept: Vec<&str> = items.iter().map(|i| i.id.id.as_str()).collect();
+        assert_eq!(kept, ["M1", "R1", "P1", "X1"]);
+        assert_eq!(
+            skipped,
+            [("IPM.Contact".to_owned(), 2), ("IPM.Task".to_owned(), 1)]
+        );
+    }
 
     #[test]
     fn read_draft_flagged_and_categories_map_to_jmap_keywords() {
@@ -283,9 +354,23 @@ mod tests {
             ..MessageItem::default()
         };
         let kws = keyword_array(&item);
-        for expected in ["$seen", "$draft", "$flagged", "red category", "vip"] {
+        for expected in ["$seen", "$draft", "$flagged", "red_category", "vip"] {
             assert!(kws.contains(expected), "missing {expected} in {kws}");
         }
+    }
+
+    #[test]
+    fn categories_become_valid_deduplicated_keywords() {
+        let item = MessageItem {
+            categories: vec![
+                "Catégorie Rouge".to_owned(),
+                "catégorie rouge".to_owned(),
+                "$seen".to_owned(),
+                "(  )".to_owned(),
+            ],
+            ..MessageItem::default()
+        };
+        assert_eq!(keyword_array(&item), r#"["cat_gorie_rouge","seen"]"#);
     }
 
     #[test]

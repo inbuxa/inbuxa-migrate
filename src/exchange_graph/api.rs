@@ -26,7 +26,7 @@ pub const EXCEPTION_WINDOW_MAX_DAYS: i64 = 1825;
 pub const DRIVE_ITEM_SELECT: &str =
     "id,name,size,folder,file,package,remoteItem,createdDateTime,lastModifiedDateTime";
 
-pub const MESSAGE_STATE_SELECT: &str = "id,isRead,isDraft,isReadReceiptRequested,flag,categories";
+pub const MESSAGE_STATE_SELECT: &str = "id,isRead,isDraft,flag,categories";
 
 #[derive(Debug, Clone)]
 pub struct Endpoints {
@@ -163,7 +163,7 @@ impl Endpoints {
         format!(
             "{}/calendars/{}/calendarView?startDateTime={window_start}&endDateTime={window_end}\
              &$filter=type%20eq%20%27occurrence%27&$top={top}\
-             &$select=id,type,seriesMasterId,start",
+             &$select=id,type,seriesMasterId,start,originalStartTimeZone",
             self.me_or_user(),
             url_escape(calendar_id)
         )

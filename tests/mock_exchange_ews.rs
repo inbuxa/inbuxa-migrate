@@ -497,14 +497,17 @@ fn coordinator_diff_classifies_new_vanished_changed_unchanged() {
         EnumeratedItem {
             element: "Message".into(),
             id: ItemId::new("A", "ck-1"),
+            item_class: None,
         },
         EnumeratedItem {
             element: "Message".into(),
             id: ItemId::new("B", "ck-2"),
+            item_class: None,
         },
         EnumeratedItem {
             element: "Message".into(),
             id: ItemId::new("C", "ck-1"),
+            item_class: None,
         },
     ];
     let local = vec![
@@ -547,14 +550,17 @@ fn estimate_counts_new_items_and_sums_their_sizes() {
         EnumeratedItem {
             element: "Message".into(),
             id: ItemId::new("A", "ck-1"),
+            item_class: None,
         },
         EnumeratedItem {
             element: "Message".into(),
             id: ItemId::new("B", "ck-1"),
+            item_class: None,
         },
         EnumeratedItem {
             element: "Message".into(),
             id: ItemId::new("C", "ck-1"),
+            item_class: None,
         },
     ];
     let mut sizes = HashMap::new();
@@ -931,6 +937,7 @@ fn for_each_fetched_item_streams_every_id_across_windows() {
         client: &c,
         url: &url,
         source_id: 1,
+        owner_smtp: None,
         batch_size: 1,
         batch_bytes: inbuxa_migrate::sync::batch::DEFAULT_BATCH_BYTES,
         attachment_batch: 1,
@@ -982,6 +989,7 @@ fn getitem_batches_are_split_by_bytes_when_sizes_are_known() {
         client: &c,
         url: &url,
         source_id: 1,
+        owner_smtp: None,
         batch_size: 10,
         batch_bytes: 30,
         attachment_batch: 1,
