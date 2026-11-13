@@ -16,6 +16,7 @@ contacts, identities, Sieve scripts and files.
 
     inbuxa-migrate import imap … alice.sqlite    an account into an archive
     inbuxa-migrate inspect alice.sqlite          what landed
+    inbuxa-migrate reconcile alice.sqlite        folder by folder, is it all there
     inbuxa-migrate export … alice.sqlite         the archive into inbuxa
     inbuxa-migrate export-files alice.sqlite out the archive as plain files
     inbuxa-migrate import files out alice.sqlite those files read back, manifest and all
@@ -43,7 +44,12 @@ nothing. It reports sizes for `imap`, `maildir`, `caldav`, `carddav`, Exchange
 contacts that are new). For `jmap` and Microsoft Graph it reports counts only:
 the enumeration gives the new-object count for free, but a size there would
 cost a body fetch per object. The remaining sources fall back to a plain
-dry-run. `inspect` reads an archive and changes nothing.
+dry-run. `inspect` reads an archive and changes nothing, and `reconcile`
+reads it folder by folder: a count and a content checksum for each, a checksum
+for the whole, and a check that every message resolves to stored content and a
+real folder. Compare the per-folder counts against the old mailbox to prove the
+move was complete, and the checksum shows two archives hold the very same mail.
+It exits non-zero if a message is missing its content or its folder.
 
 The archive is also a backup. Import on a schedule, keep the file, and
 restore it later with `export`. An archive remembers which account filled it

@@ -10,7 +10,9 @@ use clap::{CommandFactory, Parser};
 use inbuxa_migrate::cli::{Action, Cli};
 use inbuxa_migrate::error::Error;
 use inbuxa_migrate::sync::{self, RunOutcome, Summary};
-use inbuxa_migrate::{export_directory, export_files, guide, import_directory, inspect, migrate};
+use inbuxa_migrate::{
+    export_directory, export_files, guide, import_directory, inspect, migrate, reconcile,
+};
 
 fn main() {
     let code = run();
@@ -199,6 +201,16 @@ fn run() -> i32 {
         Action::Inspect(config) => {
             return match inspect::run(config) {
                 Ok(()) => 0,
+                Err(err) => fail(&err),
+            };
+        }
+        Action::Reconcile(config) => {
+            return match reconcile::run(config) {
+                // A sound archive exits 0; one with integrity problems exits 8,
+                // past the 1-7 the other errors use, so a script can tell a
+                // reconciliation failure from any other.
+                Ok(true) => 0,
+                Ok(false) => 8,
                 Err(err) => fail(&err),
             };
         }

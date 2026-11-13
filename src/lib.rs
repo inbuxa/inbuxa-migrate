@@ -25,6 +25,7 @@ pub mod managesieve;
 pub mod migrate;
 pub mod net;
 pub mod profile;
+pub mod reconcile;
 pub mod secret;
 pub mod sync;
 pub mod types;

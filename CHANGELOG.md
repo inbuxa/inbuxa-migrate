@@ -13,6 +13,13 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
   only an API token; with no `--account-*` it imports the account Fastmail
   marks primary. Mail always; calendars and contacts where that account
   advertises them.
+- `reconcile <archive>` reads an archive folder by folder and reports it: a
+  message count and a content checksum for each folder, totals and a checksum
+  for the whole, and an integrity check that every message resolves to stored
+  content and a real folder. It is read-only and touches no network. Compare
+  the per-folder counts against the source mailbox to prove a migration was
+  complete; the checksum shows two archives -- an export and a re-import, say --
+  hold the very same mail. It exits 8 when the archive is not sound.
 
 ## [27.1-rc.13]
 
