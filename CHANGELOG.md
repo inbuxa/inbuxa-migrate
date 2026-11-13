@@ -7,6 +7,12 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
 
 ## [Unreleased]
 
+## [27.1-rc.13]
+
+The thirteenth release candidate of the 27.1 series: shell completions and a
+man page, secrets read from files, a Microsoft 365 request throttle, a shared
+server profile, and a guide that shows real progress.
+
 ### Added
 - `completions <shell>` prints a shell completion script (bash, zsh, fish,
   elvish or powershell) to standard output, and `man` prints a man page in
