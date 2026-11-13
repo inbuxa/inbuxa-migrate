@@ -23,6 +23,7 @@ use crate::jmap::account::AccountSelector;
 use crate::jmap::http::Auth;
 use crate::logging::Logger;
 use crate::migrate::MigrateConfig;
+use crate::profile::Profile;
 use crate::secret;
 use crate::sync::export_dav::ExportDavConfig;
 use crate::sync::export_imap::ExportImapConfig;
@@ -215,11 +216,22 @@ struct GlobalArgs {
 }
 
 #[derive(Args)]
-#[command(group(clap::ArgGroup::new("auth").required(true).args(["auth_basic", "auth_bearer"])))]
+#[command(group(clap::ArgGroup::new("auth").args(["auth_basic", "auth_bearer"])))]
 #[command(group(clap::ArgGroup::new("account").required(true).args(["account_id", "account_name"])))]
 struct JmapImportArgs {
-    #[arg(long, value_name = "URL", help = "Base URL or full JMAP session URL")]
-    url: String,
+    #[arg(
+        long,
+        value_name = "URL",
+        help = "The target inbuxa server: base URL or full JMAP session URL (else the profile's url)"
+    )]
+    url: Option<String>,
+
+    #[arg(
+        long,
+        value_name = "NAME",
+        help = "Profile in ~/.config/inbuxa/config.toml (or $INBUXA_PROFILE) for the url and API key not given here"
+    )]
+    profile: Option<String>,
 
     #[arg(
         long,
@@ -701,9 +713,16 @@ struct ImportDirectoryArgs {
     #[arg(
         long,
         value_name = "URL",
-        help = "The inbuxa server: base URL or full JMAP session URL"
+        help = "The inbuxa server: base URL or full JMAP session URL (else the profile's url)"
     )]
-    url: String,
+    url: Option<String>,
+
+    #[arg(
+        long,
+        value_name = "NAME",
+        help = "Profile in ~/.config/inbuxa/config.toml (or $INBUXA_PROFILE) for the url and API key not given here"
+    )]
+    profile: Option<String>,
 
     #[arg(
         long,
@@ -1420,10 +1439,17 @@ fn resolve_dav_auth(
 
 fn resolve_jmap_import(args: JmapImportArgs) -> Result<Action, Error> {
     let common = common_config(&args.global, args.archive);
+    let profile = Profile::load(args.profile.as_deref())?;
+    let url = args.url.or(profile.url).ok_or_else(|| {
+        Error::Usage(
+            "no target server: pass --url, or name one in ~/.config/inbuxa/config.toml".to_owned(),
+        )
+    })?;
     let auth = resolve_auth(
         args.auth_basic.as_deref(),
         args.auth_password.as_deref(),
         args.auth_bearer.as_ref(),
+        profile.api_key.as_deref(),
     )?;
     let account = resolve_account(args.account_id, args.account_name)?;
     let objects = args.objects.as_deref().map(parse_object_list).transpose()?;
@@ -1433,7 +1459,7 @@ fn resolve_jmap_import(args: JmapImportArgs) -> Result<Action, Error> {
         ImportConfig {
             connect: ConnectConfig {
                 stay_on_url: args.stay_on_url,
-                url: args.url,
+                url,
                 auth,
                 account,
             },
@@ -1557,6 +1583,7 @@ fn resolve_export(args: ExportArgs) -> Result<Action, Error> {
         args.auth_basic.as_deref(),
         args.auth_password.as_deref(),
         args.auth_bearer.as_ref(),
+        None,
     )?;
     let account = resolve_account(args.account_id, args.account_name)?;
     let objects = args.objects.as_deref().map(parse_object_list).transpose()?;
@@ -1647,6 +1674,7 @@ fn resolve_export_directory(args: ExportDirectoryArgs) -> Result<Action, Error> 
         args.auth_basic.as_deref(),
         args.auth_password.as_deref(),
         args.auth_bearer.as_ref(),
+        None,
     )?;
     Ok(Action::ExportDirectory(ExportDirectoryConfig {
         stay_on_url: args.stay_on_url,
@@ -1662,14 +1690,21 @@ fn resolve_export_directory(args: ExportDirectoryArgs) -> Result<Action, Error> 
 }
 
 fn resolve_import_directory(args: ImportDirectoryArgs) -> Result<Action, Error> {
+    let profile = Profile::load(args.profile.as_deref())?;
+    let url = args.url.or(profile.url).ok_or_else(|| {
+        Error::Usage(
+            "no inbuxa server: pass --url, or name one in ~/.config/inbuxa/config.toml".to_owned(),
+        )
+    })?;
     let auth = resolve_auth(
         args.auth_basic.as_deref(),
         args.auth_password.as_deref(),
         args.auth_bearer.as_ref(),
+        profile.api_key.as_deref(),
     )?;
     Ok(Action::ImportDirectory(ImportDirectoryConfig {
         stay_on_url: args.stay_on_url,
-        url: args.url,
+        url,
         auth,
         dir: args.dir,
         domains: args.domain,
@@ -2236,6 +2271,7 @@ fn resolve_auth(
     auth_basic: Option<&str>,
     auth_password: Option<&str>,
     auth_bearer: Option<&Option<String>>,
+    profile_key: Option<&str>,
 ) -> Result<Auth, Error> {
     if let Some(user) = auth_basic {
         let password = secret::resolve(auth_password, "INBUXA_MIGRATE_PASSWORD", "password")?;
@@ -2249,12 +2285,15 @@ fn resolve_auth(
             "--auth-password is only valid together with --auth-basic".to_owned(),
         ));
     }
-    let bearer = auth_bearer.ok_or_else(|| {
-        Error::Usage("exactly one of --auth-basic / --auth-bearer is required".to_owned())
-    })?;
-    let token = secret::resolve_any(
-        bearer.as_deref(),
+    // No --auth-basic, so a bearer token: from --auth-bearer's value, the
+    // environment, the profile, or a prompt. --auth-bearer may be given with
+    // no value, and need not be given at all when a profile or the
+    // environment supplies the key.
+    let bearer_flag = auth_bearer.and_then(|b| b.as_deref());
+    let token = secret::resolve_any_or(
+        bearer_flag,
         secret::API_KEY_VARS,
+        profile_key,
         "API key or bearer token",
     )?;
     Ok(Auth::Bearer { token })
@@ -2390,7 +2429,7 @@ mod tests {
             env::remove_var("INBUXA_MIGRATE_PASSWORD");
         }
         let bearer: Option<String> = Some("t".to_owned());
-        let r = resolve_auth(None, Some("hunter2"), Some(&bearer));
+        let r = resolve_auth(None, Some("hunter2"), Some(&bearer), None);
         match r {
             Err(Error::Usage(m)) => {
                 assert!(m.contains("auth-password"), "msg was: {m}");
@@ -2407,7 +2446,7 @@ mod tests {
             env::remove_var("INBUXA_MIGRATE_TOKEN");
             env::remove_var("INBUXA_MIGRATE_PASSWORD");
         }
-        let auth = resolve_auth(Some("alice"), Some("pw"), None).unwrap();
+        let auth = resolve_auth(Some("alice"), Some("pw"), None, None).unwrap();
         match auth {
             Auth::Basic { user, password } => {
                 assert_eq!(user, "alice");
@@ -2426,7 +2465,7 @@ mod tests {
             env::remove_var("INBUXA_MIGRATE_PASSWORD");
         }
         let bearer: Option<String> = Some("t".to_owned());
-        let auth = resolve_auth(None, None, Some(&bearer)).unwrap();
+        let auth = resolve_auth(None, None, Some(&bearer), None).unwrap();
         assert!(matches!(auth, Auth::Bearer { token } if token == "t"));
     }
 
@@ -2437,12 +2476,30 @@ mod tests {
             env::set_var("INBUXA_MIGRATE_API_KEY", "key");
             env::set_var("INBUXA_MIGRATE_TOKEN", "old");
         }
-        let auth = resolve_auth(None, None, Some(&None)).unwrap();
+        let auth = resolve_auth(None, None, Some(&None), None).unwrap();
         assert!(matches!(auth, Auth::Bearer { token } if token == "key"));
         unsafe { env::remove_var("INBUXA_MIGRATE_API_KEY") };
-        let auth = resolve_auth(None, None, Some(&None)).unwrap();
+        let auth = resolve_auth(None, None, Some(&None), None).unwrap();
         assert!(matches!(auth, Auth::Bearer { token } if token == "old"));
         unsafe { env::remove_var("INBUXA_MIGRATE_TOKEN") };
+    }
+
+    #[test]
+    fn auth_bearer_uses_the_profile_key_when_flag_and_env_are_absent() {
+        let _g = lock();
+        unsafe {
+            env::remove_var("INBUXA_MIGRATE_API_KEY");
+            env::remove_var("INBUXA_MIGRATE_TOKEN");
+        }
+        // No --auth-bearer and nothing in the environment: the profile's key
+        // is used, without a prompt.
+        let auth = resolve_auth(None, None, None, Some("from-profile")).unwrap();
+        assert!(matches!(auth, Auth::Bearer { token } if token == "from-profile"));
+        // The environment still wins over the profile.
+        unsafe { env::set_var("INBUXA_MIGRATE_API_KEY", "from-env") };
+        let auth = resolve_auth(None, None, None, Some("from-profile")).unwrap();
+        assert!(matches!(auth, Auth::Bearer { token } if token == "from-env"));
+        unsafe { env::remove_var("INBUXA_MIGRATE_API_KEY") };
     }
 
     fn ews_auth(extra: &[&str]) -> Result<EwsAuth, Error> {
