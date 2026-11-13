@@ -111,6 +111,28 @@ The out-of-office reply, the server's `VacationResponse`, comes with
 and `type`, as inbuxa and other servers on the 0.16 line do, or `@type` and
 `mediaType`, as draft-ietf-jmap-filenode-18 servers such as Stalwart 1.0 do.
 
+### Fastmail
+
+```
+inbuxa-migrate import fastmail \
+  [--token [TOKEN]] \
+  [--url <URL>] \
+  [--account-id <ID> | --account-name <NAME>] \
+  [--objects <list>] \
+  <ARCHIVE>
+```
+
+The same as `import jmap`, with Fastmail's server
+(`https://api.fastmail.com/jmap/session`) and bearer-token sign-in already
+filled in, so it needs only a token. Create one in Fastmail at **Settings >
+Privacy & Security > API tokens** with read access to Mail, Calendars and
+Contacts; pass it with `--token`, in `$INBUXA_MIGRATE_API_KEY`, or at the
+prompt. With no `--account-*` it imports the account Fastmail marks primary,
+which is the one you want unless you have several. What crosses over is
+whatever that account's session advertises: mail always, calendars and
+contacts where Fastmail offers them over JMAP. `--url` overrides the server
+for a Fastmail-compatible host.
+
 ### IMAP
 
 ```

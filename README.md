@@ -73,6 +73,9 @@ command reference is in [docs/usage.md](docs/usage.md).
 ## Sources
 
 - **JMAP** -- any JMAP account, including an inbuxa or Stalwart server.
+- **Fastmail** -- JMAP, with its server and token filled in: just an API
+  token. Mail always; calendars and contacts where the account advertises
+  them.
 - **IMAP** -- mail only. Folders are chosen by name or by pattern.
 - **CalDAV, CardDAV** -- calendars and events, address books and contacts.
 - **WebDAV** -- a plain file collection, kept as a file tree.

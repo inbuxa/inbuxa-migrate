@@ -7,6 +7,13 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
 
 ## [Unreleased]
 
+### Added
+- `import fastmail` imports from a Fastmail account over JMAP. It is `import
+  jmap` with Fastmail's server and bearer-token sign-in filled in, so it needs
+  only an API token; with no `--account-*` it imports the account Fastmail
+  marks primary. Mail always; calendars and contacts where that account
+  advertises them.
+
 ## [27.1-rc.13]
 
 The thirteenth release candidate of the 27.1 series: shell completions and a

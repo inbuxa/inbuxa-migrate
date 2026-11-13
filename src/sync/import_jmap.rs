@@ -217,7 +217,8 @@ fn run_into(
     } else {
         let account_name = match &config.connect.account {
             crate::jmap::account::AccountSelector::Name(n) => Some(n.clone()),
-            crate::jmap::account::AccountSelector::Id(_) => None,
+            crate::jmap::account::AccountSelector::Id(_)
+            | crate::jmap::account::AccountSelector::Primary => None,
         };
         Some(
             db::sources::upsert_source(
