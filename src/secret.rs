@@ -27,17 +27,31 @@ pub fn resolve_any(
     env_vars: &[&str],
     prompt_label: &str,
 ) -> Result<String, Error> {
+    resolve_any_or(flag_value, env_vars, None, prompt_label)
+}
+
+/// Like [`resolve_any`], but a non-empty `fallback` (from a profile) is used
+/// when the flag and the variables give nothing, before the prompt.
+pub fn resolve_any_or(
+    flag_value: Option<&str>,
+    env_vars: &[&str],
+    fallback: Option<&str>,
+    prompt_label: &str,
+) -> Result<String, Error> {
     if let Some(value) = flag_value {
         return Ok(value.to_owned());
     }
     if let Some(value) = from_env(env_vars)? {
         return Ok(value);
     }
+    if let Some(value) = fallback.filter(|v| !v.is_empty()) {
+        return Ok(value.to_owned());
+    }
     if std::io::stdin().is_terminal() {
         return prompt_no_echo(prompt_label);
     }
     Err(Error::Usage(format!(
-        "no {prompt_label} provided: pass the flag, set ${0} or ${0}_FILE, or run on a TTY for an interactive prompt",
+        "no {prompt_label} provided: pass the flag, set ${0} or ${0}_FILE, name one in a profile, or run on a TTY for an interactive prompt",
         env_vars[0]
     )))
 }

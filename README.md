@@ -112,6 +112,29 @@ already a file: `--google-key <path>`.)
 The command line takes them too, but a secret there ends up in the shell's
 history and in the process list. Use a file, the environment, or the prompt.
 
+### A shared profile for the inbuxa server
+
+`import` (into a JMAP server) and `import-directory` write to an inbuxa
+server. Instead of giving its address and key each time, name it once in
+`~/.config/inbuxa/config.toml`, which `inbuxa-cli` reads too:
+
+    [profile.default]
+    url = "https://mail.example.org"
+    api-key = "API_…"
+
+    [profile.staging]
+    url = "https://staging.example.org"
+    api-key-file = "~/.secrets/staging.key"
+
+A section gives `url` and either `api-key` or `api-key-file` (a path to a file
+holding the key, so the key stays out of the config). Keep the file to
+yourself -- `chmod 600 ~/.config/inbuxa/config.toml`. Without `--profile` or
+`$INBUXA_PROFILE`, the `default` section is used; `--profile staging` picks
+another. A `--url`, or any `INBUXA_MIGRATE_*` variable, still wins, so the
+profile is only the fallback and `--url` becomes optional on these two
+commands when it is set. The other commands connect to IMAP, DAV and the like,
+not to the inbuxa server, so they don't read the profile.
+
 ## Installing
 
 Linux, on amd64 or arm64. Each release carries one archive per architecture

@@ -63,6 +63,23 @@ by the same variable with `_FILE` appended (the Docker and systemd secrets
 convention), or a prompt; see [Credentials](../README.md#credentials). The
 command line takes them too, but should not be given them.
 
+`import` and `import-directory` write to an inbuxa server. Its address and API
+key can be named once in a shared profile, `~/.config/inbuxa/config.toml`
+(which `inbuxa-cli` reads too), so `--url` and the key need not be repeated:
+
+```toml
+[profile.default]
+url = "https://mail.example.org"
+api-key = "API_…"
+```
+
+`--profile` or `$INBUXA_PROFILE` pick a `[profile.<name>]` section, and the
+default is `default`; a section gives `url` and either `api-key` or
+`api-key-file` (a path to a file holding the key). A `--url`, or any
+`INBUXA_MIGRATE_*` variable, still takes precedence, so `--url` is optional on
+these two commands only when a profile supplies it. See
+[Credentials](../README.md#a-shared-profile-for-the-inbuxa-server).
+
 ## Import
 
 ```

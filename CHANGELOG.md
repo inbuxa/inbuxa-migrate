@@ -22,6 +22,15 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
   proactive throttle to stay under a rate-limited Microsoft 365 tenant's
   limit, alongside the existing honoring of 429/`Retry-After`. Off by
   default (uncapped).
+- `import jmap` and `import-directory` read the inbuxa server's address and
+  API key from a shared profile, `~/.config/inbuxa/config.toml`, so the
+  target need not be given each time. `[profile.<name>]` sections hold a
+  `url` and either an `api-key` or an `api-key-file` (a path, so the key can
+  live in its own file); `--profile` or `$INBUXA_PROFILE` pick a section, and
+  the default is `default`. `inbuxa-cli` reads the same file. A `--url` or an
+  `INBUXA_MIGRATE_*` variable still wins, so nothing changes when they are
+  given; `--url` is now optional on these two commands when a profile
+  supplies it.
 
 ### Changed
 - The `guide` page shows a real progress bar with a running count and
