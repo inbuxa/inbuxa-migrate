@@ -378,10 +378,10 @@ dependencies = [
  "ahash",
  "chrono",
  "chrono-tz",
- "hashify",
+ "hashify 0.2.9",
  "jmap-tools",
  "mail-builder",
- "mail-parser",
+ "mail-parser 0.11.9",
  "serde",
  "serde_json",
  "uuid",
@@ -742,9 +742,9 @@ checksum = "252afb9ae5eaa683babdc6a068b3f5726eb19e05070c731f9b2a23a7c3e8ed34"
 
 [[package]]
 name = "encodify"
-version = "1.0.0"
+version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4fda1e5c788c2b59096e152ad1a76ce72a2ab80c75985eb94ca82de0b6555db7"
+checksum = "e95d6e27686e1d6991a3077f4dbec9d33d18903466d234165ad86cd08c3ebc79"
 dependencies = [
  "memchr",
  "simdutf8",
@@ -813,9 +813,9 @@ checksum = "aedcfb3409746eddb02b9e19ebda1c3394f759a152e48ee875a0844d1b955484"
 
 [[package]]
 name = "flate2"
-version = "1.1.10"
+version = "1.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e634e2e0ebac1ee034020da1ca582e17ffe4e0f5e985823721e168928136dcb"
+checksum = "626d4928326b646e70f65ed36fc7cf9f206bdb68a0019ee7c6b4709da4e084c4"
 dependencies = [
  "crc32fast",
  "miniz_oxide",
@@ -999,15 +999,6 @@ checksum = "8a9ee70c43aaf417c914396645a0fa852624801b24ebb7ae78fe8272889ac888"
 
 [[package]]
 name = "hashbrown"
-version = "0.16.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
-dependencies = [
- "foldhash",
-]
-
-[[package]]
-name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
@@ -1025,6 +1016,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "hashify"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "04a037b1848eada162d6534c206770180e6bfc0eaa97292250c3e7179d8b1f73"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.6",
 ]
 
 [[package]]
@@ -1358,9 +1360,9 @@ dependencies = [
  "encodify",
  "flate2",
  "getrandom 0.3.4",
- "hashify",
+ "hashify 0.3.2",
  "indexmap 2.14.2",
- "mail-parser",
+ "mail-parser 1.0.1",
  "mockito",
  "num_cpus",
  "psl",
@@ -1484,7 +1486,7 @@ version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5bdcd368dcd58a5efaac10c142fb8cddb4d2949af1297b624df3ff0db4cbff54"
 dependencies = [
- "hashify",
+ "hashify 0.2.9",
  "serde",
  "serde_json",
 ]
@@ -1567,9 +1569,9 @@ checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 
 [[package]]
 name = "libsqlite3-sys"
-version = "0.39.1"
+version = "0.40.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "14a5f01b87b92705d07b433c06f96cbc764637d81a0bffb5734ce17cf0f9a2b3"
+checksum = "b06e69070b7e12262b0cd90832f0a7396f142a2b330181255562decf9f0c6215"
 dependencies = [
  "cc",
  "pkg-config",
@@ -1621,7 +1623,19 @@ version = "0.11.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4ec00bda90c6e645a54506c630c2820cd6b1890cfd2b0a169b50f74b2b8c7c86"
 dependencies = [
- "hashify",
+ "hashify 0.2.9",
+]
+
+[[package]]
+name = "mail-parser"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d4ea9311ef3ca6189aa85c5f984bd47b2f12079bcabae28917d900ab26c9ecc"
+dependencies = [
+ "encodify",
+ "hashify 0.3.2",
+ "memchr",
+ "simdutf8",
 ]
 
 [[package]]
@@ -1980,9 +1994,9 @@ dependencies = [
 
 [[package]]
 name = "psl"
-version = "2.1.238"
+version = "2.1.256"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2e6aa2cd4e8e062e78ac5d7df6206e2f8e39b624f658efd6f34f9aa1928ac5da"
+checksum = "39aa082f2912d769ed2960bb49d543d0d64402f9dd8a756745966cbea1684360"
 dependencies = [
  "psl-types",
 ]
@@ -2149,19 +2163,18 @@ checksum = "323c417e1d9665a65b263ec744ba09030cfb277e9daa0b018a4ab62e57bc8189"
 
 [[package]]
 name = "rsqlite-vfs"
-version = "0.1.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c51c9ae4df8a7fba42103df5c621fa3c37eccf3a3c650879e90fc48b11cc192c"
+checksum = "353b74f9810d5b085b6c42c9d86a5f0fdb795553235cdd48753b32e3809d18a7"
 dependencies = [
- "hashbrown 0.16.1",
  "thiserror",
 ]
 
 [[package]]
 name = "rusqlite"
-version = "0.41.1"
+version = "0.43.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da9bba6f3506135e120a6586df05be18b48d18896600646a4bec8f993d91a594"
+checksum = "f172c4812a19b26d1c23cdb0070e69db335503dfa378b910eb857386e5b8beba"
 dependencies = [
  "bitflags 2.13.2",
  "fallible-iterator",
@@ -2397,9 +2410,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.151"
+version = "1.0.154"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
+checksum = "e7e9cc8b1b85264074fbcc02a88680c4096b1e47df8f739dceb03bf482f04bd6"
 dependencies = [
  "itoa",
  "memchr",
@@ -2553,14 +2566,12 @@ dependencies = [
 
 [[package]]
 name = "sqlite-wasm-rs"
-version = "0.5.5"
+version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc3efc0da82635d7e1ced0053bbbfa8c7ab9645d0bf36ceb4f7127bb85315d75"
+checksum = "a6cd504cecbfe7eef649988840f9a6cb768d11085efec138f8e99f160632d867"
 dependencies = [
  "cc",
- "js-sys",
  "rsqlite-vfs",
- "wasm-bindgen",
 ]
 
 [[package]]
@@ -2972,9 +2983,9 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "ureq"
-version = "3.5.1"
+version = "3.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e7be76686bdf7198002062423ca0d8cf9b75a27c8e1de804513b97e97b555d9d"
+checksum = "3ac5cecf619ca81f66a96482db09687c9f7465af65f4300a8c30cca05bd5a59d"
 dependencies = [
  "base64 0.23.1",
  "cookie_store",
