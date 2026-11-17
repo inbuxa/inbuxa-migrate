@@ -7,6 +7,12 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
 
 ## [Unreleased]
 
+## [27.1-rc.15]
+
+The fifteenth release candidate of the 27.1 series: upstream v1.1.0's
+dependency updates, and `export` no longer sends a message again on every
+run when the target keys it differently.
+
 ### Changed
 - Upstream v1.1.0 is merged in. It reorganized upstream's source tree; the
   fork keeps its own layout and takes the dependency updates, including
