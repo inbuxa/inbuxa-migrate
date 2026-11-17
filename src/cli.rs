@@ -265,16 +265,9 @@ struct JmapImportArgs {
     #[arg(
         long,
         value_name = "URL",
-        help = "The target inbuxa server: base URL or full JMAP session URL (else the profile's url)"
+        help = "The source JMAP server: base URL or full JMAP session URL"
     )]
-    url: Option<String>,
-
-    #[arg(
-        long,
-        value_name = "NAME",
-        help = "Profile in ~/.config/inbuxa/config.toml (or $INBUXA_PROFILE) for the url and API key not given here"
-    )]
-    profile: Option<String>,
+    url: String,
 
     #[arg(
         long,
@@ -1599,17 +1592,14 @@ fn resolve_dav_auth(
 
 fn resolve_jmap_import(args: JmapImportArgs) -> Result<Action, Error> {
     let common = common_config(&args.global, args.archive);
-    let profile = Profile::load(args.profile.as_deref())?;
-    let url = args.url.or(profile.url).ok_or_else(|| {
-        Error::Usage(
-            "no target server: pass --url, or name one in ~/.config/inbuxa/config.toml".to_owned(),
-        )
-    })?;
+    // The source is another server, so the shared profile -- the inbuxa
+    // server's url and key -- is never read here: its key would go to
+    // whatever --url names.
     let auth = resolve_auth(
         args.auth_basic.as_deref(),
         args.auth_password.as_deref(),
         args.auth_bearer.as_ref(),
-        profile.api_key.as_deref(),
+        None,
     )?;
     let account = resolve_account(args.account_id, args.account_name)?;
     let objects = args.objects.as_deref().map(parse_object_list).transpose()?;
@@ -1619,7 +1609,7 @@ fn resolve_jmap_import(args: JmapImportArgs) -> Result<Action, Error> {
         ImportConfig {
             connect: ConnectConfig {
                 stay_on_url: args.stay_on_url,
-                url,
+                url: args.url,
                 auth,
                 account,
             },
@@ -2079,7 +2069,8 @@ fn resolve_export_directory(args: ExportDirectoryArgs) -> Result<Action, Error> 
 
 fn resolve_import_directory(args: ImportDirectoryArgs) -> Result<Action, Error> {
     let profile = Profile::load(args.profile.as_deref())?;
-    let url = args.url.or(profile.url).ok_or_else(|| {
+    let profile_key = profile_key_for(args.url.as_deref(), &profile);
+    let url = args.url.or_else(|| profile.url.clone()).ok_or_else(|| {
         Error::Usage(
             "no inbuxa server: pass --url, or name one in ~/.config/inbuxa/config.toml".to_owned(),
         )
@@ -2088,7 +2079,7 @@ fn resolve_import_directory(args: ImportDirectoryArgs) -> Result<Action, Error> 
         args.auth_basic.as_deref(),
         args.auth_password.as_deref(),
         args.auth_bearer.as_ref(),
-        profile.api_key.as_deref(),
+        profile_key,
     )?;
     Ok(Action::ImportDirectory(ImportDirectoryConfig {
         stay_on_url: args.stay_on_url,
@@ -2667,6 +2658,20 @@ fn common_config(global: &GlobalArgs, archive: PathBuf) -> CommonConfig {
     }
 }
 
+/// The profile's API key, for the profile's own server only. With no --url
+/// the profile's url is used and so is its key; a --url naming another
+/// origin (scheme, host or port) gets no key from the profile, and the flag,
+/// the environment or a prompt supplies one instead.
+fn profile_key_for<'a>(url_flag: Option<&str>, profile: &'a Profile) -> Option<&'a str> {
+    let key = profile.api_key.as_deref()?;
+    let Some(flag) = url_flag else {
+        return Some(key);
+    };
+    let profile_url = url::Url::parse(profile.url.as_deref()?).ok()?;
+    let flag_url = url::Url::parse(flag).ok()?;
+    (flag_url.origin() == profile_url.origin()).then_some(key)
+}
+
 fn resolve_auth(
     auth_basic: Option<&str>,
     auth_password: Option<&str>,
@@ -3103,6 +3108,154 @@ mod tests {
         let auth = resolve_auth(None, None, None, Some("from-profile")).unwrap();
         assert!(matches!(auth, Auth::Bearer { token } if token == "from-env"));
         unsafe { env::remove_var("INBUXA_MIGRATE_API_KEY") };
+    }
+
+    const PROFILE_KEY: &str = "profile-secret";
+
+    /// A shared profile file naming https://mail.example.org and its key,
+    /// in its own config directory, with nothing in the environment to win
+    /// over it. Undone on drop. Hold `lock()` while it lives.
+    struct ProfileHome(PathBuf);
+
+    impl ProfileHome {
+        fn new(tag: &str) -> ProfileHome {
+            let dir = env::temp_dir().join(format!(
+                "inbuxa-migrate-cli-profile-{tag}-{}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(dir.join("inbuxa")).unwrap();
+            std::fs::write(
+                dir.join("inbuxa/config.toml"),
+                format!(
+                    "[profile.default]\nurl = \"https://mail.example.org\"\napi-key = \"{PROFILE_KEY}\"\n"
+                ),
+            )
+            .unwrap();
+            unsafe {
+                env::set_var("XDG_CONFIG_HOME", &dir);
+                env::remove_var("INBUXA_PROFILE");
+                for var in secret::API_KEY_VARS {
+                    env::remove_var(var);
+                    env::remove_var(format!("{var}_FILE"));
+                }
+            }
+            ProfileHome(dir)
+        }
+    }
+
+    impl Drop for ProfileHome {
+        fn drop(&mut self) {
+            unsafe { env::remove_var("XDG_CONFIG_HOME") };
+            std::fs::remove_dir_all(&self.0).ok();
+        }
+    }
+
+    fn is_profile_key(auth: &Auth) -> bool {
+        matches!(auth, Auth::Bearer { token } if token == PROFILE_KEY)
+    }
+
+    /// `import jmap` reads from a source server, often another provider's.
+    /// The shared profile names the inbuxa server and its key, so neither may
+    /// be taken from it: the key would go to whatever --url names.
+    #[test]
+    fn import_jmap_never_takes_the_url_or_key_from_the_profile() {
+        use std::io::IsTerminal;
+        let _g = lock();
+        let _p = ProfileHome::new("jmap");
+
+        // Without --url there is no source; the profile's url is not one.
+        let no_url = Cli::try_parse_from([
+            "inbuxa-migrate",
+            "import",
+            "jmap",
+            "--account-name",
+            "a@example.org",
+            "archive.sqlite",
+        ]);
+        if let Ok(cli) = no_url {
+            if let Ok(Action::Import(_, c)) = cli.resolve() {
+                panic!(
+                    "import jmap took its source from the profile: {} (profile key: {})",
+                    c.connect.url,
+                    is_profile_key(&c.connect.auth)
+                );
+            }
+        }
+
+        // With --url and a bare --auth-bearer, the key comes from the
+        // environment or a prompt, never the profile. On a terminal this
+        // would prompt, so that half only runs without one (as under CI).
+        if std::io::stdin().is_terminal() {
+            return;
+        }
+        let cli = Cli::try_parse_from([
+            "inbuxa-migrate",
+            "import",
+            "jmap",
+            "--url",
+            "https://source.example.net/jmap/session",
+            "--auth-bearer",
+            "--account-name",
+            "a@example.org",
+            "archive.sqlite",
+        ])
+        .unwrap_or_else(|e| panic!("clap rejected: {e}"));
+        match cli.resolve() {
+            Ok(Action::Import(_, c)) => assert!(
+                !is_profile_key(&c.connect.auth),
+                "the profile's key was sent to the source {}",
+                c.connect.url
+            ),
+            Ok(_) => panic!("expected Import"),
+            Err(e) => assert!(e.to_string().contains("API key"), "{e}"),
+        }
+    }
+
+    fn import_directory(extra: &[&str]) -> Result<ImportDirectoryConfig, Error> {
+        let mut argv = vec!["inbuxa-migrate", "import-directory", "--dry-run"];
+        argv.extend_from_slice(extra);
+        argv.push("dir");
+        let cli = Cli::try_parse_from(argv).unwrap_or_else(|e| panic!("clap rejected: {e}"));
+        match cli.resolve()? {
+            Action::ImportDirectory(config) => Ok(config),
+            _ => panic!("expected ImportDirectory"),
+        }
+    }
+
+    /// import-directory writes to the inbuxa server, so it may use the
+    /// profile -- but the key goes only to the profile's own server, never to
+    /// another --url.
+    #[test]
+    fn import_directory_sends_the_profile_key_only_to_the_profile_url() {
+        use std::io::IsTerminal;
+        let _g = lock();
+        let _p = ProfileHome::new("dir");
+
+        let c = import_directory(&[]).unwrap();
+        assert_eq!(c.url, "https://mail.example.org");
+        assert!(is_profile_key(&c.auth));
+
+        let c = import_directory(&["--url", "https://MAIL.example.org:443/jmap/session"]).unwrap();
+        assert!(is_profile_key(&c.auth), "same origin keeps the key");
+
+        // Another server: the key must come from elsewhere (a prompt on a
+        // terminal, so this half runs only without one).
+        if std::io::stdin().is_terminal() {
+            return;
+        }
+        for other in [
+            "https://other.example.net",
+            "http://mail.example.org",
+            "https://mail.example.org:8443",
+        ] {
+            match import_directory(&["--url", other]) {
+                Ok(c) => assert!(
+                    !is_profile_key(&c.auth),
+                    "the profile's key was sent to {other}"
+                ),
+                Err(e) => assert!(e.to_string().contains("API key"), "{e}"),
+            }
+        }
     }
 
     fn ews_auth(extra: &[&str]) -> Result<EwsAuth, Error> {
