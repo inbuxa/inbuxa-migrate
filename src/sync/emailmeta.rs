@@ -4,26 +4,22 @@
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
 
-use std::slice;
-
-use mail_parser::{Address, HeaderName, HeaderValue, Message, MessageParser};
+use mail_parser::{AddressList, HeaderName, HeaderValue, Message, MessageParser};
 
 use crate::sync::keys::{EmailIndex, email_index};
 
-fn addrs(a: Option<&Address>) -> Vec<String> {
-    match a {
-        Some(addr) => addr
-            .iter()
-            .filter_map(|x| x.address().map(|s| s.to_owned()))
-            .collect(),
-        None => Vec::new(),
-    }
+fn addrs(list: Option<AddressList<'_>>) -> Vec<String> {
+    list.map_or_else(Vec::new, |list| {
+        list.mailboxes()
+            .filter_map(|mailbox| mailbox.address().map(str::to_owned))
+            .collect()
+    })
 }
 
 fn message_ids(value: &HeaderValue) -> Vec<String> {
     match value {
-        HeaderValue::Text(s) => vec![s.to_string()],
-        HeaderValue::TextList(l) => l.iter().map(|s| s.to_string()).collect(),
+        HeaderValue::Text(s) => vec![(*s).to_owned()],
+        HeaderValue::TextList(l) => l.iter().map(str::to_owned).collect(),
         _ => Vec::new(),
     }
 }
@@ -51,13 +47,13 @@ pub fn add_mime_keywords(bytes: &[u8], keywords: &mut Vec<String>) {
 
 fn add_keywords_header(m: &Message<'_>, keywords: &mut Vec<String>) {
     let mut added = 0;
-    for value in m.header_values(HeaderName::Keywords) {
-        let phrases = match value {
-            HeaderValue::Text(phrase) => slice::from_ref(phrase),
-            HeaderValue::TextList(phrases) => phrases.as_slice(),
-            _ => &[],
+    for header in m.headers().all(HeaderName::Keywords) {
+        let phrases: Vec<&str> = match header.value() {
+            HeaderValue::Text(phrase) => vec![phrase],
+            HeaderValue::TextList(phrases) => phrases.iter().collect(),
+            _ => Vec::new(),
         };
-        for keyword in phrases.iter().filter_map(|phrase| jmap_keyword(phrase)) {
+        for keyword in phrases.into_iter().filter_map(jmap_keyword) {
             if !keywords.iter().any(|k| k.eq_ignore_ascii_case(&keyword)) {
                 keywords.push(keyword);
                 added += 1;
@@ -105,8 +101,8 @@ pub fn email_meta_from_blob(bytes: &[u8]) -> (EmailIndex, Option<String>) {
 
 fn email_meta(m: &Message<'_>) -> (EmailIndex, Option<String>) {
     let mut mids: Vec<String> = Vec::new();
-    for v in m.header_values(HeaderName::MessageId) {
-        mids.extend(message_ids(v));
+    for header in m.headers().all(HeaderName::MessageId) {
+        mids.extend(message_ids(&header.value()));
     }
     if mids.is_empty()
         && let Some(single) = m.message_id()
