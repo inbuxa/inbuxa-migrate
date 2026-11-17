@@ -7,6 +7,12 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
 
 ## [Unreleased]
 
+### Changed
+- Upstream v1.1.0 is merged in. It reorganized upstream's source tree; the
+  fork keeps its own layout and takes the dependency updates, including
+  mail-parser 1.0 and rusqlite 0.43. Upstream's new console banner is left
+  out.
+
 ### Fixed
 - `export` no longer imports a message again on every run when the archive
   and the target key it differently, as with a message carrying two

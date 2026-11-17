@@ -7,8 +7,7 @@
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 
-use mail_parser::HeaderValue;
-use mail_parser::parsers::MessageStream;
+use mail_parser::{HeaderForm, HeaderValue};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LabelClassification {
@@ -60,11 +59,8 @@ fn decode_encoded_words(value: &str) -> Cow<'_, str> {
     if !value.contains("=?") {
         return Cow::Borrowed(value);
     }
-    let mut buf = Vec::with_capacity(value.len() + 1);
-    buf.extend_from_slice(value.as_bytes());
-    buf.push(b'\n');
-    match MessageStream::new(&buf).parse_unstructured() {
-        HeaderValue::Text(text) => Cow::Owned(text.into_owned()),
+    match HeaderForm::Text.parse(value.as_bytes()).value() {
+        HeaderValue::Text(text) => Cow::Owned(text.to_owned()),
         _ => Cow::Borrowed(value),
     }
 }
