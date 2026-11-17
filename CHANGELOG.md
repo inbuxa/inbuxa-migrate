@@ -13,6 +13,18 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
   mail-parser 1.0 and rusqlite 0.43. Upstream's new console banner is left
   out.
 
+### Fixed
+- `export` no longer imports a message again on every run when the archive
+  and the target key it differently, as with a message carrying two
+  `Message-ID` headers: the archive keeps both, a JMAP server's `messageId`
+  one. While target emails are left unpaired, a message about to be imported
+  is first parsed by the target (`Email/parse`), and one it already holds is
+  matched instead, with its keywords and folders brought in line like any
+  other match. A target without `Email/parse` gets the message imported as
+  before. The same key settles a batch whose import ended without a clear
+  answer, so one that did arrive is not sent twice. Upstream fixed the same
+  case in v1.0.17; this is our own fix.
+
 ## [27.1-rc.14]
 
 The fourteenth release candidate of the 27.1 series: POP3, Fastmail, Zoho and

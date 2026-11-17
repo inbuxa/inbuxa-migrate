@@ -20,7 +20,9 @@ use crate::jmap::retry::MethodCallKind;
 use crate::jmap::wire::JmapId;
 use crate::logging::Logger;
 use crate::sync::import_jmap::mapping::{EMAIL_SELECT, EmailRow, TargetResolver, row_to_email};
-use crate::sync::keys::{EmailIndex, EmailKey, email_index, email_keys, index_from_json};
+use crate::sync::keys::{
+    EmailIndex, EmailKey, email_index, email_key, email_keys, index_from_json,
+};
 use crate::sync::progress::Progress;
 use crate::sync::{Context, TypeCounts};
 use crate::types::ObjectType;
@@ -107,6 +109,17 @@ pub fn reconcile(
             None => creates.push(i),
         }
     }
+    let mut paired = vec![false; targets.len()];
+    for t in pairs.iter().flatten() {
+        paired[*t] = true;
+    }
+    let mut unpaired = Unpaired {
+        targets: &targets,
+        keys: &target_keys,
+        free: (0..targets.len()).filter(|t| !paired[*t]).collect(),
+        migrated: &migrated,
+        parse: true,
+    };
     let mut progress = Progress::new("export: Email", creates.len() as u64, logger);
     import_units(
         net,
@@ -114,6 +127,8 @@ pub fn reconcile(
         maps,
         &units,
         &creates,
+        &mut unpaired,
+        &mut updates,
         counts,
         logger,
         &mut progress,
@@ -170,12 +185,100 @@ fn target_emails(net: &Net) -> Result<(Vec<TargetEmail>, Vec<EmailKey>), JmapErr
 /// without a clear answer leaves few messages to check.
 const IMPORT_BATCH_CAP: usize = 50;
 
-/// One message ready to import: its creation id, its place in `units`, and
-/// the `Email/import` entry.
+/// One message ready to import: its creation id, its place in `units`, the
+/// `Email/import` entry, and the key the target gave it when it parsed the
+/// uploaded bytes, if it was asked.
 struct Pending {
     cid: String,
     unit: usize,
     item: Value,
+    parsed: Option<EmailKey>,
+}
+
+/// The target emails no archive message paired with by its stored key. A
+/// message the target already holds can still be among them under another
+/// key: the archive keys a message by every `Message-ID` header it has, while
+/// the target's `messageId` reflects one, and the two parsers may differ in
+/// other ways too. Before such a message is imported, the target parses the
+/// uploaded bytes and the key it computes is looked up here.
+struct Unpaired<'t> {
+    targets: &'t [TargetEmail],
+    keys: &'t [EmailKey],
+    free: Vec<usize>,
+    migrated: &'t HashSet<String>,
+    /// False once the target has refused `Email/parse`: not asked again.
+    parse: bool,
+}
+
+impl Unpaired<'_> {
+    /// Takes the unpaired target email with `key`, the one of `size` first.
+    fn take(&mut self, key: &EmailKey, size: Option<u64>) -> Option<usize> {
+        let same_key = |t: &usize| &self.keys[*t] == key;
+        let pos = self
+            .free
+            .iter()
+            .position(|t| same_key(t) && size.is_some() && self.targets[*t].size == size)
+            .or_else(|| self.free.iter().position(same_key))?;
+        Some(self.free.remove(pos))
+    }
+}
+
+/// The most blobs one `Email/parse` call names, within `maxObjectsInGet`.
+const PARSE_BATCH_CAP: usize = 50;
+const PARSE_PROPERTIES: [&str; 5] = ["messageId", "from", "subject", "sentAt", "to"];
+
+/// The key the target computes for each of `blobs`, by blob id. A blob the
+/// target could not parse has none. If the target refuses the method, it is
+/// not asked again this run; any other failure leaves this batch unchecked.
+/// Either way the messages are then imported as before.
+fn parsed_keys(
+    net: &Net,
+    blobs: &[&str],
+    unpaired: &mut Unpaired<'_>,
+    logger: &Logger,
+) -> HashMap<String, EmailKey> {
+    let mut out = HashMap::new();
+    let per_call = (net.limits.max_objects_in_get as usize).clamp(1, PARSE_BATCH_CAP);
+    for chunk in blobs.chunks(per_call) {
+        let mut req = Request::new();
+        req.call(
+            "Email/parse",
+            json!({
+                "accountId": net.account,
+                "blobIds": chunk,
+                "properties": PARSE_PROPERTIES,
+            }),
+            "p",
+        );
+        let answer = req.send(&net.client, &net.api).and_then(|resp| {
+            let mr = resp.first()?.clone();
+            check_method_error(&mr)?;
+            Ok(mr)
+        });
+        let mr = match answer {
+            Ok(mr) => mr,
+            Err(e @ JmapError::Method { .. }) => {
+                logger.warn(&format!(
+                    "the target refused Email/parse ({e}); messages whose stored match key differs from the target's are imported without that check"
+                ));
+                unpaired.parse = false;
+                return out;
+            }
+            Err(e) => {
+                logger.warn(&format!(
+                    "Email/parse failed ({e}); {} message(s) are imported without checking the target for them under another key",
+                    chunk.len()
+                ));
+                continue;
+            }
+        };
+        if let Some(parsed) = mr.args.get("parsed").and_then(Value::as_object) {
+            for (blob, email) in parsed {
+                out.insert(blob.clone(), email_key(&server_index(email)));
+            }
+        }
+    }
+    out
 }
 
 /// Writes the messages the target does not have yet. They go in batches of
@@ -191,6 +294,8 @@ fn import_units(
     maps: &Maps,
     units: &[Unit],
     creates: &[usize],
+    unpaired: &mut Unpaired<'_>,
+    updates: &mut Vec<(String, Value)>,
     counts: &mut TypeCounts,
     logger: &Logger,
     progress: &mut Progress,
@@ -232,6 +337,7 @@ fn import_units(
                     cid,
                     unit: i,
                     item: import_item(blob.0, mids, build_keywords(row), &row.received_at),
+                    parsed: None,
                 }),
                 Err(e) => {
                     logger.warn(&format!(
@@ -251,6 +357,9 @@ fn import_units(
         if net.dry_run {
             counts.created += pending.len() as u64;
         } else {
+            let pending = match_by_target_parse(
+                net, uploader, maps, units, pending, unpaired, updates, counts, logger,
+            );
             send_batch(
                 net,
                 uploader,
@@ -267,6 +376,50 @@ fn import_units(
     if !unclear.is_empty() {
         settle_unclear(net, uploader, maps, units, unclear, counts, logger);
     }
+}
+
+/// Asks the target to parse the batch's uploaded messages while unpaired
+/// target emails remain, and keeps back each one it already holds under the
+/// key it computes: that email is brought in line like any other match. The
+/// rest are returned to import, each with the target's key for settling.
+#[allow(clippy::too_many_arguments)]
+fn match_by_target_parse(
+    net: &Net,
+    uploader: &Uploader,
+    maps: &Maps,
+    units: &[Unit],
+    pending: Vec<Pending>,
+    unpaired: &mut Unpaired<'_>,
+    updates: &mut Vec<(String, Value)>,
+    counts: &mut TypeCounts,
+    logger: &Logger,
+) -> Vec<Pending> {
+    if !unpaired.parse || unpaired.free.is_empty() || pending.is_empty() {
+        return pending;
+    }
+    let blobs: Vec<&str> = pending
+        .iter()
+        .filter_map(|p| p.item.get("blobId").and_then(Value::as_str))
+        .collect();
+    let mut keys = parsed_keys(net, &blobs, unpaired, logger);
+    let mut out = Vec::with_capacity(pending.len());
+    for mut p in pending {
+        let blob = p.item.get("blobId").and_then(Value::as_str).unwrap_or("");
+        p.parsed = keys.remove(blob);
+        let row = &units[p.unit].row;
+        let found = p
+            .parsed
+            .as_ref()
+            .and_then(|k| unpaired.take(k, uploader.blob_len(row.blob_local_id)));
+        match found {
+            Some(t) => match email_patch(row, &unpaired.targets[t], maps, unpaired.migrated) {
+                Some(patch) => updates.push((unpaired.targets[t].id.clone(), patch)),
+                None => counts.skipped += 1,
+            },
+            None => out.push(p),
+        }
+    }
+    out
 }
 
 /// Sends one `Email/import` for `batch` and counts each message's outcome.
@@ -406,12 +559,16 @@ fn settle_unclear(
             return;
         }
     };
-    let keys: Vec<EmailKey> = email_keys(
-        &unclear
-            .iter()
-            .map(|p| index_from_json(&units[p.unit].row.message_match))
-            .collect::<Vec<_>>(),
-    );
+    // The target's own key where it parsed the message: one that arrived is
+    // found under it even when the stored key differs.
+    let keys: Vec<EmailKey> = unclear
+        .iter()
+        .map(|p| {
+            p.parsed
+                .clone()
+                .unwrap_or_else(|| email_key(&index_from_json(&units[p.unit].row.message_match)))
+        })
+        .collect();
     let sizes: Vec<Option<u64>> = unclear
         .iter()
         .map(|p| uploader.blob_len(units[p.unit].row.blob_local_id))

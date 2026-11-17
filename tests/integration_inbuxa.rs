@@ -454,3 +454,61 @@ fn files_go_into_inbuxa_in_its_own_shape_and_come_back() {
         ]
     );
 }
+
+#[test]
+#[ignore = "requires Docker"]
+fn a_message_with_two_message_ids_is_not_exported_twice() {
+    let server = Inbuxa::start().expect("start inbuxa");
+    let dir = TempDir::new().unwrap();
+    let maildir = dir.path().join("mail");
+    let archive = dir.path().join("archive.sqlite");
+    for sub in ["cur", "new", "tmp"] {
+        fs::create_dir_all(maildir.join(sub)).unwrap();
+    }
+    // The archive keys it by both Message-IDs; inbuxa's messageId has one.
+    fs::write(
+        maildir.join("cur/1:2,S"),
+        "From: x@example.org\r\nTo: y@example.org\r\nSubject: Twice\r\n\
+         Message-ID: <first@example.org>\r\nMessage-ID: <second@example.org>\r\n\
+         Date: Mon, 4 Mar 2024 09:00:00 +0000\r\n\r\nHi\r\n",
+    )
+    .unwrap();
+
+    let run = |args: &[&str]| {
+        let out = Command::new(BIN)
+            .args(args)
+            .env("INBUXA_MIGRATE_API_KEY", &server.token)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(out.status.success(), "{args:?}: {stderr}");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    run(&[
+        "import",
+        "maildir",
+        maildir.to_str().unwrap(),
+        archive.to_str().unwrap(),
+    ]);
+    let export = || {
+        run(&[
+            "export",
+            "--url",
+            &server.base_url,
+            "--auth-bearer",
+            "--account-name",
+            ADMIN_EMAIL,
+            "--objects",
+            "mailbox,email",
+            archive.to_str().unwrap(),
+        ])
+    };
+    let first = export();
+    assert!(first.contains("Email: created=1"), "{first}");
+    let second = export();
+    assert!(second.contains("Email: created=0"), "{second}");
+    assert_eq!(
+        emails(&server, ADMIN_EMAIL, ADMIN_PASSWORD),
+        [("Twice".to_owned(), 1, vec!["$seen".to_owned()])]
+    );
+}

@@ -6204,3 +6204,210 @@ fn export_file_nodes_in_the_targets_own_shape() {
         let _ = std::fs::remove_file(&archive);
     }
 }
+
+/// A message with two Message-ID headers: the archive keys it by both, while a
+/// JMAP server's `messageId` (RFC 8621 `header:Message-ID:asMessageIds`)
+/// reflects one header. The stored key and the target's then differ, and
+/// only the target's own parse of the bytes can tell that it already has it.
+const TWO_MESSAGE_IDS: &str =
+    "From: a@x\r\nSubject: s\r\nMessage-ID: <a@h>\r\nMessage-ID: <b@h>\r\n\r\nbody";
+
+struct DivergentKeyExport {
+    /// The `Email/parse` answer, or `None` when the test expects no call.
+    parse: Option<Value>,
+    /// The local copy's keywords, as stored (a JSON array).
+    local_keywords: &'static str,
+    imports: usize,
+    sets: usize,
+}
+
+fn export_against_a_divergent_target_key(t: DivergentKeyExport) -> sync::TypeCounts {
+    let mut server = mockito::Server::new();
+    let base = server.url();
+    let api = "/jmap/api";
+    let archive = tmp();
+    {
+        let conn = db::init::open(&archive).unwrap();
+        conn.execute(
+            "INSERT INTO mailboxes (id,name,parent_id,role) VALUES (1,'Inbox',NULL,'inbox')",
+            [],
+        )
+        .unwrap();
+        let blob = db::blobs::intern_blob(&conn, TWO_MESSAGE_IDS.as_bytes()).unwrap();
+        let idx =
+            inbuxa_migrate::sync::emailmeta::email_index_from_blob(TWO_MESSAGE_IDS.as_bytes());
+        assert_eq!(
+            idx.mids,
+            ["a@h", "b@h"],
+            "the archive keys by every Message-ID"
+        );
+        conn.execute(
+            "INSERT INTO emails (blob_id,received_at,mailbox_ids,keywords,message_match)
+             VALUES (?1,'2020-01-01T00:00:00Z','[1]',?2,?3)",
+            rusqlite::params![
+                blob,
+                t.local_keywords,
+                inbuxa_migrate::sync::keys::index_to_json(&idx)
+            ],
+        )
+        .unwrap();
+    }
+
+    let _root = server.mock("GET", "/").with_status(404).create();
+    let _wk = server
+        .mock("GET", "/.well-known/jmap")
+        .with_body(session_body_full(&base))
+        .expect_at_least(1)
+        .create();
+    let _mbterm = anchor_terminator(&mut server, api, "Mailbox");
+    let _emterm = anchor_terminator(&mut server, api, "Email");
+    let _mq = server
+        .mock("POST", api)
+        .match_body(Matcher::Regex("Mailbox/query".into()))
+        .with_body(
+            json!({"methodResponses":[["Mailbox/query",
+                {"accountId":"w","ids":["T1"]},"q"]]})
+            .to_string(),
+        )
+        .expect_at_least(1)
+        .create();
+    let _mg = server
+        .mock("POST", api)
+        .match_body(Matcher::Regex("Mailbox/get".into()))
+        .with_body(
+            json!({"methodResponses":[["Mailbox/get",{"accountId":"w","list":[
+                {"id":"T1","name":"Inbox","role":"inbox","parentId":null,"myRights":{"mayDelete":true}}
+            ],"notFound":[]},"g"]]})
+            .to_string(),
+        )
+        .expect_at_least(1)
+        .create();
+    let _eq = server
+        .mock("POST", api)
+        .match_body(Matcher::Regex("Email/query".into()))
+        .with_body(
+            json!({"methodResponses":[["Email/query",
+                {"accountId":"w","ids":["X1"]},"q"]]})
+            .to_string(),
+        )
+        .expect(1)
+        .create();
+    let _eg = server
+        .mock("POST", api)
+        .match_body(Matcher::Regex("Email/get".into()))
+        .with_body(
+            json!({"methodResponses":[["Email/get",{"accountId":"w","list":[
+                {"id":"X1","messageId":["b@h"],"size":TWO_MESSAGE_IDS.len(),
+                 "mailboxIds":{"T1":true},"keywords":{}}
+            ],"notFound":[]},"g"]]})
+            .to_string(),
+        )
+        .expect(1)
+        .create();
+    let _up = server
+        .mock("POST", Matcher::Regex("/jmap/upload/".into()))
+        .with_body(json!({"blobId":"UP"}).to_string())
+        .expect_at_most(1)
+        .create();
+    let parse = server
+        .mock("POST", api)
+        .match_body(Matcher::AllOf(vec![
+            Matcher::Regex("Email/parse".into()),
+            Matcher::Regex(r#""blobIds":\["UP"\]"#.into()),
+        ]))
+        .with_body(
+            json!({ "methodResponses": [t.parse.clone().unwrap_or(Value::Null)] }).to_string(),
+        )
+        .expect(usize::from(t.parse.is_some()))
+        .create();
+    let import = server
+        .mock("POST", api)
+        .match_body(Matcher::Regex("Email/import".into()))
+        .with_body(
+            json!({"methodResponses":[["Email/import",{"accountId":"w",
+                "created":{"e1":{"id":"Y1","blobId":"UP","threadId":"t","size":10}}},"i"]]})
+            .to_string(),
+        )
+        .expect(t.imports)
+        .create();
+    let set = server
+        .mock("POST", api)
+        .match_body(Matcher::AllOf(vec![
+            Matcher::Regex("Email/set".into()),
+            Matcher::Regex(r#""keywords/\$seen":true"#.into()),
+        ]))
+        .with_body(
+            json!({"methodResponses":[["Email/set",{"accountId":"w","updated":{"X1":null}},"s"]]})
+                .to_string(),
+        )
+        .expect(t.sets)
+        .create();
+
+    let summary = sync::export::run(
+        common(&archive),
+        export_cfg_objects(&base, vec![ObjectType::Mailbox, ObjectType::Email]),
+    )
+    .expect("export");
+    parse.assert();
+    import.assert();
+    set.assert();
+    let _ = std::fs::remove_file(&archive);
+    summary
+        .per_type
+        .iter()
+        .find(|(t, _)| *t == "Email")
+        .map(|(_, c)| c.clone())
+        .expect("email counts")
+}
+
+fn parsed_as_b() -> Value {
+    json!(["Email/parse", {"accountId":"w","parsed":{"UP":{
+        "messageId":["b@h"],"from":[{"name":null,"email":"a@x"}],"subject":"s","sentAt":null,"to":null}},
+        "notParsable":[],"notFound":[]}, "p0"])
+}
+
+#[test]
+fn export_email_the_target_already_holds_under_its_own_key_is_not_imported_again() {
+    let email = export_against_a_divergent_target_key(DivergentKeyExport {
+        parse: Some(parsed_as_b()),
+        local_keywords: "[]",
+        imports: 0,
+        sets: 0,
+    });
+    assert_eq!((email.created, email.skipped, email.failed), (0, 1, 0));
+}
+
+#[test]
+fn export_email_matched_by_the_target_parse_gets_its_keywords_synced() {
+    let email = export_against_a_divergent_target_key(DivergentKeyExport {
+        parse: Some(parsed_as_b()),
+        local_keywords: r#"["$seen"]"#,
+        imports: 0,
+        sets: 1,
+    });
+    assert_eq!((email.created, email.failed), (0, 0));
+}
+
+#[test]
+fn export_email_is_imported_when_the_target_cannot_parse() {
+    let email = export_against_a_divergent_target_key(DivergentKeyExport {
+        parse: Some(json!(["error", {"type":"unknownMethod"}, "p0"])),
+        local_keywords: "[]",
+        imports: 1,
+        sets: 0,
+    });
+    assert_eq!((email.created, email.skipped, email.failed), (1, 0, 0));
+}
+
+#[test]
+fn export_email_parsed_as_a_different_message_is_imported() {
+    let email = export_against_a_divergent_target_key(DivergentKeyExport {
+        parse: Some(json!(["Email/parse", {"accountId":"w","parsed":{"UP":{
+            "messageId":["a@h"],"from":null,"subject":"s","sentAt":null,"to":null}},
+            "notParsable":[],"notFound":[]}, "p0"])),
+        local_keywords: "[]",
+        imports: 1,
+        sets: 0,
+    });
+    assert_eq!((email.created, email.skipped, email.failed), (1, 0, 0));
+}
