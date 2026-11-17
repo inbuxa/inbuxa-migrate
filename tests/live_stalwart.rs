@@ -7,19 +7,26 @@
 mod integration;
 mod seeder;
 
-use inbuxa_migrate::jmap::account::{self, AccountSelector};
-use inbuxa_migrate::jmap::http::{Auth, HttpClient, RetryPolicy};
+use inbuxa_migrate::jmap::account::AccountSelector;
+use inbuxa_migrate::jmap::http::JmapClient;
 use inbuxa_migrate::jmap::session::Session;
+use inbuxa_migrate::logging::{Level, Logger};
+use inbuxa_migrate::net::auth::Auth;
+use inbuxa_migrate::net::http::{ClientOptions, TlsPolicy};
+use inbuxa_migrate::net::retry::RetryPolicy;
 use integration::stalwart::shared as shared_stalwart;
 
-fn admin_client() -> HttpClient {
-    HttpClient::new(
+fn admin_client() -> JmapClient {
+    JmapClient::new(
         Auth::Basic {
             user: seeder::ADMIN_USER.into(),
             password: seeder::ADMIN_PASSWORD.into(),
         },
-        RetryPolicy::new(5),
-        true,
+        ClientOptions {
+            retry: RetryPolicy::new(5),
+            tls: TlsPolicy::AcceptInvalid,
+            logger: Logger::new(Level::Quiet),
+        },
     )
 }
 
@@ -96,12 +103,9 @@ fn session_discovery_and_admin_principal_resolution() {
         "test1 layout activates a sieve script"
     );
 
-    let resolved = account::resolve(
-        &AccountSelector::Name(target.email.clone()),
-        &session,
-        &client,
-    )
-    .expect("admin principal resolution");
+    let resolved = AccountSelector::Name(target.email.clone())
+        .resolve(&session, &client)
+        .expect("admin principal resolution");
     assert_eq!(
         resolved, target.account_id,
         "{} must resolve to the seeded account id {}",

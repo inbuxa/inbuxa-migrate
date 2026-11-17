@@ -10,12 +10,21 @@ mod seeder;
 use std::path::{Path, PathBuf};
 
 use encodify::base64::STANDARD;
-use inbuxa_migrate::jmap::account::{self, AccountSelector};
-use inbuxa_migrate::jmap::http::{Auth, HttpClient, RetryPolicy};
+use inbuxa_migrate::archive::Archive;
+use inbuxa_migrate::archive::sources::SourceChange;
+use inbuxa_migrate::export::{Confirm, Export, Prune};
+use inbuxa_migrate::import::jmap::JmapImport;
+use inbuxa_migrate::jmap::account::AccountSelector;
+use inbuxa_migrate::jmap::connect::{ConnectConfig, JmapAccount};
+use inbuxa_migrate::jmap::http::JmapClient;
 use inbuxa_migrate::jmap::request::Request;
 use inbuxa_migrate::jmap::session::Session;
-use inbuxa_migrate::logging::Logger;
-use inbuxa_migrate::sync::{self, CommonConfig, ConnectConfig, ExportConfig, ImportConfig};
+use inbuxa_migrate::logging::{Level, Logger};
+use inbuxa_migrate::net::auth::Auth;
+use inbuxa_migrate::net::http::{ClientOptions, TlsPolicy};
+use inbuxa_migrate::net::retry::RetryPolicy;
+use inbuxa_migrate::sync::{RunMode, RunOptions};
+use inbuxa_migrate::types::ObjectType;
 use integration::stalwart::shared as shared_stalwart;
 use rusqlite::Connection;
 use serde_json::{Map, Value, json};
@@ -38,14 +47,14 @@ fn tmp_archive(tag: &str) -> PathBuf {
     p
 }
 
-fn common(archive: &Path, dry_run: bool) -> CommonConfig {
-    CommonConfig {
+fn common(archive: &Path, mode: RunMode) -> RunOptions {
+    RunOptions {
         archive: archive.to_path_buf(),
         threads: 4,
-        dry_run,
+        mode,
         max_retries: 5,
-        allow_invalid_certs: true,
-        logger: Logger::from_flags(false, 0),
+        tls: TlsPolicy::AcceptInvalid,
+        logger: Logger::new(Level::Default),
     }
 }
 
@@ -56,15 +65,26 @@ fn basic(localpart: &str) -> Auth {
     }
 }
 
-fn import_cfg(account: AccountSelector) -> ImportConfig {
-    ImportConfig {
+fn jmap_client(auth: Auth, retries: u32) -> JmapClient {
+    JmapClient::new(
+        auth,
+        ClientOptions {
+            retry: RetryPolicy::new(retries),
+            tls: TlsPolicy::AcceptInvalid,
+            logger: Logger::new(Level::Quiet),
+        },
+    )
+}
+
+fn import_cfg(account: AccountSelector) -> JmapImport {
+    JmapImport {
         connect: ConnectConfig {
             url: base_url().to_owned(),
             auth: basic("test1"),
             account,
         },
         objects: None,
-        allow_source_change: false,
+        source_change: SourceChange::Reject,
     }
 }
 
@@ -91,16 +111,19 @@ fn import_test1_full_matches_seed_stats() {
         "fixture exposes the instance admin login"
     );
 
-    let cfg = ImportConfig {
+    let cfg = JmapImport {
         connect: ConnectConfig {
             url: fx.base_url.clone(),
             auth: basic("test1"),
             account: AccountSelector::Id(acc.account_id.clone()),
         },
         objects: None,
-        allow_source_change: false,
+        source_change: SourceChange::Reject,
     };
-    let summary = sync::import_jmap::run(common(&archive, false), cfg).expect("import run");
+    let summary = cfg
+        .run(common(&archive, RunMode::Apply))
+        .into_result()
+        .expect("import run");
     assert!(!summary.any_failed(), "import had failures: {summary:?}");
 
     let seeded = acc.seeded.as_ref().expect("seed stats");
@@ -172,7 +195,7 @@ fn import_resolves_account_via_admin_principal_path() {
     let target = fx.account("test1").expect("test1");
     let archive = tmp_archive("impadmin");
 
-    let cfg = ImportConfig {
+    let cfg = JmapImport {
         connect: ConnectConfig {
             url: fx.base_url.clone(),
             auth: Auth::Basic {
@@ -181,10 +204,12 @@ fn import_resolves_account_via_admin_principal_path() {
             },
             account: AccountSelector::Name(target.email.clone()),
         },
-        objects: Some(vec![inbuxa_migrate::types::ObjectType::Mailbox]),
-        allow_source_change: false,
+        objects: Some(vec![inbuxa_migrate::types::ObjectType::Mailbox].into()),
+        source_change: SourceChange::Reject,
     };
-    let summary = sync::import_jmap::run(common(&archive, false), cfg)
+    let summary = cfg
+        .run(common(&archive, RunMode::Apply))
+        .into_result()
         .expect("admin-principal-resolved import");
     assert!(!summary.any_failed(), "import had failures: {summary:?}");
 
@@ -214,8 +239,18 @@ fn import_dry_run_writes_nothing() {
 
     let mut cfg = import_cfg(AccountSelector::Id(acc.account_id.clone()));
     cfg.connect.auth = basic("test3");
-    let summary = sync::import_jmap::run(common(&archive, true), cfg).expect("dry-run import");
-    assert!(summary.per_type.is_empty(), "dry-run returns empty summary");
+    let summary = cfg
+        .run(common(&archive, RunMode::DryRun))
+        .into_result()
+        .expect("dry-run import");
+    assert_eq!(summary.failed(), 0, "dry-run reports no failures");
+    assert!(
+        summary
+            .per_type
+            .iter()
+            .all(|(_, c)| c.created == 0 && c.fetched == 0 && c.updated == 0 && c.deleted == 0),
+        "dry-run counts nothing as applied"
+    );
 
     let conn = Connection::open(&archive).unwrap();
     assert_eq!(count(&conn, "emails"), 0);
@@ -229,8 +264,8 @@ fn import_dry_run_writes_nothing() {
     seeder::teardown(base_url()).expect("teardown");
 }
 
-fn export_cfg(localpart: &str, account_id: &str, prune: bool) -> ExportConfig {
-    ExportConfig {
+fn export_cfg(localpart: &str, account_id: &str, prune: Prune) -> Export {
+    Export {
         connect: ConnectConfig {
             url: base_url().to_owned(),
             auth: Auth::Basic {
@@ -241,7 +276,7 @@ fn export_cfg(localpart: &str, account_id: &str, prune: bool) -> ExportConfig {
         },
         objects: None,
         prune,
-        yes: true,
+        confirm: Confirm::Assume,
     }
 }
 
@@ -384,16 +419,19 @@ fn import_export_deeply_nested_mailbox_tree() {
     seed_deep_mailbox_chain(&src_jmap, &src.account_id, DEPTH);
 
     let archive = tmp_archive("deep_mbox");
-    let imp = ImportConfig {
+    let imp = JmapImport {
         connect: ConnectConfig {
             url: base_url().to_owned(),
             auth: basic("test4"),
             account: AccountSelector::Id(src.account_id.clone()),
         },
-        objects: Some(vec![inbuxa_migrate::types::ObjectType::Mailbox]),
-        allow_source_change: false,
+        objects: Some(vec![inbuxa_migrate::types::ObjectType::Mailbox].into()),
+        source_change: SourceChange::Reject,
     };
-    let s = sync::import_jmap::run(common(&archive, false), imp).expect("import");
+    let s = imp
+        .run(common(&archive, RunMode::Apply))
+        .into_result()
+        .expect("import");
     assert!(!s.any_failed(), "import had failures: {s:?}");
 
     {
@@ -415,27 +453,28 @@ fn import_export_deeply_nested_mailbox_tree() {
         assert_eq!(dn as usize, DEPTH, "all deep levels imported");
     }
 
-    let exp_s = sync::export::run(
-        common(&archive, false),
-        export_cfg("test5", &tgt.account_id, false),
-    )
-    .expect("export deep tree");
+    let exp_s = export_cfg("test5", &tgt.account_id, Prune::Keep)
+        .run(common(&archive, RunMode::Apply))
+        .into_result()
+        .expect("export deep tree");
     assert!(
         !exp_s.per_type.iter().any(|(_, c)| c.failed > 0),
         "export had failures: {exp_s:?}"
     );
 
     let again_archive = tmp_archive("deep_mbox_round");
-    let imp_again = ImportConfig {
+    let imp_again = JmapImport {
         connect: ConnectConfig {
             url: base_url().to_owned(),
             auth: basic("test5"),
             account: AccountSelector::Id(tgt.account_id.clone()),
         },
-        objects: Some(vec![inbuxa_migrate::types::ObjectType::Mailbox]),
-        allow_source_change: false,
+        objects: Some(vec![inbuxa_migrate::types::ObjectType::Mailbox].into()),
+        source_change: SourceChange::Reject,
     };
-    sync::import_jmap::run(common(&again_archive, false), imp_again)
+    imp_again
+        .run(common(&again_archive, RunMode::Apply))
+        .into_result()
         .expect("re-import from target");
     {
         let conn = Connection::open(&again_archive).unwrap();
@@ -464,16 +503,19 @@ fn import_export_deeply_nested_filenode_tree() {
     seed_deep_filenode_chain(&src_jmap, &src.account_id, DEPTH);
 
     let archive = tmp_archive("deep_fn");
-    let imp = ImportConfig {
+    let imp = JmapImport {
         connect: ConnectConfig {
             url: base_url().to_owned(),
             auth: basic("test4"),
             account: AccountSelector::Id(src.account_id.clone()),
         },
-        objects: Some(vec![inbuxa_migrate::types::ObjectType::FileNode]),
-        allow_source_change: false,
+        objects: Some(vec![inbuxa_migrate::types::ObjectType::FileNode].into()),
+        source_change: SourceChange::Reject,
     };
-    let s = sync::import_jmap::run(common(&archive, false), imp).expect("import");
+    let s = imp
+        .run(common(&archive, RunMode::Apply))
+        .into_result()
+        .expect("import");
     assert!(!s.any_failed(), "import had failures: {s:?}");
 
     {
@@ -495,29 +537,27 @@ fn import_export_deeply_nested_filenode_tree() {
         assert_eq!(dn as usize, DEPTH, "all deep levels imported");
     }
 
-    let exp_s = sync::export::run(
-        common(&archive, false),
-        export_cfg("test5", &tgt.account_id, false),
-    )
-    .expect("export deep filenode tree");
+    let exp_s = export_cfg("test5", &tgt.account_id, Prune::Keep)
+        .run(common(&archive, RunMode::Apply))
+        .into_result()
+        .expect("export deep filenode tree");
     assert!(
         !exp_s.per_type.iter().any(|(_, c)| c.failed > 0),
         "export had failures: {exp_s:?}"
     );
 
     let again_archive = tmp_archive("deep_fn_round");
-    sync::import_jmap::run(
-        common(&again_archive, false),
-        ImportConfig {
-            connect: ConnectConfig {
-                url: base_url().to_owned(),
-                auth: basic("test5"),
-                account: AccountSelector::Id(tgt.account_id.clone()),
-            },
-            objects: Some(vec![inbuxa_migrate::types::ObjectType::FileNode]),
-            allow_source_change: false,
+    (JmapImport {
+        connect: ConnectConfig {
+            url: base_url().to_owned(),
+            auth: basic("test5"),
+            account: AccountSelector::Id(tgt.account_id.clone()),
         },
-    )
+        objects: Some(vec![inbuxa_migrate::types::ObjectType::FileNode].into()),
+        source_change: SourceChange::Reject,
+    })
+    .run(common(&again_archive, RunMode::Apply))
+    .into_result()
     .expect("re-import from target");
     {
         let conn = Connection::open(&again_archive).unwrap();
@@ -546,28 +586,26 @@ fn prune_multilevel_mailbox_tree_destroys_leaf_first() {
     seed_deep_mailbox_chain(&src_jmap, &src.account_id, DEPTH);
 
     let arch_src = tmp_archive("prune_deep_src");
-    sync::import_jmap::run(
-        common(&arch_src, false),
-        ImportConfig {
-            connect: ConnectConfig {
-                url: base_url().to_owned(),
-                auth: basic("test4"),
-                account: AccountSelector::Id(src.account_id.clone()),
-            },
-            objects: Some(vec![inbuxa_migrate::types::ObjectType::Mailbox]),
-            allow_source_change: false,
+    (JmapImport {
+        connect: ConnectConfig {
+            url: base_url().to_owned(),
+            auth: basic("test4"),
+            account: AccountSelector::Id(src.account_id.clone()),
         },
-    )
+        objects: Some(vec![inbuxa_migrate::types::ObjectType::Mailbox].into()),
+        source_change: SourceChange::Reject,
+    })
+    .run(common(&arch_src, RunMode::Apply))
+    .into_result()
     .expect("import full deep tree");
-    sync::export::run(
-        common(&arch_src, false),
-        export_cfg("test5", &tgt.account_id, false),
-    )
-    .expect("seed target with deep tree");
+    export_cfg("test5", &tgt.account_id, Prune::Keep)
+        .run(common(&arch_src, RunMode::Apply))
+        .into_result()
+        .expect("seed target with deep tree");
 
     let arch_empty = tmp_archive("prune_deep_empty");
     {
-        let _ = inbuxa_migrate::db::init::open(&arch_empty).expect("init empty archive");
+        let _ = Archive::open(&arch_empty).expect("init empty archive");
     }
 
     let small_jmap = jmap_for(&fx.account("test6").expect("test6").localpart);
@@ -587,30 +625,28 @@ fn prune_multilevel_mailbox_tree_destroys_leaf_first() {
             &[],
         )
         .expect("seed tiny mailbox in test6");
-    sync::import_jmap::run(
-        common(&arch_empty, false),
-        ImportConfig {
-            connect: ConnectConfig {
-                url: base_url().to_owned(),
-                auth: basic("test6"),
-                account: AccountSelector::Id(fx.account("test6").unwrap().account_id.clone()),
-            },
-            objects: Some(vec![inbuxa_migrate::types::ObjectType::Mailbox]),
-            allow_source_change: false,
+    (JmapImport {
+        connect: ConnectConfig {
+            url: base_url().to_owned(),
+            auth: basic("test6"),
+            account: AccountSelector::Id(fx.account("test6").unwrap().account_id.clone()),
         },
-    )
+        objects: Some(vec![inbuxa_migrate::types::ObjectType::Mailbox].into()),
+        source_change: SourceChange::Reject,
+    })
+    .run(common(&arch_empty, RunMode::Apply))
+    .into_result()
     .expect("populate archive with one trivial mailbox");
 
-    let pruned = sync::export::run(
-        common(&arch_empty, false),
-        export_cfg("test5", &tgt.account_id, true),
-    )
-    .expect("prune deep tree on target");
+    let pruned = export_cfg("test5", &tgt.account_id, Prune::Destroy)
+        .run(common(&arch_empty, RunMode::Apply))
+        .into_result()
+        .expect("prune deep tree on target");
 
     let mb_counts = pruned
         .per_type
         .iter()
-        .find(|(t, _)| *t == "Mailbox")
+        .find(|(t, _)| *t == ObjectType::Mailbox)
         .map(|(_, c)| c.clone())
         .expect("mailbox counts");
     assert!(
@@ -635,31 +671,33 @@ fn prune_non_tree_type_contact_card() {
     let tgt = fx.account("test5").expect("test5");
 
     let arch_full = tmp_archive("prune_cc_full");
-    sync::import_jmap::run(
-        common(&arch_full, false),
-        ImportConfig {
-            connect: ConnectConfig {
-                url: base_url().to_owned(),
-                auth: basic("test1"),
-                account: AccountSelector::Id(src.account_id.clone()),
-            },
-            objects: Some(vec![
+    (JmapImport {
+        connect: ConnectConfig {
+            url: base_url().to_owned(),
+            auth: basic("test1"),
+            account: AccountSelector::Id(src.account_id.clone()),
+        },
+        objects: Some(
+            vec![
                 inbuxa_migrate::types::ObjectType::AddressBook,
                 inbuxa_migrate::types::ObjectType::ContactCard,
-            ]),
-            allow_source_change: false,
-        },
-    )
+            ]
+            .into(),
+        ),
+        source_change: SourceChange::Reject,
+    })
+    .run(common(&arch_full, RunMode::Apply))
+    .into_result()
     .expect("import contact cards");
-    sync::export::run(
-        common(&arch_full, false),
-        export_cfg("test5", &tgt.account_id, false),
-    )
-    .expect("seed target with contact cards");
+    export_cfg("test5", &tgt.account_id, Prune::Keep)
+        .run(common(&arch_full, RunMode::Apply))
+        .into_result()
+        .expect("seed target with contact cards");
 
     let arch_empty = tmp_archive("prune_cc_empty");
     {
-        let conn = inbuxa_migrate::db::init::open(&arch_empty).expect("init empty archive");
+        let db = Archive::open(&arch_empty).expect("init empty archive");
+        let conn = db.connection();
         conn.execute(
             "INSERT INTO address_books (id,name,is_default) VALUES (1,'AB',1)",
             [],
@@ -667,15 +705,14 @@ fn prune_non_tree_type_contact_card() {
         .unwrap();
     }
 
-    let pruned = sync::export::run(
-        common(&arch_empty, false),
-        export_cfg("test5", &tgt.account_id, true),
-    )
-    .expect("prune contact cards");
+    let pruned = export_cfg("test5", &tgt.account_id, Prune::Destroy)
+        .run(common(&arch_empty, RunMode::Apply))
+        .into_result()
+        .expect("prune contact cards");
     let cc = pruned
         .per_type
         .iter()
-        .find(|(t, _)| *t == "ContactCard")
+        .find(|(t, _)| *t == ObjectType::ContactCard)
         .map(|(_, c)| c.clone());
     if let Some(cc) = cc {
         assert!(
@@ -693,14 +730,8 @@ fn prune_non_tree_type_contact_card() {
 const ISSUE30_CARD_UID: &str = "inbuxa-migrate-issue30-card";
 const ISSUE30_EVENT_UID: &str = "inbuxa-migrate-issue30-event";
 
-struct Target<'a> {
-    client: &'a HttpClient,
-    session: &'a Session,
-    account: &'a str,
-}
-
 fn resource_bytes(
-    target: &Target<'_>,
+    target: &JmapAccount,
     resource: &Value,
     uri_key: &str,
     type_key: &str,
@@ -722,15 +753,9 @@ fn resource_bytes(
         Some(expect_media_type),
         "embedded blob keeps its media type: {resource}"
     );
-    inbuxa_migrate::jmap::blobxfer::download_bytes(
-        target.client,
-        target.session,
-        target.account,
-        blob_id,
-        expect_media_type,
-        "blob",
-    )
-    .unwrap_or_else(|e| panic!("target blobId {blob_id} does not download: {e}"))
+    target
+        .download(blob_id, expect_media_type, "blob")
+        .unwrap_or_else(|e| panic!("target blobId {blob_id} does not download: {e}"))
 }
 
 #[test]
@@ -743,7 +768,8 @@ fn export_inlines_contact_and_event_blobs_instead_of_blob_ids() {
     let photo: &[u8] = b"\x89PNG\r\n\x1a\ninbuxa-migrate issue 30 contact photo bytes";
     let agenda: &[u8] = b"inbuxa-migrate issue 30 calendar enclosure bytes";
     {
-        let conn = inbuxa_migrate::db::init::open(&archive).expect("init archive");
+        let db = Archive::open(&archive).expect("init archive");
+        let conn = db.connection();
         conn.execute(
             "INSERT INTO address_books (id,name,is_default) VALUES (1,'Issue30 Book',1)",
             [],
@@ -754,8 +780,8 @@ fn export_inlines_contact_and_event_blobs_instead_of_blob_ids() {
             [],
         )
         .unwrap();
-        let photo_blob = inbuxa_migrate::db::blobs::intern_blob(&conn, photo).unwrap();
-        let agenda_blob = inbuxa_migrate::db::blobs::intern_blob(&conn, agenda).unwrap();
+        let photo_blob = db.store().blobs().intern(photo).unwrap().get();
+        let agenda_blob = db.store().blobs().intern(agenda).unwrap().get();
         let card = json!({
             "@type": "Card",
             "version": "1.0",
@@ -792,23 +818,25 @@ fn export_inlines_contact_and_event_blobs_instead_of_blob_ids() {
         .unwrap();
     }
 
-    let summary = sync::export::run(
-        common(&archive, false),
-        export_cfg("test6", &tgt.account_id, false),
-    )
-    .expect("export");
-    for name in ["ContactCard", "CalendarEvent"] {
+    let summary = export_cfg("test6", &tgt.account_id, Prune::Keep)
+        .run(common(&archive, RunMode::Apply))
+        .into_result()
+        .expect("export");
+    for name in [ObjectType::ContactCard, ObjectType::CalendarEvent] {
         let counts = summary
             .per_type
             .iter()
             .find(|(t, _)| *t == name)
             .map(|(_, c)| c.clone())
-            .unwrap_or_else(|| panic!("{name} counts missing: {summary:?}"));
-        assert_eq!(counts.created, 1, "{name} created exactly one: {counts:?}");
-        assert_eq!(counts.failed, 0, "{name} had no failures: {counts:?}");
+            .unwrap_or_else(|| panic!("{name:?} counts missing: {summary:?}"));
+        assert_eq!(
+            counts.created, 1,
+            "{name:?} created exactly one: {counts:?}"
+        );
+        assert_eq!(counts.failed, 0, "{name:?} had no failures: {counts:?}");
     }
 
-    let client = HttpClient::new(basic("test6"), RetryPolicy::new(5), true);
+    let client = jmap_client(basic("test6"), 5);
     let session = Session::discover(&client, base_url()).expect("discover target session");
     let api = session.api_url.clone();
 
@@ -833,11 +861,8 @@ fn export_inlines_contact_and_event_blobs_instead_of_blob_ids() {
     let photo_resource = card
         .pointer("/media/photo")
         .unwrap_or_else(|| panic!("card has no media.photo: {card}"));
-    let target = Target {
-        client: &client,
-        session: &session,
-        account: &tgt.account_id,
-    };
+    let limits = session.core_limits().expect("core limits");
+    let target = JmapAccount::from_parts(client.clone(), session, tgt.account_id.clone(), limits);
     assert_eq!(
         resource_bytes(&target, photo_resource, "uri", "mediaType", "image/png"),
         photo,
@@ -885,16 +910,19 @@ fn export_round_trip_and_convergence() {
     let tgt = fx.account("test4").expect("test4");
     let archive = tmp_archive("rt");
 
-    let imp = ImportConfig {
+    let imp = JmapImport {
         connect: ConnectConfig {
             url: base_url().to_owned(),
             auth: basic("test1"),
             account: AccountSelector::Id(src.account_id.clone()),
         },
         objects: None,
-        allow_source_change: false,
+        source_change: SourceChange::Reject,
     };
-    let s = sync::import_jmap::run(common(&archive, false), imp).expect("import");
+    let s = imp
+        .run(common(&archive, RunMode::Apply))
+        .into_result()
+        .expect("import");
     assert!(!s.any_failed());
 
     let mut tight = serde_json::Map::new();
@@ -903,18 +931,17 @@ fn export_round_trip_and_convergence() {
     let _quota_guard = JmapSettingsGuard::override_settings(tight);
 
     let started_e1 = std::time::Instant::now();
-    let e1 = sync::export::run(
-        common(&archive, false),
-        export_cfg("test4", &tgt.account_id, false),
-    )
-    .expect("export 1");
+    let e1 = export_cfg("test4", &tgt.account_id, Prune::Keep)
+        .run(common(&archive, RunMode::Apply))
+        .into_result()
+        .expect("export 1");
     let e1_elapsed = started_e1.elapsed();
     let created_1: u64 = e1.per_type.iter().map(|(_, c)| c.created).sum();
     assert!(created_1 > 0, "first export created objects: {e1:?}");
     let emails = e1
         .per_type
         .iter()
-        .find(|(t, _)| *t == "Email")
+        .find(|(t, _)| *t == ObjectType::Email)
         .map(|(_, c)| c.created)
         .unwrap_or(0);
     assert!(emails > 0, "emails were imported to target");
@@ -923,11 +950,10 @@ fn export_round_trip_and_convergence() {
         "export 1 had failures: {e1:?}"
     );
 
-    let e2 = sync::export::run(
-        common(&archive, false),
-        export_cfg("test4", &tgt.account_id, false),
-    )
-    .expect("export 2");
+    let e2 = export_cfg("test4", &tgt.account_id, Prune::Keep)
+        .run(common(&archive, RunMode::Apply))
+        .into_result()
+        .expect("export 2");
     let created_2: u64 = e2.per_type.iter().map(|(_, c)| c.created).sum();
     assert_eq!(
         created_2, 0,
@@ -965,16 +991,19 @@ fn export_emails_in_multiple_import_batches() {
     let tgt = fx.account("test4").expect("test4");
     let archive = tmp_archive("batches");
 
-    let imp = ImportConfig {
+    let imp = JmapImport {
         connect: ConnectConfig {
             url: base_url().to_owned(),
             auth: basic("test1"),
             account: AccountSelector::Id(src.account_id.clone()),
         },
         objects: None,
-        allow_source_change: false,
+        source_change: SourceChange::Reject,
     };
-    let s = sync::import_jmap::run(common(&archive, false), imp).expect("import");
+    let s = imp
+        .run(common(&archive, RunMode::Apply))
+        .into_result()
+        .expect("import");
     assert!(!s.any_failed());
     let local_emails = {
         let conn = Connection::open(&archive).unwrap();
@@ -989,7 +1018,7 @@ fn export_emails_in_multiple_import_batches() {
     small.insert("maxSetObjects".to_owned(), json!(2));
     let _guard = JmapSettingsGuard::override_settings(small);
 
-    let probe = HttpClient::new(basic("test4"), RetryPolicy::new(5), true);
+    let probe = jmap_client(basic("test4"), 5);
     let session = Session::discover(&probe, base_url()).expect("discover");
     let limits = session.core_limits().expect("core limits");
     assert_eq!(
@@ -997,11 +1026,10 @@ fn export_emails_in_multiple_import_batches() {
         "maxSetObjects override is advertised"
     );
 
-    let e1 = sync::export::run(
-        common(&archive, false),
-        export_cfg("test4", &tgt.account_id, false),
-    )
-    .expect("export 1");
+    let e1 = export_cfg("test4", &tgt.account_id, Prune::Keep)
+        .run(common(&archive, RunMode::Apply))
+        .into_result()
+        .expect("export 1");
     assert!(
         !e1.per_type.iter().any(|(_, c)| c.failed > 0),
         "export 1 had failures: {e1:?}"
@@ -1009,7 +1037,7 @@ fn export_emails_in_multiple_import_batches() {
     let emails = e1
         .per_type
         .iter()
-        .find(|(t, _)| *t == "Email")
+        .find(|(t, _)| *t == ObjectType::Email)
         .map(|(_, c)| c.created)
         .unwrap_or(0);
     assert_eq!(
@@ -1017,11 +1045,10 @@ fn export_emails_in_multiple_import_batches() {
         "every email created across batches"
     );
 
-    let e2 = sync::export::run(
-        common(&archive, false),
-        export_cfg("test4", &tgt.account_id, false),
-    )
-    .expect("export 2");
+    let e2 = export_cfg("test4", &tgt.account_id, Prune::Keep)
+        .run(common(&archive, RunMode::Apply))
+        .into_result()
+        .expect("export 2");
     let created_2: u64 = e2.per_type.iter().map(|(_, c)| c.created).sum();
     assert_eq!(created_2, 0, "second export is convergent: {e2:?}");
 
@@ -1039,45 +1066,41 @@ fn export_prune_destroys_unmatched() {
     let tgt = fx.account("test5").expect("test5");
 
     let arch_big = tmp_archive("prbig");
-    sync::import_jmap::run(
-        common(&arch_big, false),
-        ImportConfig {
-            connect: ConnectConfig {
-                url: base_url().to_owned(),
-                auth: basic("test1"),
-                account: AccountSelector::Id(big.account_id.clone()),
-            },
-            objects: Some(vec![inbuxa_migrate::types::ObjectType::Mailbox]),
-            allow_source_change: false,
+    (JmapImport {
+        connect: ConnectConfig {
+            url: base_url().to_owned(),
+            auth: basic("test1"),
+            account: AccountSelector::Id(big.account_id.clone()),
         },
-    )
+        objects: Some(vec![inbuxa_migrate::types::ObjectType::Mailbox].into()),
+        source_change: SourceChange::Reject,
+    })
+    .run(common(&arch_big, RunMode::Apply))
+    .into_result()
     .expect("import big");
-    sync::export::run(
-        common(&arch_big, false),
-        export_cfg("test5", &tgt.account_id, false),
-    )
-    .expect("seed target with big mailbox tree");
+    export_cfg("test5", &tgt.account_id, Prune::Keep)
+        .run(common(&arch_big, RunMode::Apply))
+        .into_result()
+        .expect("seed target with big mailbox tree");
 
     let arch_small = tmp_archive("prsmall");
-    sync::import_jmap::run(
-        common(&arch_small, false),
-        ImportConfig {
-            connect: ConnectConfig {
-                url: base_url().to_owned(),
-                auth: basic("test3"),
-                account: AccountSelector::Id(small.account_id.clone()),
-            },
-            objects: Some(vec![inbuxa_migrate::types::ObjectType::Mailbox]),
-            allow_source_change: false,
+    (JmapImport {
+        connect: ConnectConfig {
+            url: base_url().to_owned(),
+            auth: basic("test3"),
+            account: AccountSelector::Id(small.account_id.clone()),
         },
-    )
+        objects: Some(vec![inbuxa_migrate::types::ObjectType::Mailbox].into()),
+        source_change: SourceChange::Reject,
+    })
+    .run(common(&arch_small, RunMode::Apply))
+    .into_result()
     .expect("import small");
 
-    let pruned = sync::export::run(
-        common(&arch_small, false),
-        export_cfg("test5", &tgt.account_id, true),
-    )
-    .expect("export with prune");
+    let pruned = export_cfg("test5", &tgt.account_id, Prune::Destroy)
+        .run(common(&arch_small, RunMode::Apply))
+        .into_result()
+        .expect("export with prune");
     let deleted: u64 = pruned.per_type.iter().map(|(_, c)| c.deleted).sum();
     assert!(
         deleted > 0,
@@ -1096,25 +1119,31 @@ fn import_resume_converges_after_partial() {
     let acc = fx.account("test2").expect("test2");
     let archive = tmp_archive("impresume");
 
-    let mk = || ImportConfig {
+    let mk = || JmapImport {
         connect: ConnectConfig {
             url: base_url().to_owned(),
             auth: basic("test2"),
             account: AccountSelector::Id(acc.account_id.clone()),
         },
         objects: None,
-        allow_source_change: false,
+        source_change: SourceChange::Reject,
     };
 
     let mut first = mk();
-    first.objects = Some(vec![inbuxa_migrate::types::ObjectType::Mailbox]);
-    sync::import_jmap::run(common(&archive, false), first).expect("partial import");
+    first.objects = Some(vec![inbuxa_migrate::types::ObjectType::Mailbox].into());
+    first
+        .run(common(&archive, RunMode::Apply))
+        .into_result()
+        .expect("partial import");
 
     let conn = Connection::open(&archive).unwrap();
     assert_eq!(count(&conn, "emails"), 0, "only mailboxes imported so far");
     drop(conn);
 
-    let summary = sync::import_jmap::run(common(&archive, false), mk()).expect("resume");
+    let summary = mk()
+        .run(common(&archive, RunMode::Apply))
+        .into_result()
+        .expect("resume");
     assert!(!summary.any_failed());
     let seeded = acc.seeded.as_ref().unwrap();
     {
@@ -1122,7 +1151,10 @@ fn import_resume_converges_after_partial() {
         assert_eq!(count(&conn, "emails") as usize, seeded.emails);
     }
 
-    let again = sync::import_jmap::run(common(&archive, false), mk()).expect("idempotent rerun");
+    let again = mk()
+        .run(common(&archive, RunMode::Apply))
+        .into_result()
+        .expect("idempotent rerun");
     assert!(!again.any_failed());
     let fetched_on_rerun: u64 = again.per_type.iter().map(|(_, c)| c.fetched).sum();
     assert_eq!(fetched_on_rerun, 0, "rerun fetched nothing new");
@@ -1141,15 +1173,14 @@ fn import_resume_converges_after_partial() {
 #[test]
 #[ignore = "requires Docker"]
 fn live_burst_exceeds_concurrent_requests_and_recovers() {
-    use inbuxa_migrate::jmap::http::{HttpClient, RetryPolicy};
-    use inbuxa_migrate::jmap::request::{Request, check_method_error};
+    use inbuxa_migrate::jmap::request::Request;
     use inbuxa_migrate::jmap::session::{Limits, Session};
     use std::sync::Arc;
 
     let fx = seeder::provision(base_url()).expect("provision");
     let acc = fx.account("test1").expect("test1");
 
-    let client = HttpClient::new(basic("test1"), RetryPolicy::new(20), true);
+    let client = jmap_client(basic("test1"), 20);
     let session = Session::discover(&client, base_url()).expect("discover session");
     let server_limits = session.core_limits().expect("core limits");
 
@@ -1186,7 +1217,7 @@ fn live_burst_exceeds_concurrent_requests_and_recovers() {
                 );
                 match req.send(&client, &api) {
                     Ok(resp) => match resp.first().and_then(|mr| {
-                        check_method_error(mr)?;
+                        mr.check_error()?;
                         Ok(())
                     }) {
                         Ok(()) => {}
@@ -1209,8 +1240,8 @@ fn live_burst_exceeds_concurrent_requests_and_recovers() {
     for h in handles {
         all_failures.extend(h.join().expect("worker panicked"));
     }
-    let retries = client.retries_observed();
-    let retry_after = client.retry_after_sleeps();
+    let retries = client.stats().retries_observed;
+    let retry_after = client.stats().retry_after_sleeps;
     eprintln!(
         "burst against server-cap maxConcurrentRequests={} with {} threads x {} calls: \
          retries={retries} retry_after_sleeps={retry_after} failures={}",
@@ -1234,7 +1265,7 @@ fn live_burst_exceeds_concurrent_requests_and_recovers() {
 }
 
 struct JmapSettingsGuard {
-    admin: inbuxa_migrate::jmap::http::HttpClient,
+    admin: inbuxa_migrate::jmap::http::JmapClient,
     admin_api: String,
     admin_account: String,
     previous: serde_json::Map<String, serde_json::Value>,
@@ -1242,15 +1273,14 @@ struct JmapSettingsGuard {
 
 impl JmapSettingsGuard {
     fn override_settings(updates: serde_json::Map<String, serde_json::Value>) -> Self {
-        use inbuxa_migrate::jmap::http::{Auth, HttpClient, RetryPolicy};
         use inbuxa_migrate::jmap::session::Session;
-        let admin = HttpClient::new(
+        use inbuxa_migrate::net::auth::Auth;
+        let admin = jmap_client(
             Auth::Basic {
                 user: seeder::ADMIN_USER.to_owned(),
                 password: seeder::ADMIN_PASSWORD.to_owned(),
             },
-            RetryPolicy::new(5),
-            true,
+            5,
         );
         let session = Session::discover(&admin, base_url()).expect("admin discover");
         let admin_account = session
@@ -1291,7 +1321,7 @@ impl Drop for JmapSettingsGuard {
 }
 
 fn read_jmap_settings(
-    admin: &inbuxa_migrate::jmap::http::HttpClient,
+    admin: &inbuxa_migrate::jmap::http::JmapClient,
     api: &str,
     account: &str,
     properties: &[&str],
@@ -1320,7 +1350,7 @@ fn read_jmap_settings(
 }
 
 fn apply_jmap_settings(
-    admin: &inbuxa_migrate::jmap::http::HttpClient,
+    admin: &inbuxa_migrate::jmap::http::JmapClient,
     api: &str,
     account: &str,
     updates: &serde_json::Map<String, serde_json::Value>,
@@ -1355,8 +1385,6 @@ fn apply_jmap_settings(
 #[test]
 #[ignore = "requires Docker"]
 fn live_blob_quota_429_triggers_retry_after_then_succeeds() {
-    use inbuxa_migrate::jmap::blobxfer;
-    use inbuxa_migrate::jmap::http::{HttpClient, RetryPolicy};
     use inbuxa_migrate::jmap::session::Session;
 
     let fx = seeder::provision(base_url()).expect("provision");
@@ -1371,10 +1399,11 @@ fn live_blob_quota_429_triggers_retry_after_then_succeeds() {
     );
     let _ttl_guard = JmapSettingsGuard::override_settings(updates);
 
-    let client = HttpClient::new(basic("test1"), RetryPolicy::new(20), true);
+    let client = jmap_client(basic("test1"), 20);
     let session = Session::discover(&client, base_url()).expect("discover session");
     let limits = session.core_limits().expect("core limits");
     client.set_limits(&limits);
+    let uploader = JmapAccount::from_parts(client.clone(), session, acc.account_id.clone(), limits);
 
     let mut blob = vec![0u8; blob_size];
     let max_uploads = 8u32;
@@ -1384,13 +1413,7 @@ fn live_blob_quota_429_triggers_retry_after_then_succeeds() {
         for (j, b) in blob.iter_mut().enumerate().take(64) {
             *b = ((i as usize).wrapping_mul(2654435761).wrapping_add(j)) as u8;
         }
-        match blobxfer::upload_bytes(
-            &client,
-            &session,
-            &acc.account_id,
-            "application/octet-stream",
-            &blob,
-        ) {
+        match uploader.upload(&blob, "application/octet-stream") {
             Ok(_) => accepted += 1,
             Err(e) => {
                 first_failure = Some(format!("upload {i}: {e}"));
@@ -1399,8 +1422,8 @@ fn live_blob_quota_429_triggers_retry_after_then_succeeds() {
         }
     }
 
-    let retries = client.retries_observed();
-    let retry_after = client.retry_after_sleeps();
+    let retries = client.stats().retries_observed;
+    let retry_after = client.stats().retry_after_sleeps;
     eprintln!(
         "blob quota burst: accepted={accepted}/{max_uploads} ({} MiB each) \
          retries={retries} retry_after_sleeps={retry_after} first_failure={:?}",
@@ -1429,11 +1452,10 @@ fn import_delta_propagates_email_keyword_change_via_changes() {
     let acc = fx.account("test1").expect("test1");
     let archive = tmp_archive("delta-email");
 
-    sync::import_jmap::run(
-        common(&archive, false),
-        import_cfg(AccountSelector::Id(acc.account_id.clone())),
-    )
-    .expect("first import");
+    import_cfg(AccountSelector::Id(acc.account_id.clone()))
+        .run(common(&archive, RunMode::Apply))
+        .into_result()
+        .expect("first import");
 
     let (jmap_id, local_id): (String, i64) = {
         let conn = Connection::open(&archive).unwrap();
@@ -1448,14 +1470,11 @@ fn import_delta_propagates_email_keyword_change_via_changes() {
         .expect("an unflagged email exists in the archive")
     };
 
-    let client = HttpClient::new(basic("test1"), RetryPolicy::new(5), true);
+    let client = jmap_client(basic("test1"), 5);
     let session = Session::discover(&client, base_url()).expect("session discovered");
-    let account = account::resolve(
-        &AccountSelector::Id(acc.account_id.clone()),
-        &session,
-        &client,
-    )
-    .expect("account resolved");
+    let account = AccountSelector::Id(acc.account_id.clone())
+        .resolve(&session, &client)
+        .expect("account resolved");
     let mut update = Map::new();
     update.insert(jmap_id.clone(), json!({ "keywords/$flagged": true }));
     let mut req = Request::new();
@@ -1475,11 +1494,10 @@ fn import_delta_propagates_email_keyword_change_via_changes() {
         mr.args
     );
 
-    let s2 = sync::import_jmap::run(
-        common(&archive, false),
-        import_cfg(AccountSelector::Id(acc.account_id.clone())),
-    )
-    .expect("second import");
+    let s2 = import_cfg(AccountSelector::Id(acc.account_id.clone()))
+        .run(common(&archive, RunMode::Apply))
+        .into_result()
+        .expect("second import");
 
     let conn = Connection::open(&archive).unwrap();
     let kw: String = conn
@@ -1496,7 +1514,7 @@ fn import_delta_propagates_email_keyword_change_via_changes() {
     let em = s2
         .per_type
         .iter()
-        .find(|(t, _)| *t == "Email")
+        .find(|(t, _)| *t == ObjectType::Email)
         .map(|(_, c)| c.clone())
         .expect("email counts");
     assert!(

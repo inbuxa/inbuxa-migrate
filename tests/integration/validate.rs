@@ -9,8 +9,9 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 
-use inbuxa_migrate::logging::Logger;
-use inbuxa_migrate::sync::CommonConfig;
+use inbuxa_migrate::logging::{Level, Logger};
+use inbuxa_migrate::net::http::TlsPolicy;
+use inbuxa_migrate::sync::{RunMode, RunOptions};
 
 pub fn tmp_archive(tag: &str) -> PathBuf {
     let mut p = std::env::temp_dir();
@@ -26,14 +27,14 @@ pub fn tmp_archive(tag: &str) -> PathBuf {
     p
 }
 
-pub fn common(archive: &Path) -> CommonConfig {
-    CommonConfig {
+pub fn common(archive: &Path) -> RunOptions {
+    RunOptions {
         archive: archive.to_path_buf(),
         threads: 2,
-        dry_run: false,
+        mode: RunMode::Apply,
         max_retries: 3,
-        allow_invalid_certs: true,
-        logger: Logger::from_flags(false, 0),
+        tls: TlsPolicy::AcceptInvalid,
+        logger: Logger::new(Level::Default),
     }
 }
 

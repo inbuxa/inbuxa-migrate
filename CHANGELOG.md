@@ -7,6 +7,12 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
 
 ## [Unreleased]
 
+## [27.1-rc.14]
+
+The fourteenth release candidate of the 27.1 series: POP3, Fastmail, Zoho and
+Zimbra sources, a `reconcile` report that a migration was complete, and
+upstream v1.0.16's Exchange fixes.
+
 ### Added
 - `import pop3` imports from a POP3 server: the whole maildrop into one INBOX,
   keyed by each message's UIDL so a later run adds only what arrived since.
@@ -15,6 +21,12 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
   kept, since POP3 mailboxes are routinely emptied after download -- and it
   deletes nothing on the server. `--estimate` reports counts and sizes from
   STAT/UIDL/LIST before any body is fetched.
+- `import zoho` and `import zimbra` import mail over IMAP, as presets for
+  `import imap`. `zoho` fills in Zoho's server for your region (`--region`, or
+  `--host` for one not listed); `zimbra` points at your own Zimbra host (IMAPS
+  on 993, or `--starttls` on 143). Both take only an address and password (or
+  an app-specific password), reuse the whole IMAP pipeline, and support
+  `--estimate`.
 - `import fastmail` imports from a Fastmail account over JMAP. It is `import
   jmap` with Fastmail's server and bearer-token sign-in filled in, so it needs
   only an API token; with no `--account-*` it imports the account Fastmail
@@ -27,6 +39,39 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
   the per-folder counts against the source mailbox to prove a migration was
   complete; the checksum shows two archives -- an export and a re-import, say --
   hold the very same mail. It exits 8 when the archive is not sound.
+
+### Changed
+- Upstream v1.0.16 is merged in.
+- Outlook categories become valid JMAP keywords, the same way IMAP
+  `--mime-keywords` does it (`Catégorie Rouge` is `cat_gorie_rouge`), and
+  duplicates are dropped. Before, only the case was lowered, so `Project
+  review` gave a keyword JMAP doesn't allow. A read-receipt request no longer
+  adds `$notified`. This is for EWS and Graph.
+
+### Fixed
+- Exchange EWS and Graph: all-day events and birthdays landed a day early
+  east of UTC. The date is now taken in the event's time zone. Outlook's
+  "no date" (year 4500 or later) is no longer imported as a real date.
+  Archives imported before this keep the wrong dates until the item changes
+  at the source, so re-import into a fresh archive to correct them.
+- Exchange EWS: Exchange 2019 servers were asked for a schema version that
+  doesn't exist, so every call was refused once and sent again.
+- Exchange EWS: hidden system folders (`Recipient Cache`, `GAL Contacts`)
+  were imported as mailboxes and address books. They are skipped now.
+- Exchange EWS: a mail folder under a calendar or contacts folder could stop
+  a later run with a FOREIGN KEY error. It is filed under its nearest mail
+  folder on every run.
+- Exchange EWS: an attendee's or contact's ItemId could replace the item's
+  own, giving `UNIQUE constraint failed`. Tasks and posts in a listing shifted
+  the ids around them. One item that failed to parse or store stopped the rest
+  of its folder; it is now logged and counted, and the folder goes on.
+- Exchange EWS: event attachments, your own response to a meeting and an
+  event's private flag were never fetched. They are imported now.
+- Exchange EWS: a folder with no class (Outlook's `(This computer only)`
+  contacts) was always taken for mail, and contacts, appointments and tasks
+  in a mail folder such as Deleted Items were stored as email. A class-less
+  folder now takes its kind from its items, and mail folders skip non-mail
+  items, also in `--estimate`.
 
 ## [27.1-rc.13]
 
