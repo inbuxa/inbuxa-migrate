@@ -7,6 +7,38 @@ candidates before a series ships (`27.1-rc.1`). The tag is the version with a
 
 ## [Unreleased]
 
+## [27.1-rc.16]
+
+The sixteenth release candidate of the 27.1 series: a security fix for
+`import jmap`, which could send the inbuxa profile's API key to the source
+server, and certificate checks that no longer trust the distrusted emSign
+intermediates.
+
+### Security
+- `import jmap` no longer sends the inbuxa server's API key to the source.
+  With no source token given, or `--auth-bearer` given with no value, it
+  took the API key from the default `~/.config/inbuxa` profile and sent it
+  to the source server as a bearer token, so whoever runs or watches that
+  server could take over the inbuxa server the profile names. Affected
+  27.1-rc.13 to 27.1-rc.15; migrations the server runs itself were not
+  affected. If you ran `import jmap` with a profile holding an API key and
+  no source token, rotate that key. (GHSA-x8xv-p366-95w2)
+- TLS certificate checks no longer accept certificates chained through the
+  distrusted emSign intermediates (rustls-webpki 0.103.17, webpki-root-certs
+  1.0.12; RUSTSEC-2026-0382, RUSTSEC-2026-0383).
+
+Found by Coffey Labs.
+
+### Changed
+- `import jmap` no longer reads the shared profile, so what 27.1-rc.13 added
+  for it no longer applies: it needs `--url` again and the source's own
+  credentials (a flag, an `INBUXA_MIGRATE_*` variable or the prompt), and
+  `--profile` is gone from it.
+- `import-directory` still reads the profile, but sends its API key only to
+  that profile's own server (the same scheme, host and port). With a
+  `--url` for another server, the key comes from a flag, a variable or the
+  prompt.
+
 ## [27.1-rc.15]
 
 The fifteenth release candidate of the 27.1 series: upstream v1.1.0's
