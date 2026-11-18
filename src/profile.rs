@@ -7,7 +7,9 @@
 //! The shared `~/.config/inbuxa` profile. A `config.toml` names an inbuxa
 //! server once, so this and `inbuxa-cli` read the same server address and API
 //! key instead of each being told again. For `inbuxa-migrate` it supplies the
-//! inbuxa server the `import` and `import-directory` commands write to:
+//! inbuxa server the `import-directory` command writes to, and its key goes
+//! only to that server. The `import` commands read from a source server, so
+//! they never read the profile:
 //!
 //! ```toml
 //! [profile.default]

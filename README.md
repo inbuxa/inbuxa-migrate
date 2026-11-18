@@ -130,9 +130,9 @@ history and in the process list. Use a file, the environment, or the prompt.
 
 ### A shared profile for the inbuxa server
 
-`import` (into a JMAP server) and `import-directory` write to an inbuxa
-server. Instead of giving its address and key each time, name it once in
-`~/.config/inbuxa/config.toml`, which `inbuxa-cli` reads too:
+`import-directory` writes to an inbuxa server. Instead of giving its address
+and key each time, name it once in `~/.config/inbuxa/config.toml`, which
+`inbuxa-cli` reads too:
 
     [profile.default]
     url = "https://mail.example.org"
@@ -147,9 +147,14 @@ holding the key, so the key stays out of the config). Keep the file to
 yourself -- `chmod 600 ~/.config/inbuxa/config.toml`. Without `--profile` or
 `$INBUXA_PROFILE`, the `default` section is used; `--profile staging` picks
 another. A `--url`, or any `INBUXA_MIGRATE_*` variable, still wins, so the
-profile is only the fallback and `--url` becomes optional on these two
-commands when it is set. The other commands connect to IMAP, DAV and the like,
-not to the inbuxa server, so they don't read the profile.
+profile is only the fallback and `--url` becomes optional when it is set. The
+key goes only to the profile's own server: a `--url` with another scheme, host
+or port gets no key from the profile, and is asked for one as usual.
+
+The `import` commands, `import jmap` among them, read from a source server --
+often another provider's -- not the inbuxa server, so they never read the
+profile and its key is never sent to a source. Give the source's own
+credentials with a flag, an `INBUXA_MIGRATE_*` variable, or the prompt.
 
 ## Installing
 

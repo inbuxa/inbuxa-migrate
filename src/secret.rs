@@ -51,7 +51,7 @@ pub fn resolve_any_or(
         return prompt_no_echo(prompt_label);
     }
     Err(Error::Usage(format!(
-        "no {prompt_label} provided: pass the flag, set ${0} or ${0}_FILE, name one in a profile, or run on a TTY for an interactive prompt",
+        "no {prompt_label} provided: pass the flag, set ${0} or ${0}_FILE, or run on a TTY for an interactive prompt",
         env_vars[0]
     )))
 }
